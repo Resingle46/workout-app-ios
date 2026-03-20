@@ -5,7 +5,6 @@ struct WorkoutTemplateDetailView: View {
     let programID: UUID
     let workoutID: UUID
     @State private var showingAddExercise = false
-    @State private var showingAddWorkout = false
 
     private var workout: WorkoutTemplate? {
         store.programs.first(where: { $0.id == programID })?.workouts.first(where: { $0.id == workoutID })
@@ -25,27 +24,35 @@ struct WorkoutTemplateDetailView: View {
                         .buttonStyle(.borderedProminent)
                     }
 
-                    ForEach(Array(workout.exercises.enumerated()), id: \.element.id) { _, item in
-                        if let exercise = store.exercise(for: item.exerciseID) {
-                            VStack(alignment: .leading, spacing: 6) {
-                                HStack {
-                                    Text(exercise.name)
-                                        .font(.headline)
-                                    if item.groupKind == .superset {
-                                        Spacer()
-                                        Text("label.superset")
-                                            .font(.caption.weight(.semibold))
-                                            .padding(.horizontal, 8)
-                                            .padding(.vertical, 4)
-                                            .background(Color.orange.opacity(0.15), in: Capsule())
+                    ForEach(groupedExercises(workout.exercises), id: \.id) { group in
+                        Section {
+                            ForEach(group.items) { item in
+                                if let exercise = store.exercise(for: item.exerciseID) {
+                                    VStack(alignment: .leading, spacing: 6) {
+                                        HStack {
+                                            Text(exercise.name)
+                                                .font(.headline)
+                                            if item.groupKind == .superset {
+                                                Spacer()
+                                                Text("label.superset")
+                                                    .font(.caption.weight(.semibold))
+                                                    .padding(.horizontal, 8)
+                                                    .padding(.vertical, 4)
+                                                    .background(Color.orange.opacity(0.15), in: Capsule())
+                                            }
+                                        }
+                                        Text(exercise.equipment)
+                                            .font(.subheadline)
+                                            .foregroundStyle(.secondary)
+                                        Text(item.sets.map { "\($0.reps)" }.joined(separator: " / ") + " reps")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
                                     }
                                 }
-                                Text(exercise.equipment)
-                                    .font(.subheadline)
-                                    .foregroundStyle(.secondary)
-                                Text(item.sets.map { "\($0.reps)" }.joined(separator: " / ") + " reps")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+                            }
+                        } header: {
+                            if group.isSuperset {
+                                Label("Superset", systemImage: "bolt.fill")
                             }
                         }
                     }
@@ -68,6 +75,31 @@ struct WorkoutTemplateDetailView: View {
             }
         }
     }
+
+    private func groupedExercises(_ items: [WorkoutExerciseTemplate]) -> [WorkoutExerciseTemplateGroup] {
+        var result: [WorkoutExerciseTemplateGroup] = []
+        var handled = Set<UUID>()
+
+        for item in items {
+            guard !handled.contains(item.id) else { continue }
+            if item.groupKind == .superset, let groupID = item.groupID {
+                let groupItems = items.filter { $0.groupKind == .superset && $0.groupID == groupID }
+                groupItems.forEach { handled.insert($0.id) }
+                result.append(WorkoutExerciseTemplateGroup(id: groupID, isSuperset: true, items: groupItems))
+            } else {
+                handled.insert(item.id)
+                result.append(WorkoutExerciseTemplateGroup(id: item.id, isSuperset: false, items: [item]))
+            }
+        }
+
+        return result
+    }
+}
+
+private struct WorkoutExerciseTemplateGroup: Identifiable {
+    let id: UUID
+    let isSuperset: Bool
+    let items: [WorkoutExerciseTemplate]
 }
 
 struct AddExerciseToWorkoutView: View {
@@ -77,11 +109,11 @@ struct AddExerciseToWorkoutView: View {
     let workoutID: UUID
     @State private var query = ""
     @State private var selectedCategoryID: UUID?
-    @State private var selectedExerciseID: UUID?
+    @State private var selectedExerciseIDs: Set<UUID> = []
     @State private var reps = 10
     @State private var setsCount = 3
     @State private var isSuperset = false
-    @State private var supersetGroupID = UUID()
+    @State private var showingCreateExercise = false
 
     private var filteredExercises: [Exercise] {
         store.exercises.filter { exercise in
@@ -90,6 +122,10 @@ struct AddExerciseToWorkoutView: View {
             let matchesQuery = normalized.isEmpty || exercise.name.localizedCaseInsensitiveContains(normalized) || exercise.equipment.localizedCaseInsensitiveContains(normalized)
             return matchesCategory && matchesQuery
         }
+    }
+
+    private var canSave: Bool {
+        isSuperset ? selectedExerciseIDs.count == 2 : selectedExerciseIDs.count == 1
     }
 
     var body: some View {
@@ -103,12 +139,17 @@ struct AddExerciseToWorkoutView: View {
                             Text(LocalizedStringKey(category.nameKey)).tag(UUID?.some(category.id))
                         }
                     }
+                    Button {
+                        showingCreateExercise = true
+                    } label: {
+                        Label("Создать своё упражнение", systemImage: "plus.circle")
+                    }
                 }
 
                 Section(NSLocalizedString("catalog.results", comment: "")) {
                     ForEach(filteredExercises) { exercise in
                         Button {
-                            selectedExerciseID = exercise.id
+                            toggleSelection(for: exercise.id)
                         } label: {
                             HStack {
                                 VStack(alignment: .leading) {
@@ -119,7 +160,7 @@ struct AddExerciseToWorkoutView: View {
                                         .foregroundStyle(.secondary)
                                 }
                                 Spacer()
-                                if selectedExerciseID == exercise.id {
+                                if selectedExerciseIDs.contains(exercise.id) {
                                     Image(systemName: "checkmark.circle.fill")
                                         .foregroundStyle(.green)
                                 }
@@ -136,6 +177,9 @@ struct AddExerciseToWorkoutView: View {
                         Text(String(format: NSLocalizedString("template.reps", comment: ""), reps))
                     }
                     Toggle("template.superset", isOn: $isSuperset)
+                    Text(isSuperset ? "Выберите ровно 2 упражнения для superset." : "Выберите 1 упражнение.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
             .navigationTitle("action.add_exercise")
@@ -145,19 +189,104 @@ struct AddExerciseToWorkoutView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("action.add") {
-                        guard let selectedExerciseID else { return }
-                        store.addExercise(
-                            to: workoutID,
-                            exerciseID: selectedExerciseID,
-                            reps: reps,
-                            setsCount: setsCount,
-                            groupKind: isSuperset ? .superset : .regular,
-                            groupID: isSuperset ? supersetGroupID : nil
-                        )
+                        saveSelection()
                         dismiss()
                     }
-                    .disabled(selectedExerciseID == nil)
+                    .disabled(!canSave)
                 }
+            }
+            .sheet(isPresented: $showingCreateExercise) {
+                CreateCustomExerciseView(onSave: { name, equipment, notes, categoryID in
+                    let exercise = store.addCustomExercise(name: name, categoryID: categoryID, equipment: equipment, notes: notes)
+                    selectedCategoryID = categoryID
+                    selectedExerciseIDs = [exercise.id]
+                })
+            }
+        }
+    }
+
+    private func toggleSelection(for exerciseID: UUID) {
+        if selectedExerciseIDs.contains(exerciseID) {
+            selectedExerciseIDs.remove(exerciseID)
+            return
+        }
+
+        if isSuperset {
+            if selectedExerciseIDs.count < 2 {
+                selectedExerciseIDs.insert(exerciseID)
+            }
+        } else {
+            selectedExerciseIDs = [exerciseID]
+        }
+    }
+
+    private func saveSelection() {
+        let ids = Array(selectedExerciseIDs)
+        if isSuperset {
+            let groupID = UUID()
+            for exerciseID in ids.prefix(2) {
+                store.addExercise(
+                    to: workoutID,
+                    exerciseID: exerciseID,
+                    reps: reps,
+                    setsCount: setsCount,
+                    groupKind: .superset,
+                    groupID: groupID
+                )
+            }
+        } else if let exerciseID = ids.first {
+            store.addExercise(
+                to: workoutID,
+                exerciseID: exerciseID,
+                reps: reps,
+                setsCount: setsCount,
+                groupKind: .regular,
+                groupID: nil
+            )
+        }
+    }
+}
+
+struct CreateCustomExerciseView: View {
+    @Environment(AppStore.self) private var store
+    @Environment(\.dismiss) private var dismiss
+
+    let onSave: (String, String, String, UUID) -> Void
+
+    @State private var name = ""
+    @State private var equipment = ""
+    @State private var notes = ""
+    @State private var selectedCategoryID: UUID?
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                TextField("Название", text: $name)
+                Picker("Группа мышц", selection: $selectedCategoryID) {
+                    ForEach(store.categories) { category in
+                        Text(LocalizedStringKey(category.nameKey)).tag(UUID?.some(category.id))
+                    }
+                }
+                TextField("Инвентарь", text: $equipment)
+                TextField("Заметки", text: $notes, axis: .vertical)
+                    .lineLimit(3...6)
+            }
+            .navigationTitle("Новое упражнение")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("action.cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("action.save") {
+                        guard let categoryID = selectedCategoryID else { return }
+                        onSave(name, equipment, notes, categoryID)
+                        dismiss()
+                    }
+                    .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || selectedCategoryID == nil)
+                }
+            }
+            .onAppear {
+                selectedCategoryID = selectedCategoryID ?? store.categories.first?.id
             }
         }
     }

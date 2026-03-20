@@ -15,9 +15,9 @@ final class AppStore {
 
     init() {
         let seed = SeedData.make()
-        let snapshot = persistence.load() ?? AppSnapshot(programs: seed.programs, history: [], profile: .empty)
+        let snapshot = persistence.load() ?? AppSnapshot(programs: seed.programs, exercises: seed.exercises, history: [], profile: .empty)
         self.categories = seed.categories
-        self.exercises = seed.exercises
+        self.exercises = snapshot.exercises
         self.programs = snapshot.programs
         self.activeSession = nil
         self.history = snapshot.history.sorted { $0.startedAt > $1.startedAt }
@@ -26,7 +26,7 @@ final class AppStore {
     }
 
     func save() {
-        persistence.save(snapshot: AppSnapshot(programs: programs, history: history, profile: profile))
+        persistence.save(snapshot: AppSnapshot(programs: programs, exercises: exercises, history: history, profile: profile))
     }
 
     func exercises(for categoryID: UUID?) -> [Exercise] {
@@ -94,6 +94,23 @@ final class AppStore {
         }
     }
 
+
+    func addCustomExercise(name: String, categoryID: UUID, equipment: String, notes: String) -> Exercise {
+        let exercise = Exercise(name: name, categoryID: categoryID, equipment: equipment, notes: notes)
+        exercises.insert(exercise, at: 0)
+        save()
+        return exercise
+    }
+
+    func removeSetFromActiveWorkout(exerciseIndex: Int, setIndex: Int) {
+        updateActiveSession { session in
+            guard session.exercises.indices.contains(exerciseIndex),
+                  session.exercises[exerciseIndex].sets.indices.contains(setIndex),
+                  session.exercises[exerciseIndex].sets.count > 1 else { return }
+            session.exercises[exerciseIndex].sets.remove(at: setIndex)
+        }
+    }
+
     func chartPoints(for exerciseID: UUID) -> [(Date, Double)] {
         history.compactMap { session in
             let values = session.exercises
@@ -109,8 +126,8 @@ final class AppStore {
 
 struct AppSnapshot: Codable {
     var programs: [WorkoutProgram]
+    var exercises: [Exercise]
     var history: [WorkoutSession]
-    var lastFinishedSession: WorkoutSession?
     var profile: UserProfile
 }
 
