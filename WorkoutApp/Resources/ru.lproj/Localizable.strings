@@ -74,6 +74,7 @@
 "workout.empty_description" = "Запустите тренировку на вкладке «Программы».";
 "workout.set_number" = "Подход %d";
 "workout.reps" = "Повторения: %d";
+"workout.reps_label" = "Повторения";
 "workout.weight" = "Вес, кг";
 "workout.name" = "Название тренировки";
 "workout.focus" = "Фокус / группы мышц";

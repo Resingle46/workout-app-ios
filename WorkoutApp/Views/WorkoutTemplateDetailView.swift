@@ -39,6 +39,13 @@ struct WorkoutTemplateDetailView: View {
                             ForEach(groupedExercises(workout.exercises), id: \.id) { group in
                                 exerciseGroupCard(group)
                             }
+
+                            Button {
+                                showingAddExercise = true
+                            } label: {
+                                Label("action.add_exercise", systemImage: "plus")
+                            }
+                            .buttonStyle(AppSecondaryButtonStyle())
                         }
                     }
                     .padding(20)

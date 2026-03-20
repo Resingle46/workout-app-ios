@@ -12,6 +12,8 @@ struct ActiveWorkoutView: View {
     var body: some View {
         Group {
             if let session = store.activeSession {
+                let currentSetPosition = currentSetPosition(in: session)
+
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
                         scrollOffsetReader
@@ -47,7 +49,8 @@ struct ActiveWorkoutView: View {
                                                 WorkoutSetRow(
                                                     exerciseIndex: exerciseIndex,
                                                     setIndex: setIndex,
-                                                    set: set
+                                                    set: set,
+                                                    isCurrent: currentSetPosition?.exerciseIndex == exerciseIndex && currentSetPosition?.setIndex == setIndex
                                                 )
                                             }
 
@@ -290,6 +293,21 @@ struct ActiveWorkoutView: View {
         }
         return String(format: NSLocalizedString("stats.weight_value", comment: ""), weight)
     }
+
+    private func currentSetPosition(in session: WorkoutSession) -> CurrentWorkoutSetPosition? {
+        for (exerciseIndex, exercise) in session.exercises.enumerated() {
+            if let setIndex = exercise.sets.firstIndex(where: { $0.completedAt == nil }) {
+                return CurrentWorkoutSetPosition(exerciseIndex: exerciseIndex, setIndex: setIndex)
+            }
+        }
+
+        return nil
+    }
+}
+
+private struct CurrentWorkoutSetPosition {
+    let exerciseIndex: Int
+    let setIndex: Int
 }
 
 private struct PresentedWorkoutSummary: Identifiable {
@@ -332,11 +350,12 @@ private struct WorkoutExerciseInfoRow: View {
 
 struct WorkoutSetRow: View {
     @Environment(AppStore.self) private var store
-    @FocusState private var isWeightFieldFocused: Bool
+    @FocusState private var focusedField: WorkoutSetField?
 
     let exerciseIndex: Int
     let setIndex: Int
     let set: WorkoutSetLog
+    let isCurrent: Bool
 
     private var isCompleted: Bool {
         return set.completedAt != nil
@@ -355,14 +374,12 @@ struct WorkoutSetRow: View {
                 }
             }
 
-            Stepper(value: Binding(
-                get: { Int(set.reps) },
-                set: { newValue in updateSet { $0.reps = newValue } }
-            ), in: 1...50) {
-                Text(String(format: NSLocalizedString("workout.reps", comment: ""), set.reps))
+            HStack(spacing: 12) {
+                Text("workout.reps_label")
                     .foregroundStyle(AppTheme.primaryText)
+                Spacer()
+                repsControl
             }
-            .tint(AppTheme.accent)
 
             HStack(spacing: 12) {
                 Text("workout.weight")
@@ -374,7 +391,7 @@ struct WorkoutSetRow: View {
                 ), format: .number)
                 .multilineTextAlignment(.trailing)
                 .keyboardType(.decimalPad)
-                .focused($isWeightFieldFocused)
+                .focused($focusedField, equals: .weight(exerciseIndex, setIndex))
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
                 .frame(width: 110)
@@ -385,26 +402,28 @@ struct WorkoutSetRow: View {
                 )
             }
 
-            HStack(spacing: 12) {
+            HStack(spacing: 10) {
                 Button {
                     updateSet { current in
                         current.completedAt = current.completedAt == nil ? .now : nil
                     }
                 } label: {
-                    WorkoutSetActionLabel(
+                    WorkoutSetPrimaryActionLabel(
                         titleKey: isCompleted ? "action.unmark_done" : "action.mark_done",
                         systemImage: isCompleted ? "checkmark.circle.fill" : "checkmark.circle"
                     )
                 }
-                .buttonStyle(WorkoutSetActionButtonStyle())
+                .buttonStyle(WorkoutSetActionButtonStyle(isCompleted: isCompleted))
                 .layoutPriority(1)
 
                 Button(role: .destructive) {
                     store.removeSetFromActiveWorkout(exerciseIndex: exerciseIndex, setIndex: setIndex)
                 } label: {
-                    WorkoutSetActionLabel(titleKey: "common.delete", systemImage: "trash")
+                    Image(systemName: "trash")
+                        .font(.system(size: 22, weight: .semibold))
+                        .frame(width: 54, height: 50)
                 }
-                .buttonStyle(WorkoutSetActionButtonStyle())
+                .buttonStyle(WorkoutSetIconButtonStyle())
             }
         }
         .padding(16)
@@ -413,22 +432,102 @@ struct WorkoutSetRow: View {
             RoundedRectangle(cornerRadius: 22, style: .continuous)
                 .stroke(cardStroke, lineWidth: 1)
         )
+        .overlay {
+            if isCurrent {
+                WorkoutCurrentSetHighlight()
+            }
+        }
         .toolbar {
             ToolbarItemGroup(placement: .keyboard) {
                 Spacer()
                 Button("action.done") {
-                    isWeightFieldFocused = false
+                    focusedField = nil
                 }
             }
         }
     }
 
-    private var cardBackground: Color {
-        isCompleted ? AppTheme.surface.opacity(0.96) : AppTheme.surfaceElevated
+    private var repsControl: some View {
+        HStack(spacing: 0) {
+            Button {
+                updateSet { current in
+                    current.reps = max(1, current.reps - 1)
+                }
+            } label: {
+                Image(systemName: "minus")
+                    .font(.system(size: 16, weight: .bold))
+                    .frame(width: 42, height: 42)
+            }
+            .buttonStyle(.plain)
+
+            Rectangle()
+                .fill(Color.white.opacity(0.08))
+                .frame(width: 1, height: 26)
+
+            TextField("0", value: Binding(
+                get: { set.reps },
+                set: { newValue in
+                    updateSet { current in
+                        current.reps = min(max(newValue, 1), 50)
+                    }
+                }
+            ), format: .number)
+            .textFieldStyle(.plain)
+            .keyboardType(.numberPad)
+            .multilineTextAlignment(.center)
+            .focused($focusedField, equals: .reps(exerciseIndex, setIndex))
+            .frame(width: 56)
+
+            Rectangle()
+                .fill(Color.white.opacity(0.08))
+                .frame(width: 1, height: 26)
+
+            Button {
+                updateSet { current in
+                    current.reps = min(50, current.reps + 1)
+                }
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 16, weight: .bold))
+                    .frame(width: 42, height: 42)
+            }
+            .buttonStyle(.plain)
+        }
+        .font(.system(size: 18, weight: .semibold, design: .rounded))
+        .foregroundStyle(AppTheme.primaryText)
+        .background(AppTheme.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+        )
+    }
+
+    private var cardBackground: LinearGradient {
+        if isCompleted {
+            return LinearGradient(
+                colors: [
+                    Color(red: 0.08, green: 0.16, blue: 0.12),
+                    Color(red: 0.07, green: 0.2, blue: 0.15),
+                    Color(red: 0.08, green: 0.12, blue: 0.1)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        }
+
+        return LinearGradient(
+            colors: [AppTheme.surfaceElevated, Color(red: 0.15, green: 0.15, blue: 0.18)],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
     }
 
     private var cardStroke: Color {
-        isCompleted ? AppTheme.accent.opacity(0.18) : AppTheme.stroke
+        if isCompleted {
+            return Color(red: 0.22, green: 0.42, blue: 0.33).opacity(0.55)
+        }
+
+        return isCurrent ? Color.white.opacity(0.18) : AppTheme.stroke
     }
 
     private func updateSet(_ change: (inout WorkoutSetLog) -> Void) {
@@ -438,36 +537,90 @@ struct WorkoutSetRow: View {
     }
 }
 
-private struct WorkoutSetActionLabel: View {
+private enum WorkoutSetField: Hashable {
+    case reps(Int, Int)
+    case weight(Int, Int)
+}
+
+private struct WorkoutSetPrimaryActionLabel: View {
     let titleKey: LocalizedStringKey
     let systemImage: String
 
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: systemImage)
-                .font(.system(size: 20, weight: .semibold))
+                .font(.system(size: 18, weight: .semibold))
             Text(titleKey)
                 .multilineTextAlignment(.center)
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .frame(maxWidth: .infinity, minHeight: 54)
+        .frame(maxWidth: .infinity, minHeight: 50)
+        .contentShape(Capsule())
     }
 }
 
 private struct WorkoutSetActionButtonStyle: ButtonStyle {
+    let isCompleted: Bool
+
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 15, weight: .medium, design: .rounded))
+            .font(.system(size: 14, weight: .semibold, design: .rounded))
             .foregroundStyle(AppTheme.primaryText)
             .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(AppTheme.surfaceElevated.opacity(configuration.isPressed ? 0.82 : 1), in: Capsule())
+            .padding(.vertical, 8)
+            .background(background(configuration: configuration), in: Capsule())
             .overlay(
                 Capsule()
-                    .stroke(Color.white.opacity(0.14), lineWidth: 1)
+                    .stroke(borderColor.opacity(configuration.isPressed ? 0.65 : 1), lineWidth: 1)
             )
             .scaleEffect(configuration.isPressed ? 0.99 : 1)
+            .animation(.easeOut(duration: 0.16), value: configuration.isPressed)
+    }
+
+    private func background(configuration: Configuration) -> LinearGradient {
+        let baseColors: [Color] = isCompleted
+            ? [
+                Color(red: 0.1, green: 0.22, blue: 0.16),
+                Color(red: 0.08, green: 0.3, blue: 0.2)
+            ]
+            : [
+                Color(red: 0.16, green: 0.13, blue: 0.3),
+                Color(red: 0.12, green: 0.18, blue: 0.34)
+            ]
+
+        let adjusted = baseColors.map { color in
+            configuration.isPressed ? color.opacity(0.82) : color
+        }
+
+        return LinearGradient(colors: adjusted, startPoint: .topLeading, endPoint: .bottomTrailing)
+    }
+
+    private var borderColor: Color {
+        isCompleted ? Color(red: 0.35, green: 0.65, blue: 0.48) : Color.white.opacity(0.12)
+    }
+}
+
+private struct WorkoutSetIconButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(AppTheme.primaryText)
+            .background(
+                LinearGradient(
+                    colors: [
+                        Color(red: 0.18, green: 0.14, blue: 0.3).opacity(configuration.isPressed ? 0.82 : 1),
+                        Color(red: 0.13, green: 0.16, blue: 0.28).opacity(configuration.isPressed ? 0.82 : 1)
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                ),
+                in: RoundedRectangle(cornerRadius: 20, style: .continuous)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .stroke(Color.white.opacity(0.1), lineWidth: 1)
+            )
+            .scaleEffect(configuration.isPressed ? 0.98 : 1)
             .animation(.easeOut(duration: 0.16), value: configuration.isPressed)
     }
 }
@@ -481,6 +634,7 @@ private struct WorkoutMetricPanel: View {
             Text(title)
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(AppTheme.secondaryText)
+                .lineLimit(3)
             Text(value)
                 .font(.system(size: 22, weight: .bold, design: .rounded))
                 .monospacedDigit()
@@ -488,7 +642,7 @@ private struct WorkoutMetricPanel: View {
                 .minimumScaleFactor(0.7)
         }
         .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, minHeight: 118, maxHeight: 118, alignment: .topLeading)
         .background(AppTheme.surfaceElevated, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 22, style: .continuous)
@@ -645,6 +799,35 @@ private struct WorkoutScrollOffsetPreferenceKey: PreferenceKey {
 
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = nextValue()
+    }
+}
+
+private struct WorkoutCurrentSetHighlight: View {
+    @State private var angle: Angle = .degrees(0)
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 22, style: .continuous)
+            .stroke(
+                AngularGradient(
+                    stops: [
+                        .init(color: .white.opacity(0), location: 0),
+                        .init(color: .white.opacity(0), location: 0.68),
+                        .init(color: .white.opacity(0.95), location: 0.8),
+                        .init(color: .white.opacity(0), location: 0.92),
+                        .init(color: .white.opacity(0), location: 1)
+                    ],
+                    center: .center,
+                    angle: angle
+                ),
+                lineWidth: 1.8
+            )
+            .shadow(color: .white.opacity(0.12), radius: 8)
+            .allowsHitTesting(false)
+            .onAppear {
+                withAnimation(.linear(duration: 5).repeatForever(autoreverses: false)) {
+                    angle = .degrees(360)
+                }
+            }
     }
 }
 

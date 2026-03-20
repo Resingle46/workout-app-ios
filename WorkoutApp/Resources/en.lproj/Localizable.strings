@@ -74,6 +74,7 @@
 "workout.empty_description" = "Start a workout from the Programs tab.";
 "workout.set_number" = "Set %d";
 "workout.reps" = "Reps: %d";
+"workout.reps_label" = "Reps";
 "workout.weight" = "Weight, kg";
 "workout.name" = "Workout name";
 "workout.focus" = "Focus / muscle groups";
