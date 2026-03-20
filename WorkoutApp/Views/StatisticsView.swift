@@ -145,7 +145,7 @@ struct StatisticsView: View {
                         ForEach(points, id: \.0) { point in
                             AreaMark(
                                 x: .value(NSLocalizedString("stats.chart.date", comment: ""), point.0),
-                                yStart: .value(NSLocalizedString("stats.chart.weight", comment: ""), 0),
+                                yStart: .value(NSLocalizedString("stats.chart.weight", comment: ""), 0.0),
                                 yEnd: .value(NSLocalizedString("stats.chart.weight", comment: ""), point.1)
                             )
                             .foregroundStyle(chartAreaGradient)
