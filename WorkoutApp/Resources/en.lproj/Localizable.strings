@@ -154,3 +154,5 @@
 "summary.total_reps" = "Total reps";
 "workout.target_weight" = "Target";
 "workout.previous_weight" = "Last";
+"stats.last_workout" = "Last workout";
+"stats.exercise_chart" = "Exercise chart";

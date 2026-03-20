@@ -154,3 +154,5 @@
 "summary.total_reps" = "Всего повторений";
 "workout.target_weight" = "Цель";
 "workout.previous_weight" = "Прошлый";
+"stats.last_workout" = "Последняя тренировка";
+"stats.exercise_chart" = "График упражнения";

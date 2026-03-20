@@ -15,23 +15,10 @@ struct StatisticsView: View {
                 Text("tab.statistics")
                     .font(.system(size: 38, weight: .black, design: .rounded))
 
-                AppCard {
-                    VStack(alignment: .leading, spacing: 16) {
-                        AppSectionTitle(titleKey: "stats.exercise_picker")
-                        Picker(NSLocalizedString("stats.exercise", comment: ""), selection: $selectedExerciseID) {
-                            Text("common.select").tag(UUID?.none)
-                            ForEach(store.exercises) { exercise in
-                                Text(exercise.localizedName).tag(UUID?.some(exercise.id))
-                            }
-                        }
-                        .pickerStyle(.menu)
-                    }
-                }
-
                 if !recentExercises.isEmpty {
                     AppCard {
                         VStack(alignment: .leading, spacing: 14) {
-                            AppSectionTitle(titleKey: "stats.recent_exercises")
+                            AppSectionTitle(titleKey: "stats.last_workout")
 
                             ForEach(recentExercises) { exercise in
                                 VStack(alignment: .leading, spacing: 8) {
@@ -58,19 +45,20 @@ struct StatisticsView: View {
                     }
                 }
 
-                if let selectedExerciseID,
-                   let exercise = store.exercise(for: selectedExerciseID) {
-                    exerciseAnalyticsCard(for: exercise)
-                } else {
-                    AppCard {
-                        VStack(alignment: .leading, spacing: 10) {
-                            Text("stats.pick_exercise_title")
-                                .font(.title3.weight(.heavy))
-                            Text("stats.pick_exercise_description")
-                                .foregroundStyle(AppTheme.secondaryText)
+                AppCard {
+                    VStack(alignment: .leading, spacing: 16) {
+                        AppSectionTitle(titleKey: "stats.exercise_picker")
+                        Picker(NSLocalizedString("stats.exercise", comment: ""), selection: $selectedExerciseID) {
+                            Text("common.select").tag(UUID?.none)
+                            ForEach(store.exercises) { exercise in
+                                Text(exercise.localizedName).tag(UUID?.some(exercise.id))
+                            }
                         }
+                        .pickerStyle(.menu)
                     }
                 }
+
+                exerciseChartSection
 
                 AppCard {
                     VStack(alignment: .leading, spacing: 14) {
@@ -121,11 +109,31 @@ struct StatisticsView: View {
         .appScreenBackground()
     }
 
-    private func exerciseAnalyticsCard(for exercise: Exercise) -> some View {
+    @ViewBuilder
+    private var exerciseChartSection: some View {
+        if let selectedExerciseID,
+           let exercise = store.exercise(for: selectedExerciseID) {
+            exerciseChartCard(for: exercise)
+        } else {
+            AppCard {
+                VStack(alignment: .leading, spacing: 10) {
+                    AppSectionTitle(titleKey: "stats.exercise_chart")
+                    Text("stats.pick_exercise_title")
+                        .font(.title3.weight(.heavy))
+                    Text("stats.pick_exercise_description")
+                        .foregroundStyle(AppTheme.secondaryText)
+                }
+            }
+        }
+    }
+
+    private func exerciseChartCard(for exercise: Exercise) -> some View {
         let points = store.chartPoints(for: exercise.id)
+        let latestPoint = points.last
 
         return AppCard {
             VStack(alignment: .leading, spacing: 16) {
+                AppSectionTitle(titleKey: "stats.exercise_chart")
                 Text(exercise.localizedName)
                     .font(.title3.weight(.heavy))
 
@@ -133,33 +141,51 @@ struct StatisticsView: View {
                     Text("stats.empty")
                         .foregroundStyle(AppTheme.secondaryText)
                 } else {
-                    Chart(points, id: \.0) { point in
-                        AreaMark(
-                            x: .value(NSLocalizedString("stats.chart.date", comment: ""), point.0),
-                            y: .value(NSLocalizedString("stats.chart.weight", comment: ""), point.1)
-                        )
-                        .foregroundStyle(
-                            LinearGradient(
-                                colors: [AppTheme.accent.opacity(0.35), AppTheme.accent.opacity(0.04)],
-                                startPoint: .top,
-                                endPoint: .bottom
+                    Chart {
+                        ForEach(points, id: \.0) { point in
+                            AreaMark(
+                                x: .value(NSLocalizedString("stats.chart.date", comment: ""), point.0),
+                                yStart: .value(NSLocalizedString("stats.chart.weight", comment: ""), 0),
+                                yEnd: .value(NSLocalizedString("stats.chart.weight", comment: ""), point.1)
                             )
-                        )
+                            .foregroundStyle(chartAreaGradient)
 
-                        LineMark(
-                            x: .value(NSLocalizedString("stats.chart.date", comment: ""), point.0),
-                            y: .value(NSLocalizedString("stats.chart.weight", comment: ""), point.1)
-                        )
-                        .foregroundStyle(AppTheme.accent)
-                        .interpolationMethod(.catmullRom)
+                            LineMark(
+                                x: .value(NSLocalizedString("stats.chart.date", comment: ""), point.0),
+                                y: .value(NSLocalizedString("stats.chart.weight", comment: ""), point.1)
+                            )
+                            .foregroundStyle(chartLineGradient)
+                            .interpolationMethod(.catmullRom)
+                            .lineStyle(StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
 
-                        PointMark(
-                            x: .value(NSLocalizedString("stats.chart.date", comment: ""), point.0),
-                            y: .value(NSLocalizedString("stats.chart.weight", comment: ""), point.1)
-                        )
-                        .foregroundStyle(.white)
+                            PointMark(
+                                x: .value(NSLocalizedString("stats.chart.date", comment: ""), point.0),
+                                y: .value(NSLocalizedString("stats.chart.weight", comment: ""), point.1)
+                            )
+                            .symbolSize(70)
+                            .foregroundStyle(Color.white)
+                        }
+
+                        if let latestPoint {
+                            RuleMark(x: .value(NSLocalizedString("stats.chart.date", comment: ""), latestPoint.0))
+                                .foregroundStyle(Color.white.opacity(0.18))
+                        }
                     }
                     .frame(height: 220)
+                    .chartYAxis {
+                        AxisMarks(position: .trailing)
+                    }
+                    .chartPlotStyle { plotArea in
+                        plotArea
+                            .background(
+                                LinearGradient(
+                                    colors: [Color.white.opacity(0.03), Color.clear],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                )
+                            )
+                            .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                    }
 
                     VStack(alignment: .leading, spacing: 10) {
                         ForEach(points, id: \.0) { point in
@@ -175,6 +201,26 @@ struct StatisticsView: View {
                 }
             }
         }
+    }
+
+    private var chartAreaGradient: LinearGradient {
+        LinearGradient(
+            colors: [
+                AppTheme.neonViolet.opacity(0.34),
+                AppTheme.neonBlue.opacity(0.24),
+                AppTheme.neonCyan.opacity(0.06)
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+    }
+
+    private var chartLineGradient: LinearGradient {
+        LinearGradient(
+            colors: [AppTheme.neonViolet, AppTheme.neonBlue, AppTheme.neonCyan],
+            startPoint: .leading,
+            endPoint: .trailing
+        )
     }
 
     private func sessionSubtitle(for session: WorkoutSession) -> String {
