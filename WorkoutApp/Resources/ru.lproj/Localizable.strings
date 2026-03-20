@@ -80,6 +80,8 @@
 "workout.default_name" = "Новая тренировка";
 "workout.focus_empty" = "Фокус пока не задан.";
 "workout.done_badge" = "Готово";
+"workout.progress_title" = "Прогресс тренировки";
+"workout.progress_value" = "%d готово | %d осталось";
 
 "stats.exercise_picker" = "Аналитика упражнения";
 "stats.exercise" = "Упражнение";

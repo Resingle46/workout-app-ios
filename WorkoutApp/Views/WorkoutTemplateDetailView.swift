@@ -311,35 +311,12 @@ struct AddExerciseToWorkoutView: View {
                                     .foregroundStyle(AppTheme.secondaryText)
                             } else {
                                 ForEach(filteredExercises) { exercise in
-                                    Button {
-                                        toggleSelection(for: exercise.id)
-                                    } label: {
-                                        HStack(spacing: 12) {
-                                            VStack(alignment: .leading, spacing: 6) {
-                                                Text(exercise.name)
-                                                    .foregroundStyle(AppTheme.primaryText)
-                                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                                if !exercise.equipment.isEmpty {
-                                                    Text(exercise.equipment)
-                                                        .font(.caption)
-                                                        .foregroundStyle(AppTheme.secondaryText)
-                                                }
-                                            }
-
-                                            Spacer()
-
-                                            Image(systemName: selectedExerciseIDs.contains(exercise.id) ? "checkmark.circle.fill" : "circle")
-                                                .font(.title3)
-                                                .foregroundStyle(selectedExerciseIDs.contains(exercise.id) ? AppTheme.accent : AppTheme.secondaryText)
-                                        }
-                                        .padding(.vertical, 6)
-                                    }
-                                    .buttonStyle(.plain)
-
-                                    if exercise.id != (filteredExercises.last?.id ?? exercise.id) {
-                                        Divider()
-                                            .overlay(AppTheme.stroke)
-                                    }
+                                    ExerciseSelectionCard(
+                                        exercise: exercise,
+                                        category: store.category(for: exercise.categoryID),
+                                        isSelected: selectedExerciseIDs.contains(exercise.id),
+                                        action: { toggleSelection(for: exercise.id) }
+                                    )
                                 }
                             }
                         }
@@ -461,6 +438,121 @@ private struct PendingExerciseConfiguration: Identifiable {
     let exerciseIDs: [UUID]
     let isSuperset: Bool
     let title: String
+}
+
+private struct ExerciseSelectionCard: View {
+    let exercise: Exercise
+    let category: ExerciseCategory?
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 16) {
+                ZStack {
+                    Circle()
+                        .fill(Color.white.opacity(0.18))
+                    Image(systemName: category?.symbol ?? "figure.strengthtraining.functional")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(.white)
+                }
+                .frame(width: 52, height: 52)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    if let category {
+                        Text(LocalizedStringKey(category.nameKey))
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(Color.white.opacity(0.72))
+                    }
+
+                    Text(exercise.name)
+                        .font(.system(size: 22, weight: .medium, design: .rounded))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .multilineTextAlignment(.leading)
+
+                    if !exercise.equipment.isEmpty {
+                        Text(exercise.equipment)
+                            .font(.subheadline)
+                            .foregroundStyle(Color.white.opacity(0.74))
+                    }
+                }
+
+                Spacer(minLength: 8)
+
+                ZStack {
+                    Circle()
+                        .fill(isSelected ? Color.white : Color.black.opacity(0.28))
+                        .frame(width: 40, height: 40)
+                        .shadow(color: Color.black.opacity(0.22), radius: 10, y: 6)
+
+                    Image(systemName: isSelected ? "checkmark" : "arrow.up.right")
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundStyle(
+                            isSelected
+                                ? LinearGradient(
+                                    colors: [AppTheme.neonBlue, AppTheme.neonViolet],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                                : LinearGradient(
+                                    colors: [Color.white.opacity(0.92), Color.white.opacity(0.72)],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                )
+                        )
+                }
+            }
+            .padding(18)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(cardBackground)
+            .overlay(
+                RoundedRectangle(cornerRadius: 28, style: .continuous)
+                    .stroke(isSelected ? Color.white.opacity(0.28) : Color.white.opacity(0.12), lineWidth: 1.1)
+            )
+            .shadow(color: shadowColor, radius: 22, y: 12)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var cardBackground: some View {
+        RoundedRectangle(cornerRadius: 28, style: .continuous)
+            .fill(
+                LinearGradient(
+                    colors: isSelected
+                        ? [
+                            Color(red: 0.24, green: 0.14, blue: 0.95),
+                            Color(red: 0.34, green: 0.19, blue: 0.99),
+                            Color(red: 0.24, green: 0.56, blue: 0.97)
+                        ]
+                        : [
+                            Color(red: 0.16, green: 0.13, blue: 0.56),
+                            Color(red: 0.28, green: 0.16, blue: 0.88),
+                            Color(red: 0.19, green: 0.22, blue: 0.72)
+                        ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
+            .overlay(alignment: .topLeading) {
+                Circle()
+                    .fill(AppTheme.neonViolet.opacity(isSelected ? 0.42 : 0.26))
+                    .frame(width: 150, height: 150)
+                    .blur(radius: 40)
+                    .offset(x: -20, y: -34)
+            }
+            .overlay(alignment: .bottomTrailing) {
+                Circle()
+                    .fill(AppTheme.neonCyan.opacity(isSelected ? 0.36 : 0.2))
+                    .frame(width: 130, height: 130)
+                    .blur(radius: 34)
+                    .offset(x: 24, y: 28)
+            }
+    }
+
+    private var shadowColor: Color {
+        isSelected ? AppTheme.neonBlue.opacity(0.34) : AppTheme.neonViolet.opacity(0.18)
+    }
 }
 
 struct CreateCustomExerciseView: View {

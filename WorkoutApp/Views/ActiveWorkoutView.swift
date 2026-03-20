@@ -146,6 +146,8 @@ struct ActiveWorkoutView: View {
                 Text(session.title)
                     .font(.system(size: 30, weight: .black, design: .rounded))
 
+                WorkoutExerciseProgressCard(progress: workoutProgress(for: session))
+
                 HStack(spacing: 12) {
                     WorkoutMetricPanel(
                         title: NSLocalizedString("workout.duration", comment: ""),
@@ -224,6 +226,22 @@ struct ActiveWorkoutView: View {
             return DateComponentsFormatter.workoutDurationLong.string(from: session.startedAt, to: now) ?? "00:00"
         }
         return DateComponentsFormatter.workoutDurationShort.string(from: session.startedAt, to: now) ?? "00:00"
+    }
+
+    private func workoutProgress(for session: WorkoutSession) -> WorkoutExerciseProgress {
+        let totalExercises = max(session.exercises.count, 1)
+        let completedExercises = session.exercises.filter { exercise in
+            !exercise.sets.isEmpty && exercise.sets.allSatisfy { $0.completedAt != nil }
+        }.count
+        let remainingExercises = max(session.exercises.count - completedExercises, 0)
+        let currentStep = session.exercises.isEmpty ? 0 : min(completedExercises + (remainingExercises > 0 ? 1 : 0), totalExercises)
+
+        return WorkoutExerciseProgress(
+            total: totalExercises,
+            completed: completedExercises,
+            remaining: remainingExercises,
+            currentStep: currentStep
+        )
     }
 }
 
@@ -341,6 +359,150 @@ private struct WorkoutMetricPanel: View {
             RoundedRectangle(cornerRadius: 22, style: .continuous)
                 .stroke(AppTheme.stroke, lineWidth: 1)
         )
+    }
+}
+
+private struct WorkoutExerciseProgress {
+    let total: Int
+    let completed: Int
+    let remaining: Int
+    let currentStep: Int
+}
+
+private struct WorkoutExerciseProgressCard: View {
+    let progress: WorkoutExerciseProgress
+
+    private var normalizedProgress: CGFloat {
+        guard progress.total > 1 else { return 0 }
+        return CGFloat(max(progress.currentStep - 1, 0)) / CGFloat(progress.total - 1)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("workout.progress_title")
+                        .font(.title3.weight(.medium))
+                        .foregroundStyle(Color.white.opacity(0.78))
+                    Text(String(format: NSLocalizedString("workout.progress_value", comment: ""), progress.completed, progress.remaining))
+                        .font(.system(size: 17, weight: .medium, design: .rounded))
+                        .foregroundStyle(AppTheme.primaryText)
+                }
+
+                Spacer()
+            }
+
+            GeometryReader { proxy in
+                let bubbleSize: CGFloat = 70
+                let trackHeight: CGFloat = 26
+                let edgeInset = bubbleSize / 2
+                let usableWidth = max(proxy.size.width - bubbleSize, 1)
+                let bubbleOffset = usableWidth * normalizedProgress
+
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(progressGradient)
+                        .frame(height: trackHeight)
+                        .blur(radius: 14)
+                        .opacity(0.5)
+
+                    Capsule()
+                        .fill(progressGradient)
+                        .frame(height: trackHeight)
+                        .overlay {
+                            markerRow(width: proxy.size.width, edgeInset: edgeInset)
+                        }
+                        .overlay(
+                            Capsule()
+                                .stroke(Color.white.opacity(0.18), lineWidth: 1)
+                        )
+
+                    progressBubble
+                        .frame(width: bubbleSize, height: bubbleSize)
+                        .offset(x: bubbleOffset)
+                }
+            }
+            .frame(height: 74)
+        }
+        .padding(20)
+        .background(progressCardBackground, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                .stroke(Color.white.opacity(0.14), lineWidth: 1)
+        )
+    }
+
+    private var progressGradient: LinearGradient {
+        LinearGradient(
+            colors: [AppTheme.neonViolet, AppTheme.neonBlue, AppTheme.neonCyan, AppTheme.neonLime],
+            startPoint: .leading,
+            endPoint: .trailing
+        )
+    }
+
+    private var progressCardBackground: LinearGradient {
+        LinearGradient(
+            colors: [
+                Color(red: 0.26, green: 0.1, blue: 0.06),
+                Color(red: 0.39, green: 0.16, blue: 0.09),
+                Color(red: 0.15, green: 0.08, blue: 0.09)
+            ],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+    }
+
+    private var progressBubble: some View {
+        ZStack {
+            Circle()
+                .fill(.ultraThinMaterial)
+                .overlay(
+                    Circle()
+                        .fill(
+                            RadialGradient(
+                                colors: [Color.white.opacity(0.84), AppTheme.neonCyan.opacity(0.34), Color.white.opacity(0.08)],
+                                center: .topLeading,
+                                startRadius: 4,
+                                endRadius: 44
+                            )
+                        )
+                )
+                .overlay(
+                    Circle()
+                        .stroke(Color.white.opacity(0.38), lineWidth: 1)
+                )
+                .shadow(color: AppTheme.neonCyan.opacity(0.28), radius: 18, y: 8)
+
+            Text("\(progress.currentStep)")
+                .font(.system(size: 38, weight: .black, design: .rounded))
+                .foregroundStyle(
+                    LinearGradient(
+                        colors: [Color(red: 0.05, green: 0.08, blue: 0.35), Color(red: 0.02, green: 0.19, blue: 0.42)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+        }
+    }
+
+    @ViewBuilder
+    private func markerRow(width: CGFloat, edgeInset: CGFloat) -> some View {
+        ForEach(0..<progress.total, id: \.self) { index in
+            Circle()
+                .fill(Color.black.opacity(0.24))
+                .frame(width: 13, height: 13)
+                .position(
+                    x: markerPosition(for: index, width: width, edgeInset: edgeInset),
+                    y: 13
+                )
+        }
+    }
+
+    private func markerPosition(for index: Int, width: CGFloat, edgeInset: CGFloat) -> CGFloat {
+        guard progress.total > 1 else { return width / 2 }
+        let usableWidth = max(width - edgeInset * 2, 1)
+        let progressIndex = CGFloat(index) / CGFloat(progress.total - 1)
+        return edgeInset + (usableWidth * progressIndex)
     }
 }
 

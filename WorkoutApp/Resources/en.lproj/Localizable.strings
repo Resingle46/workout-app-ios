@@ -80,6 +80,8 @@
 "workout.default_name" = "New Workout";
 "workout.focus_empty" = "Focus area is not set yet.";
 "workout.done_badge" = "Done";
+"workout.progress_title" = "Workout progress";
+"workout.progress_value" = "%d done | %d left";
 
 "stats.exercise_picker" = "Exercise analytics";
 "stats.exercise" = "Exercise";

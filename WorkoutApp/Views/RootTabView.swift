@@ -9,6 +9,11 @@ enum AppTheme {
     static let accentMuted = Color(red: 0.24, green: 0.39, blue: 0.36)
     static let primaryText = Color.white
     static let secondaryText = Color.white.opacity(0.65)
+    static let neonBlue = Color(red: 0.21, green: 0.36, blue: 1.0)
+    static let neonViolet = Color(red: 0.55, green: 0.2, blue: 1.0)
+    static let neonCyan = Color(red: 0.22, green: 0.88, blue: 0.96)
+    static let neonLime = Color(red: 0.73, green: 1.0, blue: 0.25)
+    static let neonOrange = Color(red: 0.98, green: 0.48, blue: 0.26)
 }
 
 struct RootTabView: View {
