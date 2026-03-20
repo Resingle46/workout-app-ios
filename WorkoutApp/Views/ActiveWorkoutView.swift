@@ -92,8 +92,6 @@ struct ActiveWorkoutView: View {
                             .transition(.move(edge: .top).combined(with: .opacity))
                     }
                 }
-                .navigationTitle(session.title)
-                .navigationBarTitleDisplayMode(.inline)
                 .onPreferenceChange(WorkoutScrollOffsetPreferenceKey.self) { scrollOffset = $0 }
                 .onReceive(timer) { now = $0 }
                 .appScreenBackground()
@@ -114,11 +112,10 @@ struct ActiveWorkoutView: View {
                     }
                     .padding(20)
                 }
-                .navigationTitle("tab.workout")
-                .navigationBarTitleDisplayMode(.inline)
                 .appScreenBackground()
             }
         }
+        .toolbar(.hidden, for: .navigationBar)
         .onAppear {
             if store.activeSession == nil {
                 presentedSummary = nil
