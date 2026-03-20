@@ -428,14 +428,14 @@ private struct WorkoutExerciseProgressCard: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 10) {
             HStack {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("workout.progress_title")
-                        .font(.title3.weight(.medium))
-                        .foregroundStyle(Color.white.opacity(0.78))
+                        .font(.headline.weight(.medium))
+                        .foregroundStyle(Color.white.opacity(0.76))
                     Text(String(format: NSLocalizedString("workout.progress_value", comment: ""), progress.completed, progress.remaining))
-                        .font(.system(size: 17, weight: .medium, design: .rounded))
+                        .font(.system(size: 15, weight: .medium, design: .rounded))
                         .foregroundStyle(AppTheme.primaryText)
                 }
 
@@ -443,8 +443,8 @@ private struct WorkoutExerciseProgressCard: View {
             }
 
             GeometryReader { proxy in
-                let bubbleSize: CGFloat = 70
-                let trackHeight: CGFloat = 26
+                let bubbleSize: CGFloat = 54
+                let trackHeight: CGFloat = 18
                 let edgeInset = bubbleSize / 2
                 let usableWidth = max(proxy.size.width - bubbleSize, 1)
                 let bubbleOffset = usableWidth * normalizedProgress
@@ -453,8 +453,8 @@ private struct WorkoutExerciseProgressCard: View {
                     Capsule()
                         .fill(progressGradient)
                         .frame(height: trackHeight)
-                        .blur(radius: 14)
-                        .opacity(0.5)
+                        .blur(radius: 10)
+                        .opacity(0.34)
 
                     Capsule()
                         .fill(progressGradient)
@@ -472,13 +472,13 @@ private struct WorkoutExerciseProgressCard: View {
                         .offset(x: bubbleOffset)
                 }
             }
-            .frame(height: 74)
+            .frame(height: 56)
         }
-        .padding(20)
-        .background(progressCardBackground, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+        .padding(16)
+        .background(progressCardBackground, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 28, style: .continuous)
-                .stroke(Color.white.opacity(0.14), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .stroke(Color.white.opacity(0.08), lineWidth: 1)
         )
     }
 
@@ -493,9 +493,9 @@ private struct WorkoutExerciseProgressCard: View {
     private var progressCardBackground: LinearGradient {
         LinearGradient(
             colors: [
-                Color(red: 0.26, green: 0.1, blue: 0.06),
-                Color(red: 0.39, green: 0.16, blue: 0.09),
-                Color(red: 0.15, green: 0.08, blue: 0.09)
+                AppTheme.surfaceElevated,
+                Color(red: 0.11, green: 0.11, blue: 0.14),
+                Color(red: 0.08, green: 0.08, blue: 0.1)
             ],
             startPoint: .topLeading,
             endPoint: .bottomTrailing
@@ -506,32 +506,31 @@ private struct WorkoutExerciseProgressCard: View {
         ZStack {
             Circle()
                 .fill(.ultraThinMaterial)
+                .background(
+                    Circle()
+                        .fill(Color.white.opacity(0.08))
+                        .blur(radius: 10)
+                )
                 .overlay(
                     Circle()
                         .fill(
                             RadialGradient(
-                                colors: [Color.white.opacity(0.84), AppTheme.neonCyan.opacity(0.34), Color.white.opacity(0.08)],
+                                colors: [Color.white.opacity(0.22), AppTheme.neonCyan.opacity(0.12), Color.clear],
                                 center: .topLeading,
                                 startRadius: 4,
-                                endRadius: 44
+                                endRadius: 38
                             )
                         )
                 )
                 .overlay(
                     Circle()
-                        .stroke(Color.white.opacity(0.38), lineWidth: 1)
+                        .stroke(Color.white.opacity(0.24), lineWidth: 1)
                 )
-                .shadow(color: AppTheme.neonCyan.opacity(0.28), radius: 18, y: 8)
+                .shadow(color: Color.black.opacity(0.22), radius: 12, y: 6)
 
             Text("\(progress.currentStep)")
-                .font(.system(size: 38, weight: .black, design: .rounded))
-                .foregroundStyle(
-                    LinearGradient(
-                        colors: [Color(red: 0.05, green: 0.08, blue: 0.35), Color(red: 0.02, green: 0.19, blue: 0.42)],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                )
+                .font(.system(size: 28, weight: .black, design: .rounded))
+                .foregroundStyle(Color.white.opacity(0.94))
         }
     }
 
@@ -539,11 +538,11 @@ private struct WorkoutExerciseProgressCard: View {
     private func markerRow(width: CGFloat, edgeInset: CGFloat) -> some View {
         ForEach(0..<progress.total, id: \.self) { index in
             Circle()
-                .fill(Color.black.opacity(0.24))
-                .frame(width: 13, height: 13)
+                .fill(Color.black.opacity(0.22))
+                .frame(width: 11, height: 11)
                 .position(
                     x: markerPosition(for: index, width: width, edgeInset: edgeInset),
-                    y: 13
+                    y: 9
                 )
         }
     }

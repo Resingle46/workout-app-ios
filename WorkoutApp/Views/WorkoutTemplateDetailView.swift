@@ -441,33 +441,35 @@ private struct ExerciseSelectionCard: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 16) {
+            HStack(spacing: 14) {
                 ZStack {
                     Circle()
-                        .fill(Color.white.opacity(0.18))
+                        .fill(Color.white.opacity(0.14))
                     Image(systemName: category?.symbol ?? "figure.strengthtraining.functional")
-                        .font(.system(size: 20, weight: .semibold))
+                        .font(.system(size: 18, weight: .semibold))
                         .foregroundStyle(.white)
                 }
-                .frame(width: 52, height: 52)
+                .frame(width: 44, height: 44)
 
-                VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: 4) {
                     if let category {
                         Text(LocalizedStringKey(category.nameKey))
-                            .font(.caption.weight(.medium))
+                            .font(.caption2.weight(.medium))
                             .foregroundStyle(Color.white.opacity(0.72))
                     }
 
                     Text(exercise.localizedName)
-                        .font(.system(size: 22, weight: .medium, design: .rounded))
+                        .font(.system(size: 18, weight: .medium, design: .rounded))
                         .foregroundStyle(.white)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .multilineTextAlignment(.leading)
+                        .lineLimit(2)
 
                     if !exercise.equipment.isEmpty {
                         Text(exercise.equipment)
-                            .font(.subheadline)
+                            .font(.footnote)
                             .foregroundStyle(Color.white.opacity(0.74))
+                            .lineLimit(1)
                     }
                 }
 
@@ -476,11 +478,11 @@ private struct ExerciseSelectionCard: View {
                 ZStack {
                     Circle()
                         .fill(isSelected ? Color.white : Color.black.opacity(0.28))
-                        .frame(width: 40, height: 40)
-                        .shadow(color: Color.black.opacity(0.22), radius: 10, y: 6)
+                        .frame(width: 34, height: 34)
+                        .shadow(color: Color.black.opacity(0.2), radius: 8, y: 4)
 
-                    Image(systemName: isSelected ? "checkmark" : "arrow.up.right")
-                        .font(.system(size: 18, weight: .bold))
+                    Image(systemName: isSelected ? "checkmark" : "plus")
+                        .font(.system(size: 15, weight: .bold))
                         .foregroundStyle(
                             isSelected
                                 ? LinearGradient(
@@ -496,20 +498,21 @@ private struct ExerciseSelectionCard: View {
                         )
                 }
             }
-            .padding(18)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(cardBackground)
             .overlay(
-                RoundedRectangle(cornerRadius: 28, style: .continuous)
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
                     .stroke(isSelected ? Color.white.opacity(0.28) : Color.white.opacity(0.12), lineWidth: 1.1)
             )
-            .shadow(color: shadowColor, radius: 22, y: 12)
+            .shadow(color: shadowColor, radius: 18, y: 10)
         }
         .buttonStyle(.plain)
     }
 
     private var cardBackground: some View {
-        RoundedRectangle(cornerRadius: 28, style: .continuous)
+        RoundedRectangle(cornerRadius: 24, style: .continuous)
             .fill(
                 LinearGradient(
                     colors: isSelected
