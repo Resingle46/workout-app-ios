@@ -1,0 +1,19 @@
+# Xcode user/build data
+DerivedData/
+build/
+*.xcuserstate
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+
+# macOS metadata
+.DS_Store
+
+# Signing files and accidental secrets
+*.p8
+*.p12
+*.pem
+*.key
+*.mobileprovision
+user
+user.pub

@@ -26,12 +26,12 @@ struct StatisticsView: View {
                     } else {
                         Chart(points, id: \.0) { point in
                             LineMark(
-                                x: .value("Date", point.0),
-                                y: .value("Weight", point.1)
+                                x: .value(NSLocalizedString("stats.chart.date", comment: ""), point.0),
+                                y: .value(NSLocalizedString("stats.chart.weight", comment: ""), point.1)
                             )
                             PointMark(
-                                x: .value("Date", point.0),
-                                y: .value("Weight", point.1)
+                                x: .value(NSLocalizedString("stats.chart.date", comment: ""), point.0),
+                                y: .value(NSLocalizedString("stats.chart.weight", comment: ""), point.1)
                             )
                         }
                         .frame(height: 220)
@@ -40,7 +40,7 @@ struct StatisticsView: View {
                             HStack {
                                 Text(point.0, style: .date)
                                 Spacer()
-                                Text("\(point.1, specifier: "%.1f") kg")
+                                Text(String(format: NSLocalizedString("stats.weight_value", comment: ""), point.1))
                             }
                         }
                     }
@@ -88,7 +88,7 @@ struct WorkoutSummaryView: View {
                         ForEach(Array(exercise.sets.enumerated()), id: \.element.id) { index, set in
                             VStack(alignment: .leading) {
                                 Text(String(format: NSLocalizedString("workout.set_number", comment: ""), index + 1))
-                                Text("\(set.weight, specifier: "%.1f") kg × \(set.reps)")
+                                Text(String(format: NSLocalizedString("stats.set_value", comment: ""), set.weight, set.reps))
                                     .foregroundStyle(.secondary)
                             }
                         }
@@ -110,14 +110,14 @@ struct WorkoutSummaryView: View {
             return zip(dates.dropFirst(), dates).map { $0.timeIntervalSince($1) }
         }
         guard !allIntervals.isEmpty else { return NSLocalizedString("common.no_data", comment: "") }
-        return "\(Int(allIntervals.reduce(0, +) / Double(allIntervals.count))) sec"
+        return String(format: NSLocalizedString("common.seconds_value", comment: ""), Int(allIntervals.reduce(0, +) / Double(allIntervals.count)))
     }
 
     private var averageExerciseRest: String {
         let exerciseEnds = session.exercises.compactMap { $0.sets.compactMap(\.completedAt).max() }.sorted()
         guard exerciseEnds.count > 1 else { return NSLocalizedString("common.no_data", comment: "") }
         let intervals = zip(exerciseEnds.dropFirst(), exerciseEnds).map { $0.timeIntervalSince($1) }
-        return "\(Int(intervals.reduce(0, +) / Double(intervals.count))) sec"
+        return String(format: NSLocalizedString("common.seconds_value", comment: ""), Int(intervals.reduce(0, +) / Double(intervals.count)))
     }
 
     private func row(title: String, value: String) -> some View {

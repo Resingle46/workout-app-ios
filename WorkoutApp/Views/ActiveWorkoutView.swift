@@ -38,7 +38,7 @@ struct ActiveWorkoutView: View {
                                         Button(role: .destructive) {
                                             store.removeSetFromActiveWorkout(exerciseIndex: exerciseIndex, setIndex: setIndex)
                                         } label: {
-                                            Label("Delete", systemImage: "trash")
+                                            Label(NSLocalizedString("common.delete", comment: ""), systemImage: "trash")
                                         }
                                     }
                                 }
@@ -65,7 +65,7 @@ struct ActiveWorkoutView: View {
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text(restSummary(for: item))
                                     if let previousSetRest = previousSetRest(for: item) {
-                                        Text("Последний отдых: \(previousSetRest)")
+                                        Text(String(format: NSLocalizedString("workout.previous_rest", comment: ""), previousSetRest))
                                     }
                                 }
                             }

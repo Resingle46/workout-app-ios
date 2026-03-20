@@ -44,7 +44,7 @@ struct WorkoutTemplateDetailView: View {
                                         Text(exercise.equipment)
                                             .font(.subheadline)
                                             .foregroundStyle(.secondary)
-                                        Text(item.sets.map { "\($0.reps)" }.joined(separator: " / ") + " reps")
+                                        Text(String(format: NSLocalizedString("template.reps_summary", comment: ""), item.sets.map { "\($0.reps)" }.joined(separator: " / ")))
                                             .font(.caption)
                                             .foregroundStyle(.secondary)
                                     }
@@ -52,7 +52,7 @@ struct WorkoutTemplateDetailView: View {
                             }
                         } header: {
                             if group.isSuperset {
-                                Label("Superset", systemImage: "bolt.fill")
+                                Label("label.superset", systemImage: "bolt.fill")
                             }
                         }
                     }
@@ -142,7 +142,7 @@ struct AddExerciseToWorkoutView: View {
                     Button {
                         showingCreateExercise = true
                     } label: {
-                        Label("Создать своё упражнение", systemImage: "plus.circle")
+                        Label("catalog.create_custom", systemImage: "plus.circle")
                     }
                 }
 
@@ -177,7 +177,7 @@ struct AddExerciseToWorkoutView: View {
                         Text(String(format: NSLocalizedString("template.reps", comment: ""), reps))
                     }
                     Toggle("template.superset", isOn: $isSuperset)
-                    Text(isSuperset ? "Выберите ровно 2 упражнения для superset." : "Выберите 1 упражнение.")
+                    Text(LocalizedStringKey(isSuperset ? "template.superset_hint_pair" : "template.superset_hint_single"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -261,17 +261,17 @@ struct CreateCustomExerciseView: View {
     var body: some View {
         NavigationStack {
             Form {
-                TextField("Название", text: $name)
-                Picker("Группа мышц", selection: $selectedCategoryID) {
+                TextField("exercise.name", text: $name)
+                Picker("catalog.category", selection: $selectedCategoryID) {
                     ForEach(store.categories) { category in
                         Text(LocalizedStringKey(category.nameKey)).tag(UUID?.some(category.id))
                     }
                 }
-                TextField("Инвентарь", text: $equipment)
-                TextField("Заметки", text: $notes, axis: .vertical)
+                TextField("exercise.equipment", text: $equipment)
+                TextField("exercise.notes", text: $notes, axis: .vertical)
                     .lineLimit(3...6)
             }
-            .navigationTitle("Новое упражнение")
+            .navigationTitle("exercise.new")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("action.cancel") { dismiss() }
