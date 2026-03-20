@@ -76,10 +76,12 @@ struct ActiveWorkoutView: View {
                                 }
                             }
                         }
+
+                        finishWorkoutCTA
                     }
                     .padding(.horizontal, 20)
                     .padding(.top, 12)
-                    .padding(.bottom, 24)
+                    .padding(.bottom, 32)
                 }
                 .coordinateSpace(name: "workout-scroll")
                 .overlay(alignment: .top) {
@@ -89,9 +91,6 @@ struct ActiveWorkoutView: View {
                             .padding(.top, 8)
                             .transition(.move(edge: .top).combined(with: .opacity))
                     }
-                }
-                .safeAreaInset(edge: .bottom) {
-                    finishWorkoutCTA
                 }
                 .navigationTitle(session.title)
                 .navigationBarTitleDisplayMode(.inline)
@@ -152,20 +151,13 @@ struct ActiveWorkoutView: View {
     }
 
     private var finishWorkoutCTA: some View {
-        VStack(spacing: 0) {
-            Divider()
-                .overlay(AppTheme.stroke)
-            Button(role: .destructive) {
-                store.finishActiveWorkout()
-            } label: {
-                Label("action.finish_workout", systemImage: "stop.fill")
-            }
-            .buttonStyle(AppOutlinedButtonStyle())
-            .padding(.horizontal, 20)
-            .padding(.top, 14)
-            .padding(.bottom, 12)
-            .background(.ultraThinMaterial.opacity(0.2))
+        Button(role: .destructive) {
+            store.finishActiveWorkout()
+        } label: {
+            Label("action.finish_workout", systemImage: "stop.fill")
         }
+        .buttonStyle(WorkoutFinishButtonStyle())
+        .padding(.top, 8)
     }
 
     private var scrollOffsetReader: some View {
@@ -621,6 +613,35 @@ private struct WorkoutSetIconButtonStyle: ButtonStyle {
                     .stroke(Color.white.opacity(0.1), lineWidth: 1)
             )
             .scaleEffect(configuration.isPressed ? 0.98 : 1)
+            .animation(.easeOut(duration: 0.16), value: configuration.isPressed)
+    }
+}
+
+private struct WorkoutFinishButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 17, weight: .semibold, design: .rounded))
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 18)
+            .background(
+                LinearGradient(
+                    colors: [
+                        Color(red: 0.55, green: 0.08, blue: 0.12).opacity(configuration.isPressed ? 0.84 : 1),
+                        Color(red: 0.78, green: 0.14, blue: 0.16).opacity(configuration.isPressed ? 0.84 : 1),
+                        Color(red: 0.95, green: 0.22, blue: 0.18).opacity(configuration.isPressed ? 0.84 : 1)
+                    ],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                ),
+                in: RoundedRectangle(cornerRadius: 24, style: .continuous)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .stroke(Color.white.opacity(0.14), lineWidth: 1)
+            )
+            .shadow(color: Color.red.opacity(0.18), radius: 14, y: 8)
+            .scaleEffect(configuration.isPressed ? 0.99 : 1)
             .animation(.easeOut(duration: 0.16), value: configuration.isPressed)
     }
 }
