@@ -107,13 +107,6 @@ struct WorkoutTemplateDetailView: View {
                         Label("action.start_workout", systemImage: "play.fill")
                     }
                     .buttonStyle(AppPrimaryButtonStyle())
-
-                    Button {
-                        showingAddExercise = true
-                    } label: {
-                        Label("action.add_exercise", systemImage: "plus")
-                    }
-                    .buttonStyle(AppSecondaryButtonStyle())
                 }
             }
         }

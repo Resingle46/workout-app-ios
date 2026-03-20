@@ -253,6 +253,10 @@ struct WorkoutSetRow: View {
     let setIndex: Int
     let set: WorkoutSetLog
 
+    private var isCompleted: Bool {
+        set.completedAt != nil
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
@@ -302,23 +306,27 @@ struct WorkoutSetRow: View {
                         current.completedAt = current.completedAt == nil ? .now : nil
                     }
                 } label: {
-                    Label(set.completedAt == nil ? "action.mark_done" : "action.unmark_done", systemImage: set.completedAt == nil ? "checkmark.circle" : "checkmark.circle.fill")
+                    WorkoutSetActionLabel(
+                        titleKey: isCompleted ? "action.unmark_done" : "action.mark_done",
+                        systemImage: isCompleted ? "checkmark.circle.fill" : "checkmark.circle"
+                    )
                 }
-                .buttonStyle(AppSecondaryButtonStyle())
+                .buttonStyle(WorkoutSetActionButtonStyle())
+                .layoutPriority(1)
 
                 Button(role: .destructive) {
                     store.removeSetFromActiveWorkout(exerciseIndex: exerciseIndex, setIndex: setIndex)
                 } label: {
-                    Label("common.delete", systemImage: "trash")
+                    WorkoutSetActionLabel(titleKey: "common.delete", systemImage: "trash")
                 }
-                .buttonStyle(AppSecondaryButtonStyle())
+                .buttonStyle(WorkoutSetActionButtonStyle())
             }
         }
         .padding(16)
-        .background(AppTheme.surfaceElevated, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .background(cardBackground, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .stroke(AppTheme.stroke, lineWidth: 1)
+                .stroke(cardStroke, lineWidth: 1)
         )
         .toolbar {
             ToolbarItemGroup(placement: .keyboard) {
@@ -330,10 +338,52 @@ struct WorkoutSetRow: View {
         }
     }
 
+    private var cardBackground: Color {
+        isCompleted ? AppTheme.surface.opacity(0.96) : AppTheme.surfaceElevated
+    }
+
+    private var cardStroke: Color {
+        isCompleted ? AppTheme.accent.opacity(0.18) : AppTheme.stroke
+    }
+
     private func updateSet(_ change: (inout WorkoutSetLog) -> Void) {
         store.updateActiveSession { session in
             change(&session.exercises[exerciseIndex].sets[setIndex])
         }
+    }
+}
+
+private struct WorkoutSetActionLabel: View {
+    let titleKey: LocalizedStringKey
+    let systemImage: String
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: systemImage)
+                .font(.system(size: 20, weight: .semibold))
+            Text(titleKey)
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, minHeight: 54)
+    }
+}
+
+private struct WorkoutSetActionButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 15, weight: .medium, design: .rounded))
+            .foregroundStyle(AppTheme.primaryText)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(AppTheme.surfaceElevated.opacity(configuration.isPressed ? 0.82 : 1), in: Capsule())
+            .overlay(
+                Capsule()
+                    .stroke(Color.white.opacity(0.14), lineWidth: 1)
+            )
+            .scaleEffect(configuration.isPressed ? 0.99 : 1)
+            .animation(.easeOut(duration: 0.16), value: configuration.isPressed)
     }
 }
 

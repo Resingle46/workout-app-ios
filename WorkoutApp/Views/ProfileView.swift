@@ -70,7 +70,7 @@ struct ProfileView: View {
                     }
                 }
             )
-            .presentationDetents([.height(360)])
+            .presentationDetents([.height(312)])
             .presentationDragIndicator(.hidden)
             .presentationBackground(.clear)
         }
@@ -132,8 +132,8 @@ private struct ProfilePickerSheet: View {
             Capsule()
                 .fill(Color.white.opacity(0.28))
                 .frame(width: 44, height: 5)
-                .padding(.top, 10)
-                .padding(.bottom, 18)
+                .padding(.top, 8)
+                .padding(.bottom, 14)
 
             HStack {
                 Text(title(for: picker))
@@ -155,15 +155,15 @@ private struct ProfilePickerSheet: View {
                 .foregroundStyle(AppTheme.primaryText)
             }
             .padding(.horizontal, 20)
-            .padding(.bottom, 8)
+            .padding(.bottom, 2)
 
             pickerContent
                 .frame(maxWidth: .infinity)
-                .frame(height: 220)
+                .frame(height: 176)
                 .clipped()
         }
         .padding(.horizontal, 20)
-        .padding(.bottom, 12)
+        .padding(.bottom, 8)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(AppTheme.surface.ignoresSafeArea())
     }
