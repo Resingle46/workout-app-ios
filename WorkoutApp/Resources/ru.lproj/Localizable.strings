@@ -2,8 +2,20 @@
 "tab.workout" = "Тренировка";
 "tab.statistics" = "Статистика";
 "tab.profile" = "Профиль";
-"programs.title" = "Программы тренировок";
+
+"programs.title" = "Программы";
+"programs.subtitle" = "Собирайте планы, быстро запускайте тренировки и держите весь цикл под рукой.";
+"programs.empty_title" = "Создайте первую программу";
+"programs.empty_description" = "Программа хранит все ваши тренировки в одном месте и ускоряет старт занятия.";
+
 "program.exercise_count" = "%d упражнений";
+"program.workout_count" = "%d тренировок";
+"program.no_workouts" = "Пока нет тренировок";
+"program.no_workouts_label" = "Тренировки";
+"program.no_workouts_description" = "Добавьте первую тренировку, чтобы начать собирать программу.";
+"program.delete" = "Удалить программу";
+"program.open_workout" = "Открыть тренировку";
+
 "action.start" = "Старт";
 "action.start_workout" = "Начать тренировку";
 "action.finish_workout" = "Завершить тренировку";
@@ -14,27 +26,45 @@
 "action.cancel" = "Отмена";
 "action.save" = "Сохранить";
 "action.add" = "Добавить";
+"action.create_program" = "Создать программу";
+"action.add_workout" = "Добавить тренировку";
+"action.edit" = "Изменить";
+"action.done" = "Done";
+
 "program.create" = "Новая программа";
 "program.name" = "Название программы";
 "program.default_name" = "Моя программа";
+
 "catalog.search" = "Поиск упражнений";
 "catalog.search_placeholder" = "Введите название или инвентарь";
 "catalog.category" = "Группа мышц";
 "catalog.results" = "Результаты";
 "catalog.create_custom" = "Создать своё упражнение";
+"catalog.no_results" = "По этим фильтрам пока ничего не найдено.";
+
 "template.settings" = "Параметры шаблона";
 "template.sets" = "Подходы: %d";
 "template.reps" = "Повторения: %d";
 "template.reps_summary" = "%@ повт.";
 "template.superset" = "Добавить как суперсет";
-"template.superset_hint_single" = "Выберите 1 упражнение.";
+"template.superset_hint_single" = "Выберите 1 упражнение, чтобы продолжить.";
 "template.superset_hint_pair" = "Выберите ровно 2 упражнения для суперсета.";
+"template.empty_title" = "Добавьте упражнения в тренировку";
+"template.empty_description" = "Выберите упражнение и сразу настройте вес, подходы и повторения.";
+"template.exercise_meta" = "%d подходов • %d повторений • %@ кг";
+"template.weight_picker" = "Вес";
+"template.sets_picker" = "Подходы";
+"template.reps_picker" = "Повторения";
+"template.configure" = "Настройка";
+
 "label.superset" = "Суперсет";
+
 "common.all" = "Все";
 "common.select" = "Выбрать";
 "common.no_data" = "Нет данных";
 "common.delete" = "Удалить";
 "common.seconds_value" = "%d сек";
+
 "workout.duration" = "Длительность тренировки";
 "workout.rest_live" = "Отдых с последнего выполненного подхода";
 "workout.previous_rest" = "Последний отдых: %@";
@@ -45,6 +75,12 @@
 "workout.set_number" = "Подход %d";
 "workout.reps" = "Повторения: %d";
 "workout.weight" = "Вес, кг";
+"workout.name" = "Название тренировки";
+"workout.focus" = "Фокус / группы мышц";
+"workout.default_name" = "Новая тренировка";
+"workout.focus_empty" = "Фокус пока не задан.";
+"workout.done_badge" = "Готово";
+
 "stats.exercise_picker" = "Аналитика упражнения";
 "stats.exercise" = "Упражнение";
 "stats.chart.date" = "Дата";
@@ -55,25 +91,31 @@
 "stats.history" = "История тренировок";
 "stats.no_workouts" = "Пока нет завершённых тренировок.";
 "stats.summary" = "Итоги тренировки";
-"stats.avg_set_rest" = "Ср. отдых между подходами";
-"stats.avg_exercise_rest" = "Ср. отдых между упражнениями";
+"stats.avg_set_rest" = "Средний отдых между подходами";
+"stats.avg_exercise_rest" = "Средний отдых между упражнениями";
+"stats.recent_exercises" = "Последняя тренировка: первые 3 упражнения";
+"stats.pick_exercise_title" = "Выберите упражнение";
+"stats.pick_exercise_description" = "Выберите упражнение выше, чтобы посмотреть изменение рабочего веса.";
+"stats.history_meta" = "%d упражнений • %@";
+
 "profile.personal" = "Личный профиль";
+"profile.card_title" = "Профиль";
+"profile.card_description" = "Быстрые настройки основных показателей, которые используются по всему приложению.";
 "profile.sex" = "Пол";
+"profile.age" = "Возраст";
 "profile.age_value" = "Возраст: %d";
 "profile.weight" = "Вес, кг";
 "profile.height" = "Рост, см";
+
 "muscle.chest" = "Грудь";
 "muscle.back" = "Спина";
 "muscle.legs" = "Ноги";
 "muscle.shoulders" = "Плечи";
 "muscle.arms" = "Руки";
 "muscle.core" = "Кор";
+
 "error.not_found" = "Не найдено";
-"program.workout_count" = "%d тренировок";
-"action.add_workout" = "Добавить тренировку";
-"workout.name" = "Название тренировки";
-"workout.focus" = "Фокус / группы мышц";
-"workout.default_name" = "Новая тренировка";
+
 "exercise.name" = "Название";
 "exercise.equipment" = "Инвентарь";
 "exercise.notes" = "Заметки";

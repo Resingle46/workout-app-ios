@@ -1,5 +1,12 @@
 import Foundation
 
+enum RootTab: Hashable {
+    case programs
+    case workout
+    case statistics
+    case profile
+}
+
 struct ExerciseCategory: Identifiable, Codable, Hashable {
     let id: UUID
     var nameKey: String
@@ -139,11 +146,19 @@ struct WorkoutSession: Identifiable, Codable, Hashable {
     var isFinished: Bool { endedAt != nil }
 }
 
+struct RecentWorkoutExerciseSummary: Identifiable, Hashable {
+    let id: UUID
+    var exerciseID: UUID
+    var exerciseName: String
+    var performedAt: Date
+    var sets: [WorkoutSetLog]
+}
+
 struct UserProfile: Codable, Hashable {
     var sex: String
     var age: Int
     var weight: Double
     var height: Double
 
-    static let empty = UserProfile(sex: "", age: 25, weight: 70, height: 175)
+    static let empty = UserProfile(sex: "M", age: 25, weight: 70, height: 175)
 }

@@ -10,23 +10,36 @@ final class AppStore {
     var history: [WorkoutSession]
     var lastFinishedSession: WorkoutSession?
     var profile: UserProfile
+    var selectedTab: RootTab = .programs
 
     private let persistence = PersistenceController()
 
     init() {
         let seed = SeedData.make()
-        let snapshot = persistence.load() ?? AppSnapshot(programs: seed.programs, exercises: seed.exercises, history: [], profile: .empty)
+        let snapshot = persistence.load() ?? AppSnapshot(
+            programs: seed.programs,
+            exercises: seed.exercises,
+            history: [],
+            profile: .empty
+        )
+
         self.categories = seed.categories
         self.exercises = snapshot.exercises
         self.programs = snapshot.programs
         self.activeSession = nil
         self.history = snapshot.history.sorted { $0.startedAt > $1.startedAt }
-        self.lastFinishedSession = nil
-        self.profile = snapshot.profile
+        self.lastFinishedSession = snapshot.history.sorted { $0.startedAt > $1.startedAt }.first(where: { $0.isFinished })
+        self.profile = AppStore.normalizedProfile(snapshot.profile)
     }
 
     func save() {
+        profile = Self.normalizedProfile(profile)
         persistence.save(snapshot: AppSnapshot(programs: programs, exercises: exercises, history: history, profile: profile))
+    }
+
+    func updateProfile(_ updater: (inout UserProfile) -> Void) {
+        updater(&profile)
+        save()
     }
 
     func exercises(for categoryID: UUID?) -> [Exercise] {
@@ -42,6 +55,14 @@ final class AppStore {
         exercises.first { $0.id == id }
     }
 
+    func program(for id: UUID) -> WorkoutProgram? {
+        programs.first { $0.id == id }
+    }
+
+    func workout(programID: UUID, workoutID: UUID) -> WorkoutTemplate? {
+        program(for: programID)?.workouts.first { $0.id == workoutID }
+    }
+
     func startWorkout(template: WorkoutTemplate) {
         let logs = template.exercises.map { item in
             WorkoutExerciseLog(
@@ -53,15 +74,21 @@ final class AppStore {
             )
         }
         activeSession = WorkoutSession(workoutTemplateID: template.id, title: template.title, exercises: logs)
+        selectedTab = .workout
     }
 
     func finishActiveWorkout() {
         guard var session = activeSession else { return }
         session.endedAt = .now
         history.insert(session, at: 0)
+        history.sort { $0.startedAt > $1.startedAt }
         lastFinishedSession = session
         activeSession = nil
         save()
+    }
+
+    func dismissLastFinishedSession() {
+        lastFinishedSession = nil
     }
 
     func updateActiveSession(_ updater: (inout WorkoutSession) -> Void) {
@@ -75,16 +102,35 @@ final class AppStore {
         save()
     }
 
-    func addWorkout(programID: UUID, title: String, focus: String) {
-        guard let index = programs.firstIndex(where: { $0.id == programID }) else { return }
-        programs[index].workouts.append(WorkoutTemplate(title: title, focus: focus, exercises: []))
+    func deleteProgram(id: UUID) {
+        programs.removeAll { $0.id == id }
         save()
     }
 
-    func addExercise(to workoutID: UUID, exerciseID: UUID, reps: Int, setsCount: Int, groupKind: WorkoutExerciseTemplate.GroupKind = .regular, groupID: UUID? = nil) {
+    func addWorkout(programID: UUID, title: String, focus: String) {
+        guard let programIndex = programs.firstIndex(where: { $0.id == programID }) else { return }
+        programs[programIndex].workouts.append(WorkoutTemplate(title: title, focus: focus, exercises: []))
+        save()
+    }
+
+    func deleteWorkout(programID: UUID, workoutID: UUID) {
+        guard let programIndex = programs.firstIndex(where: { $0.id == programID }) else { return }
+        programs[programIndex].workouts.removeAll { $0.id == workoutID }
+        save()
+    }
+
+    func addExercise(
+        to workoutID: UUID,
+        exerciseID: UUID,
+        reps: Int,
+        setsCount: Int,
+        suggestedWeight: Double,
+        groupKind: WorkoutExerciseTemplate.GroupKind = .regular,
+        groupID: UUID? = nil
+    ) {
         for programIndex in programs.indices {
             if let workoutIndex = programs[programIndex].workouts.firstIndex(where: { $0.id == workoutID }) {
-                let sets = Array(repeating: WorkoutSetTemplate(reps: reps), count: setsCount)
+                let sets = Array(repeating: WorkoutSetTemplate(reps: reps, suggestedWeight: suggestedWeight), count: setsCount)
                 programs[programIndex].workouts[workoutIndex].exercises.append(
                     WorkoutExerciseTemplate(exerciseID: exerciseID, sets: sets, groupKind: groupKind, groupID: groupID)
                 )
@@ -94,6 +140,61 @@ final class AppStore {
         }
     }
 
+    func updateTemplateExercise(
+        programID: UUID,
+        workoutID: UUID,
+        templateExerciseID: UUID,
+        reps: Int,
+        setsCount: Int,
+        suggestedWeight: Double
+    ) {
+        guard let location = templateExerciseLocation(programID: programID, workoutID: workoutID, templateExerciseID: templateExerciseID) else {
+            return
+        }
+
+        var templateExercise = programs[location.programIndex].workouts[location.workoutIndex].exercises[location.exerciseIndex]
+        var updatedSets = templateExercise.sets
+
+        if updatedSets.count < setsCount {
+            updatedSets.append(contentsOf: Array(repeating: WorkoutSetTemplate(reps: reps, suggestedWeight: suggestedWeight), count: setsCount - updatedSets.count))
+        } else if updatedSets.count > setsCount {
+            updatedSets.removeLast(updatedSets.count - setsCount)
+        }
+
+        for index in updatedSets.indices {
+            updatedSets[index].reps = reps
+            updatedSets[index].suggestedWeight = suggestedWeight
+        }
+
+        templateExercise.sets = updatedSets
+        programs[location.programIndex].workouts[location.workoutIndex].exercises[location.exerciseIndex] = templateExercise
+        save()
+    }
+
+    func deleteTemplateExercise(programID: UUID, workoutID: UUID, templateExerciseID: UUID) {
+        guard let programIndex = programs.firstIndex(where: { $0.id == programID }),
+              let workoutIndex = programs[programIndex].workouts.firstIndex(where: { $0.id == workoutID }),
+              let templateExercise = programs[programIndex].workouts[workoutIndex].exercises.first(where: { $0.id == templateExerciseID }) else {
+            return
+        }
+
+        programs[programIndex].workouts[workoutIndex].exercises.removeAll { $0.id == templateExerciseID }
+
+        if templateExercise.groupKind == .superset, let groupID = templateExercise.groupID {
+            let remainingIndices = programs[programIndex].workouts[workoutIndex].exercises.indices.filter {
+                programs[programIndex].workouts[workoutIndex].exercises[$0].groupKind == .superset &&
+                programs[programIndex].workouts[workoutIndex].exercises[$0].groupID == groupID
+            }
+
+            if remainingIndices.count == 1 {
+                let index = remainingIndices[0]
+                programs[programIndex].workouts[workoutIndex].exercises[index].groupKind = .regular
+                programs[programIndex].workouts[workoutIndex].exercises[index].groupID = nil
+            }
+        }
+
+        save()
+    }
 
     func addCustomExercise(name: String, categoryID: UUID, equipment: String, notes: String) -> Exercise {
         let exercise = Exercise(name: name, categoryID: categoryID, equipment: equipment, notes: notes)
@@ -117,10 +218,52 @@ final class AppStore {
                 .filter { $0.exerciseID == exerciseID }
                 .flatMap(\.sets)
                 .map(\.weight)
+
             guard let maxWeight = values.max(), maxWeight > 0 else { return nil }
             return (session.startedAt, maxWeight)
         }
         .sorted { $0.0 < $1.0 }
+    }
+
+    func recentExercisesFromLastWorkout(limit: Int = 3) -> [RecentWorkoutExerciseSummary] {
+        guard let session = lastFinishedSession ?? history.first(where: { $0.isFinished }) else { return [] }
+
+        return session.exercises.prefix(limit).compactMap { exerciseLog in
+            guard let exercise = exercise(for: exerciseLog.exerciseID) else { return nil }
+            return RecentWorkoutExerciseSummary(
+                id: exerciseLog.id,
+                exerciseID: exercise.id,
+                exerciseName: exercise.name,
+                performedAt: session.startedAt,
+                sets: exerciseLog.sets
+            )
+        }
+    }
+
+    private func templateExerciseLocation(
+        programID: UUID,
+        workoutID: UUID,
+        templateExerciseID: UUID
+    ) -> (programIndex: Int, workoutIndex: Int, exerciseIndex: Int)? {
+        guard let programIndex = programs.firstIndex(where: { $0.id == programID }),
+              let workoutIndex = programs[programIndex].workouts.firstIndex(where: { $0.id == workoutID }),
+              let exerciseIndex = programs[programIndex].workouts[workoutIndex].exercises.firstIndex(where: { $0.id == templateExerciseID }) else {
+            return nil
+        }
+
+        return (programIndex, workoutIndex, exerciseIndex)
+    }
+
+    private static func normalizedProfile(_ profile: UserProfile) -> UserProfile {
+        let normalizedSex = profile.sex.uppercased() == "F" ? "F" : "M"
+        let normalizedAge = min(max(profile.age, 10), 100)
+        let normalizedWeight = normalizedHalfStep(min(max(profile.weight, 30), 250))
+        let normalizedHeight = min(max(profile.height, 120), 230)
+        return UserProfile(sex: normalizedSex, age: normalizedAge, weight: normalizedWeight, height: normalizedHeight)
+    }
+
+    private static func normalizedHalfStep(_ value: Double) -> Double {
+        (value * 2).rounded() / 2
     }
 }
 

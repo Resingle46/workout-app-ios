@@ -2,8 +2,20 @@
 "tab.workout" = "Workout";
 "tab.statistics" = "Statistics";
 "tab.profile" = "Profile";
-"programs.title" = "Workout Programs";
+
+"programs.title" = "Programs";
+"programs.subtitle" = "Build plans, launch workouts, and keep every session ready.";
+"programs.empty_title" = "Create your first program";
+"programs.empty_description" = "A program keeps your workouts in one place so you can start training faster.";
+
 "program.exercise_count" = "%d exercises";
+"program.workout_count" = "%d workouts";
+"program.no_workouts" = "No workouts yet";
+"program.no_workouts_label" = "Workouts";
+"program.no_workouts_description" = "Add your first workout to start building the program.";
+"program.delete" = "Delete program";
+"program.open_workout" = "Open workout";
+
 "action.start" = "Start";
 "action.start_workout" = "Start workout";
 "action.finish_workout" = "Finish workout";
@@ -14,27 +26,45 @@
 "action.cancel" = "Cancel";
 "action.save" = "Save";
 "action.add" = "Add";
+"action.create_program" = "Create program";
+"action.add_workout" = "Add workout";
+"action.edit" = "Edit";
+"action.done" = "Done";
+
 "program.create" = "New Program";
 "program.name" = "Program name";
 "program.default_name" = "My Program";
+
 "catalog.search" = "Exercise search";
 "catalog.search_placeholder" = "Type name or equipment";
 "catalog.category" = "Muscle group";
 "catalog.results" = "Results";
 "catalog.create_custom" = "Create custom exercise";
+"catalog.no_results" = "No exercises match your filters yet.";
+
 "template.settings" = "Template settings";
 "template.sets" = "Sets: %d";
 "template.reps" = "Reps: %d";
 "template.reps_summary" = "%@ reps";
 "template.superset" = "Add as superset";
-"template.superset_hint_single" = "Select 1 exercise.";
-"template.superset_hint_pair" = "Select exactly 2 exercises for a superset.";
+"template.superset_hint_single" = "Pick 1 exercise to continue.";
+"template.superset_hint_pair" = "Pick exactly 2 exercises for a superset.";
+"template.empty_title" = "Add exercises to this workout";
+"template.empty_description" = "Choose exercises and configure weight, sets, and reps in one flow.";
+"template.exercise_meta" = "%d sets • %d reps • %@ kg";
+"template.weight_picker" = "Weight";
+"template.sets_picker" = "Sets";
+"template.reps_picker" = "Reps";
+"template.configure" = "Configure";
+
 "label.superset" = "Superset";
+
 "common.all" = "All";
 "common.select" = "Select";
 "common.no_data" = "No data";
 "common.delete" = "Delete";
 "common.seconds_value" = "%d sec";
+
 "workout.duration" = "Workout duration";
 "workout.rest_live" = "Rest since last completed set";
 "workout.previous_rest" = "Previous rest: %@";
@@ -45,6 +75,12 @@
 "workout.set_number" = "Set %d";
 "workout.reps" = "Reps: %d";
 "workout.weight" = "Weight, kg";
+"workout.name" = "Workout name";
+"workout.focus" = "Focus / muscle groups";
+"workout.default_name" = "New Workout";
+"workout.focus_empty" = "Focus area is not set yet.";
+"workout.done_badge" = "Done";
+
 "stats.exercise_picker" = "Exercise analytics";
 "stats.exercise" = "Exercise";
 "stats.chart.date" = "Date";
@@ -57,23 +93,29 @@
 "stats.summary" = "Workout summary";
 "stats.avg_set_rest" = "Avg. rest between sets";
 "stats.avg_exercise_rest" = "Avg. rest between exercises";
+"stats.recent_exercises" = "Last workout: first 3 exercises";
+"stats.pick_exercise_title" = "Pick an exercise";
+"stats.pick_exercise_description" = "Choose an exercise above to see its weight trend over time.";
+"stats.history_meta" = "%d exercises • %@";
+
 "profile.personal" = "Personal profile";
+"profile.card_title" = "Profile";
+"profile.card_description" = "Quick settings for the metrics used across your workouts.";
 "profile.sex" = "Sex";
+"profile.age" = "Age";
 "profile.age_value" = "Age: %d";
 "profile.weight" = "Weight, kg";
 "profile.height" = "Height, cm";
+
 "muscle.chest" = "Chest";
 "muscle.back" = "Back";
 "muscle.legs" = "Legs";
 "muscle.shoulders" = "Shoulders";
 "muscle.arms" = "Arms";
 "muscle.core" = "Core";
+
 "error.not_found" = "Not found";
-"program.workout_count" = "%d workouts";
-"action.add_workout" = "Add workout";
-"workout.name" = "Workout name";
-"workout.focus" = "Focus / muscle groups";
-"workout.default_name" = "New Workout";
+
 "exercise.name" = "Name";
 "exercise.equipment" = "Equipment";
 "exercise.notes" = "Notes";

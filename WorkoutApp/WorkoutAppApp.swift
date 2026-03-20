@@ -8,6 +8,7 @@ struct WorkoutAppApp: App {
         WindowGroup {
             RootTabView()
                 .environment(store)
+                .preferredColorScheme(.dark)
         }
     }
 }
