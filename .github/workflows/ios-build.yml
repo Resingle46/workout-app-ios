@@ -65,3 +65,57 @@ jobs:
         with:
           name: WorkoutApp-simulator
           path: WorkoutApp-simulator.zip
+
+  build-device-unsigned-ipa:
+    runs-on: macos-15
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Build unsigned iPhone app
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project WorkoutApp.xcodeproj \
+            -scheme WorkoutApp \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build | tee xcodebuild-device.log
+
+      - name: Package unsigned IPA
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          app_path="$(find "$HOME/Library/Developer/Xcode/DerivedData" -path '*Build/Products/Release-iphoneos/WorkoutApp.app' -print -quit)"
+          test -n "$app_path"
+          rm -rf Payload
+          mkdir -p Payload
+          cp -R "$app_path" Payload/
+          ditto -c -k --sequesterRsrc --keepParent Payload WorkoutApp-unsigned.ipa
+
+      - name: Upload device build log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: xcodebuild-device-log
+          path: xcodebuild-device.log
+          if-no-files-found: warn
+
+      - name: Upload unsigned IPA artifact
+        if: success()
+        uses: actions/upload-artifact@v7
+        with:
+          name: WorkoutApp-unsigned-ipa
+          path: WorkoutApp-unsigned.ipa

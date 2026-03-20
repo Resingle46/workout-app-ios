@@ -16,3 +16,4 @@ SwiftUI MVP for a personal workout app with:
 - The repository now includes a GitHub Actions workflow at `.github/workflows/ios-build.yml`.
 - From Windows, push the branch to GitHub and run the `iOS Build` workflow in the Actions tab to verify that the project compiles on a hosted macOS runner.
 - The workflow builds an iOS Simulator app and uploads it as an artifact. This confirms compilation, but it is not installable on a physical iPhone.
+- The same workflow also packages `WorkoutApp-unsigned.ipa` for `iphoneos` as an artifact. This file is useful for inspection or later signing, but it is not installable on a normal iPhone until it is signed with Apple provisioning assets.
