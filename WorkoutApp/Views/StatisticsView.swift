@@ -185,7 +185,7 @@ struct StatisticsView: View {
 
     private func setSummary(for sets: [WorkoutSetLog]) -> String {
         sets.map { String(format: NSLocalizedString("stats.set_value", comment: ""), $0.weight, $0.reps) }
-            .joined(separator: "  •  ")
+            .joined(separator: "  |  ")
     }
 }
 
@@ -268,12 +268,12 @@ struct WorkoutSummaryView: View {
                 .foregroundStyle(AppTheme.secondaryText)
         }
     }
+}
 
-    private func formattedDuration(startedAt: Date, endedAt: Date) -> String {
-        let interval = endedAt.timeIntervalSince(startedAt)
-        if interval >= 3600 {
-            return DateComponentsFormatter.workoutDurationLong.string(from: startedAt, to: endedAt) ?? "00:00"
-        }
-        return DateComponentsFormatter.workoutDurationShort.string(from: startedAt, to: endedAt) ?? "00:00"
+private func formattedDuration(startedAt: Date, endedAt: Date) -> String {
+    let interval = endedAt.timeIntervalSince(startedAt)
+    if interval >= 3600 {
+        return DateComponentsFormatter.workoutDurationLong.string(from: startedAt, to: endedAt) ?? "00:00"
     }
+    return DateComponentsFormatter.workoutDurationShort.string(from: startedAt, to: endedAt) ?? "00:00"
 }
