@@ -147,3 +147,8 @@
 "exercise.seed.cable_crunch" = "Cable Crunch";
 "exercise.seed.hanging_leg_raise" = "Hanging Leg Raise";
 "exercise.seed.russian_twist" = "Russian Twist";
+"action.continue" = "Continue";
+"summary.exercises" = "Exercises";
+"summary.total_sets" = "Total sets";
+"summary.completed_sets" = "Completed sets";
+"summary.total_reps" = "Total reps";

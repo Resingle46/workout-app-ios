@@ -87,9 +87,6 @@ struct ActiveWorkoutView: View {
                 .navigationBarTitleDisplayMode(.inline)
                 .onPreferenceChange(WorkoutScrollOffsetPreferenceKey.self) { scrollOffset = $0 }
                 .onReceive(timer) { now = $0 }
-                .sheet(item: Binding(get: { store.lastFinishedSession }, set: { _ in store.dismissLastFinishedSession() })) { session in
-                    NavigationStack { WorkoutSummaryView(session: session) }
-                }
                 .appScreenBackground()
             } else {
                 ScrollView {
@@ -113,6 +110,24 @@ struct ActiveWorkoutView: View {
                 .appScreenBackground()
             }
         }
+        .fullScreenCover(item: finishedSessionBinding) { session in
+            WorkoutSummaryView(session: session, mode: .completion) {
+                store.selectedTab = .statistics
+                store.dismissLastFinishedSession()
+            }
+            .interactiveDismissDisabled()
+        }
+    }
+
+    private var finishedSessionBinding: Binding<WorkoutSession?> {
+        Binding(
+            get: { store.lastFinishedSession },
+            set: { newValue in
+                if newValue == nil {
+                    store.dismissLastFinishedSession()
+                }
+            }
+        )
     }
 
     private var finishWorkoutCTA: some View {

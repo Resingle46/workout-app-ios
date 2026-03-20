@@ -147,3 +147,8 @@
 "exercise.seed.cable_crunch" = "Скручивания на блоке";
 "exercise.seed.hanging_leg_raise" = "Подъём ног в висе";
 "exercise.seed.russian_twist" = "Русский твист";
+"action.continue" = "Продолжить";
+"summary.exercises" = "Упражнения";
+"summary.total_sets" = "Всего подходов";
+"summary.completed_sets" = "Выполнено подходов";
+"summary.total_reps" = "Всего повторений";

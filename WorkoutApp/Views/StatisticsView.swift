@@ -189,22 +189,44 @@ struct StatisticsView: View {
     }
 }
 
+enum WorkoutSummaryMode {
+    case history
+    case completion
+}
+
 struct WorkoutSummaryView: View {
     @Environment(AppStore.self) private var store
 
     let session: WorkoutSession
+    var mode: WorkoutSummaryMode = .history
+    var onContinue: (() -> Void)? = nil
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
+                if mode == .completion {
+                    Text("stats.summary")
+                        .font(.system(size: 38, weight: .black, design: .rounded))
+                }
+
                 AppCard {
                     VStack(alignment: .leading, spacing: 14) {
                         Text(session.title)
                             .font(.system(size: 28, weight: .black, design: .rounded))
+                        Text(completedAtText)
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(AppTheme.secondaryText)
                         summaryRow(title: NSLocalizedString("workout.duration", comment: ""), value: duration)
                         summaryRow(title: NSLocalizedString("stats.avg_set_rest", comment: ""), value: averageSetRest)
                         summaryRow(title: NSLocalizedString("stats.avg_exercise_rest", comment: ""), value: averageExerciseRest)
                     }
+                }
+
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+                    WorkoutSummaryMetricCard(titleKey: "summary.exercises", value: "\(exerciseCount)")
+                    WorkoutSummaryMetricCard(titleKey: "summary.total_sets", value: "\(totalSetsCount)")
+                    WorkoutSummaryMetricCard(titleKey: "summary.completed_sets", value: "\(completedSetsCount)")
+                    WorkoutSummaryMetricCard(titleKey: "summary.total_reps", value: "\(totalRepsCount)")
                 }
 
                 ForEach(session.exercises) { exercise in
@@ -233,15 +255,57 @@ struct WorkoutSummaryView: View {
                 }
             }
             .padding(20)
+            .padding(.bottom, mode == .completion ? 96 : 0)
         }
-        .navigationTitle(session.title)
+        .safeAreaInset(edge: .bottom) {
+            if mode == .completion {
+                continueCTA
+            }
+        }
+        .navigationTitle(mode == .history ? session.title : "")
         .navigationBarTitleDisplayMode(.inline)
         .appScreenBackground()
+    }
+
+    private var continueCTA: some View {
+        VStack(spacing: 0) {
+            Divider()
+                .overlay(AppTheme.stroke)
+            Button("action.continue") {
+                onContinue?()
+            }
+            .buttonStyle(AppPrimaryButtonStyle())
+            .padding(.horizontal, 20)
+            .padding(.top, 14)
+            .padding(.bottom, 12)
+            .background(.ultraThinMaterial.opacity(0.2))
+        }
     }
 
     private var duration: String {
         guard let endedAt = session.endedAt else { return NSLocalizedString("common.no_data", comment: "") }
         return formattedDuration(startedAt: session.startedAt, endedAt: endedAt)
+    }
+
+    private var completedAtText: String {
+        let date = session.endedAt ?? session.startedAt
+        return date.formatted(date: .abbreviated, time: .shortened)
+    }
+
+    private var exerciseCount: Int {
+        session.exercises.count
+    }
+
+    private var totalSetsCount: Int {
+        session.exercises.reduce(0) { $0 + $1.sets.count }
+    }
+
+    private var completedSetsCount: Int {
+        session.exercises.flatMap(\.sets).filter { $0.completedAt != nil }.count
+    }
+
+    private var totalRepsCount: Int {
+        session.exercises.flatMap(\.sets).reduce(0) { $0 + $1.reps }
     }
 
     private var averageSetRest: String {
@@ -267,6 +331,31 @@ struct WorkoutSummaryView: View {
             Text(value)
                 .foregroundStyle(AppTheme.secondaryText)
         }
+    }
+}
+
+private struct WorkoutSummaryMetricCard: View {
+    let titleKey: LocalizedStringKey
+    let value: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(titleKey)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(AppTheme.secondaryText)
+            Text(value)
+                .font(.system(size: 26, weight: .black, design: .rounded))
+                .foregroundStyle(AppTheme.primaryText)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AppTheme.surface, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .stroke(AppTheme.stroke, lineWidth: 1)
+        )
     }
 }
 
