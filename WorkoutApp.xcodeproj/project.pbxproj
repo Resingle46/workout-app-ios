@@ -18,7 +18,7 @@
 		CD11916B5E23467FA7127419 /* Localizable.strings */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; path = WorkoutApp/Resources/ru.lproj/Localizable.strings; sourceTree = "<group>"; };
 		B698CF71AFFA4B9A84CCF09E /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = WorkoutApp/Resources/Info.plist; sourceTree = "<group>"; };
 		642C075E19EA4A5BB0FD202E /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = WorkoutApp/Assets.xcassets; sourceTree = "<group>"; };
-		991B5C2ABA0B4DEB9309BE49 /* Preview Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = WorkoutApp/Preview Content/Preview Assets.xcassets; sourceTree = "<group>"; };
+		991B5C2ABA0B4DEB9309BE49 /* Preview Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "WorkoutApp/Preview Content/Preview Assets.xcassets"; sourceTree = "<group>"; };
 		674284CD9C1E4E13A05FE9AF /* WorkoutApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WorkoutApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		77D74ABA2DBA47DF8A2ED498 /* WorkoutAppApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A50C2B8D8BC46819B6BAE3E /* WorkoutAppApp.swift */; };
 		7AA401E5ACE54D92917EF7F2 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = A530C006CD884CCEA5DA921F /* Models.swift */; };
