@@ -152,3 +152,5 @@
 "summary.total_sets" = "Всего подходов";
 "summary.completed_sets" = "Выполнено подходов";
 "summary.total_reps" = "Всего повторений";
+"workout.target_weight" = "Цель";
+"workout.previous_weight" = "Прошлый";

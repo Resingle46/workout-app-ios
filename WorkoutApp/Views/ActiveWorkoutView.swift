@@ -5,6 +5,7 @@ struct ActiveWorkoutView: View {
 
     @State private var now = Date()
     @State private var scrollOffset: CGFloat = 0
+    @State private var presentedSummary: PresentedWorkoutSummary?
 
     private let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
@@ -25,6 +26,12 @@ struct ActiveWorkoutView: View {
                                                 VStack(alignment: .leading, spacing: 8) {
                                                     Text(exercise.localizedName)
                                                         .font(.title3.weight(.heavy))
+
+                                                    WorkoutExerciseInfoRow(
+                                                        targetWeightText: targetWeightText(for: item, session: session),
+                                                        previousWeightText: previousWeightText(for: item)
+                                                    )
+
                                                     if item.groupKind == .superset {
                                                         Label("label.superset", systemImage: "bolt.fill")
                                                             .font(.caption.weight(.semibold))
@@ -110,24 +117,35 @@ struct ActiveWorkoutView: View {
                 .appScreenBackground()
             }
         }
-        .fullScreenCover(item: finishedSessionBinding) { session in
-            WorkoutSummaryView(session: session, mode: .completion) {
-                store.selectedTab = .statistics
-                store.dismissLastFinishedSession()
+        .onAppear {
+            if store.activeSession == nil {
+                presentedSummary = nil
+            }
+        }
+        .onChange(of: store.activeSession?.id) { _ in
+            guard store.activeSession != nil, let session = store.lastFinishedSession else { return }
+            presentedSummary = PresentedWorkoutSummary(session: session, mode: .previousWorkout)
+        }
+        .onChange(of: store.lastFinishedSession?.id) { _ in
+            guard store.activeSession == nil, let session = store.lastFinishedSession else { return }
+            presentedSummary = PresentedWorkoutSummary(session: session, mode: .completion)
+        }
+        .fullScreenCover(item: $presentedSummary) { presented in
+            NavigationStack {
+                WorkoutSummaryView(
+                    session: presented.session,
+                    mode: presented.mode,
+                    onContinue: {
+                        presentedSummary = nil
+                        store.selectedTab = .statistics
+                    },
+                    onDone: {
+                        presentedSummary = nil
+                    }
+                )
             }
             .interactiveDismissDisabled()
         }
-    }
-
-    private var finishedSessionBinding: Binding<WorkoutSession?> {
-        Binding(
-            get: { store.lastFinishedSession },
-            set: { newValue in
-                if newValue == nil {
-                    store.dismissLastFinishedSession()
-                }
-            }
-        )
     }
 
     private var finishWorkoutCTA: some View {
@@ -256,6 +274,58 @@ struct ActiveWorkoutView: View {
             completed: completedExercises,
             remaining: remainingExercises,
             currentStep: currentStep
+        )
+    }
+
+    private func targetWeightText(for item: WorkoutExerciseLog, session: WorkoutSession) -> String {
+        guard let weight = store.targetWeight(workoutTemplateID: session.workoutTemplateID, templateExerciseID: item.templateExerciseID) else {
+            return NSLocalizedString("common.no_data", comment: "")
+        }
+        return String(format: NSLocalizedString("stats.weight_value", comment: ""), weight)
+    }
+
+    private func previousWeightText(for item: WorkoutExerciseLog) -> String {
+        guard let weight = store.lastUsedWeight(for: item.exerciseID) else {
+            return NSLocalizedString("common.no_data", comment: "")
+        }
+        return String(format: NSLocalizedString("stats.weight_value", comment: ""), weight)
+    }
+}
+
+private struct PresentedWorkoutSummary: Identifiable {
+    let id = UUID()
+    let session: WorkoutSession
+    let mode: WorkoutSummaryMode
+}
+
+private struct WorkoutExerciseInfoRow: View {
+    let targetWeightText: String
+    let previousWeightText: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            infoChip(titleKey: "workout.target_weight", value: targetWeightText)
+            infoChip(titleKey: "workout.previous_weight", value: previousWeightText)
+        }
+    }
+
+    private func infoChip(titleKey: LocalizedStringKey, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(titleKey)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(AppTheme.secondaryText)
+            Text(value)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(AppTheme.primaryText)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(AppTheme.surfaceElevated, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(AppTheme.stroke, lineWidth: 1)
         )
     }
 }

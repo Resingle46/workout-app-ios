@@ -256,6 +256,30 @@ final class AppStore {
         }
     }
 
+    func targetWeight(workoutTemplateID: UUID, templateExerciseID: UUID) -> Double? {
+        guard let templateExercise = programs
+            .flatMap(\.workouts)
+            .first(where: { $0.id == workoutTemplateID })?
+            .exercises
+            .first(where: { $0.id == templateExerciseID }) else {
+            return nil
+        }
+
+        let weight = templateExercise.sets.first?.suggestedWeight ?? 0
+        return weight > 0 ? weight : nil
+    }
+
+    func lastUsedWeight(for exerciseID: UUID) -> Double? {
+        for session in history {
+            guard let exerciseLog = session.exercises.first(where: { $0.exerciseID == exerciseID }) else { continue }
+            if let lastWeight = exerciseLog.sets.reversed().map(\.weight).first(where: { $0 > 0 }) {
+                return lastWeight
+            }
+        }
+
+        return nil
+    }
+
     private func templateExerciseLocation(
         programID: UUID,
         workoutID: UUID,

@@ -192,6 +192,7 @@ struct StatisticsView: View {
 enum WorkoutSummaryMode {
     case history
     case completion
+    case previousWorkout
 }
 
 struct WorkoutSummaryView: View {
@@ -200,6 +201,7 @@ struct WorkoutSummaryView: View {
     let session: WorkoutSession
     var mode: WorkoutSummaryMode = .history
     var onContinue: (() -> Void)? = nil
+    var onDone: (() -> Void)? = nil
 
     var body: some View {
         ScrollView {
@@ -211,11 +213,15 @@ struct WorkoutSummaryView: View {
 
                 AppCard {
                     VStack(alignment: .leading, spacing: 14) {
-                        Text(session.title)
-                            .font(.system(size: 28, weight: .black, design: .rounded))
-                        Text(completedAtText)
-                            .font(.subheadline.weight(.medium))
-                            .foregroundStyle(AppTheme.secondaryText)
+                        HStack(alignment: .top, spacing: 12) {
+                            Text(session.title)
+                                .font(.system(size: 28, weight: .black, design: .rounded))
+                            Spacer(minLength: 8)
+                            Text(completedAtText)
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(AppTheme.secondaryText)
+                                .multilineTextAlignment(.trailing)
+                        }
                         summaryRow(title: NSLocalizedString("workout.duration", comment: ""), value: duration)
                         summaryRow(title: NSLocalizedString("stats.avg_set_rest", comment: ""), value: averageSetRest)
                         summaryRow(title: NSLocalizedString("stats.avg_exercise_rest", comment: ""), value: averageExerciseRest)
@@ -264,6 +270,15 @@ struct WorkoutSummaryView: View {
         }
         .navigationTitle(mode == .history ? session.title : "")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if mode == .previousWorkout {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("action.done") {
+                        onDone?()
+                    }
+                }
+            }
+        }
         .appScreenBackground()
     }
 

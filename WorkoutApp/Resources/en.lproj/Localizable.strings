@@ -152,3 +152,5 @@
 "summary.total_sets" = "Total sets";
 "summary.completed_sets" = "Completed sets";
 "summary.total_reps" = "Total reps";
+"workout.target_weight" = "Target";
+"workout.previous_weight" = "Last";
