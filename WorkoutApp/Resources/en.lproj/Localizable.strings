@@ -52,6 +52,9 @@
 "template.empty_title" = "Add exercises to this workout";
 "template.empty_description" = "Choose exercises and configure weight, sets, and reps in one flow.";
 "template.exercise_meta" = "%d sets • %d reps • %@ kg";
+"template.table_set" = "Set";
+"template.table_weight" = "KG";
+"template.table_reps" = "Reps";
 "template.weight_picker" = "Weight";
 "template.sets_picker" = "Sets";
 "template.reps_picker" = "Reps";

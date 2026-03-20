@@ -146,9 +146,6 @@ struct WorkoutTemplateDetailView: View {
                                             .font(.subheadline)
                                             .foregroundStyle(AppTheme.secondaryText)
                                     }
-                                    Text(summary(for: item))
-                                        .font(.caption.weight(.medium))
-                                        .foregroundStyle(AppTheme.secondaryText)
                                 }
 
                                 Spacer()
@@ -178,6 +175,8 @@ struct WorkoutTemplateDetailView: View {
                                 }
                             }
 
+                            templateExerciseTable(for: item)
+
                             if item.id != (group.items.last?.id ?? item.id) {
                                 Divider()
                                     .overlay(AppTheme.stroke)
@@ -189,16 +188,52 @@ struct WorkoutTemplateDetailView: View {
         }
     }
 
-    private func summary(for item: WorkoutExerciseTemplate) -> String {
-        let setsCount = item.sets.count
-        let reps = item.sets.first?.reps ?? 0
-        let suggestedWeight = item.sets.first?.suggestedWeight ?? 0
-        return String(
-            format: NSLocalizedString("template.exercise_meta", comment: ""),
-            setsCount,
-            reps,
-            suggestedWeight.appNumberText
+    private func templateExerciseTable(for item: WorkoutExerciseTemplate) -> some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 0) {
+                tableHeaderCell("template.table_set", alignment: .leading)
+                tableHeaderCell("template.table_weight", alignment: .center)
+                tableHeaderCell("template.table_reps", alignment: .trailing)
+            }
+            .padding(.horizontal, 14)
+            .padding(.top, 12)
+            .padding(.bottom, 10)
+
+            ForEach(Array(item.sets.enumerated()), id: \.element.id) { index, set in
+                HStack(spacing: 0) {
+                    tableValueCell("\(index + 1)", alignment: .leading)
+                    tableValueCell(set.suggestedWeight.appNumberText, alignment: .center)
+                    tableValueCell("\(set.reps)", alignment: .trailing)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .background(
+                    index.isMultiple(of: 2)
+                        ? AppTheme.surface.opacity(0.35)
+                        : AppTheme.surfaceElevated.opacity(0.82)
+                )
+            }
+        }
+        .background(AppTheme.surfaceElevated, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(AppTheme.stroke, lineWidth: 1)
         )
+    }
+
+    private func tableHeaderCell(_ titleKey: LocalizedStringKey, alignment: Alignment) -> some View {
+        Text(titleKey)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(AppTheme.secondaryText)
+            .textCase(.uppercase)
+            .frame(maxWidth: .infinity, alignment: alignment)
+    }
+
+    private func tableValueCell(_ value: String, alignment: Alignment) -> some View {
+        Text(value)
+            .font(.system(size: 18, weight: .semibold, design: .rounded))
+            .foregroundStyle(AppTheme.primaryText)
+            .frame(maxWidth: .infinity, alignment: alignment)
     }
 
     private func groupedExercises(_ items: [WorkoutExerciseTemplate]) -> [WorkoutExerciseTemplateGroup] {

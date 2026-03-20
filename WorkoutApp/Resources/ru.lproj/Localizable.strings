@@ -52,6 +52,9 @@
 "template.empty_title" = "Добавьте упражнения в тренировку";
 "template.empty_description" = "Выберите упражнение и сразу настройте вес, подходы и повторения.";
 "template.exercise_meta" = "%d подходов • %d повторений • %@ кг";
+"template.table_set" = "Подход";
+"template.table_weight" = "КГ";
+"template.table_reps" = "Повт";
 "template.weight_picker" = "Вес";
 "template.sets_picker" = "Подходы";
 "template.reps_picker" = "Повторения";
