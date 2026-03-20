@@ -34,6 +34,13 @@ struct ActiveWorkoutView: View {
                                         setIndex: setIndex,
                                         set: set
                                     )
+                                    .swipeActions(edge: .trailing) {
+                                        Button(role: .destructive) {
+                                            store.removeSetFromActiveWorkout(exerciseIndex: exerciseIndex, setIndex: setIndex)
+                                        } label: {
+                                            Label("Delete", systemImage: "trash")
+                                        }
+                                    }
                                 }
 
                                 Button {
@@ -55,7 +62,12 @@ struct ActiveWorkoutView: View {
                                     }
                                 }
                             } footer: {
-                                Text(restSummary(for: item))
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(restSummary(for: item))
+                                    if let previousSetRest = previousSetRest(for: item) {
+                                        Text("Последний отдых: \(previousSetRest)")
+                                    }
+                                }
                             }
                         }
                     }
@@ -88,6 +100,14 @@ struct ActiveWorkoutView: View {
         let diffs = zip(completed.dropFirst(), completed).map { $0.timeIntervalSince($1) }
         let avg = diffs.reduce(0, +) / Double(diffs.count)
         return String(format: NSLocalizedString("workout.avg_rest", comment: ""), Int(avg))
+    }
+
+    private func previousSetRest(for exercise: WorkoutExerciseLog) -> String? {
+        let completed = exercise.sets.compactMap(\.completedAt).sorted()
+        guard completed.count > 1,
+              let last = completed.last,
+              let previous = completed.dropLast().last else { return nil }
+        return DateComponentsFormatter.workout.string(from: previous, to: last) ?? nil
     }
 }
 
