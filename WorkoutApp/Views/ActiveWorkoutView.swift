@@ -339,7 +339,7 @@ struct WorkoutSetRow: View {
     let set: WorkoutSetLog
 
     private var isCompleted: Bool {
-        set.completedAt != nil
+        return set.completedAt != nil
     }
 
     var body: some View {
