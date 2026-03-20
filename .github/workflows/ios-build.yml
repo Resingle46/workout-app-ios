@@ -7,16 +7,27 @@ on:
   pull_request:
   workflow_dispatch:
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build-simulator:
     runs-on: macos-15
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Show Xcode version
         run: xcodebuild -version
+
+      - name: Show project schemes
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild -list -project WorkoutApp.xcodeproj
 
       - name: Build for iOS Simulator
         shell: bash
@@ -26,11 +37,13 @@ jobs:
             -project WorkoutApp.xcodeproj \
             -scheme WorkoutApp \
             -configuration Debug \
+            -sdk iphonesimulator \
             -destination 'generic/platform=iOS Simulator' \
             CODE_SIGNING_ALLOWED=NO \
-            build
+            build | tee xcodebuild.log
 
       - name: Package simulator app
+        if: success()
         shell: bash
         run: |
           set -euo pipefail
@@ -38,8 +51,17 @@ jobs:
           test -n "$app_path"
           ditto -c -k --sequesterRsrc --keepParent "$app_path" WorkoutApp-simulator.zip
 
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: xcodebuild-log
+          path: xcodebuild.log
+          if-no-files-found: warn
+
       - name: Upload simulator app artifact
-        uses: actions/upload-artifact@v4
+        if: success()
+        uses: actions/upload-artifact@v7
         with:
           name: WorkoutApp-simulator
           path: WorkoutApp-simulator.zip
