@@ -255,6 +255,9 @@ struct WorkoutSummaryView: View {
                 if mode == .completion {
                     Text("stats.summary")
                         .font(.system(size: 38, weight: .black, design: .rounded))
+                } else if mode == .previousWorkout {
+                    Text("stats.previous_workout_preview")
+                        .font(.system(size: 30, weight: .black, design: .rounded))
                 }
 
                 AppCard {
@@ -307,24 +310,17 @@ struct WorkoutSummaryView: View {
                 }
             }
             .padding(20)
-            .padding(.bottom, mode == .completion ? 96 : 0)
+            .padding(.bottom, mode == .completion || mode == .previousWorkout ? 96 : 0)
         }
         .safeAreaInset(edge: .bottom) {
             if mode == .completion {
                 continueCTA
+            } else if mode == .previousWorkout {
+                startWorkoutCTA
             }
         }
         .navigationTitle(mode == .history ? session.title : "")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            if mode == .previousWorkout {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("action.done") {
-                        onDone?()
-                    }
-                }
-            }
-        }
         .appScreenBackground()
     }
 
@@ -334,6 +330,21 @@ struct WorkoutSummaryView: View {
                 .overlay(AppTheme.stroke)
             Button("action.continue") {
                 onContinue?()
+            }
+            .buttonStyle(AppPrimaryButtonStyle())
+            .padding(.horizontal, 20)
+            .padding(.top, 14)
+            .padding(.bottom, 12)
+            .background(.ultraThinMaterial.opacity(0.2))
+        }
+    }
+
+    private var startWorkoutCTA: some View {
+        VStack(spacing: 0) {
+            Divider()
+                .overlay(AppTheme.stroke)
+            Button("action.start_workout") {
+                onDone?()
             }
             .buttonStyle(AppPrimaryButtonStyle())
             .padding(.horizontal, 20)

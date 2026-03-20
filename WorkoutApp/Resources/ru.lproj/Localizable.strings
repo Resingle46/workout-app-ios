@@ -94,6 +94,7 @@
 "stats.history" = "История тренировок";
 "stats.no_workouts" = "Пока нет завершённых тренировок.";
 "stats.summary" = "Итоги тренировки";
+"stats.previous_workout_preview" = "Прошлая тренировка";
 "stats.avg_set_rest" = "Средний отдых между подходами";
 "stats.avg_exercise_rest" = "Средний отдых между упражнениями";
 "stats.recent_exercises" = "Последняя тренировка: первые 3 упражнения";

@@ -94,6 +94,7 @@
 "stats.history" = "Workout history";
 "stats.no_workouts" = "No completed workouts yet.";
 "stats.summary" = "Workout summary";
+"stats.previous_workout_preview" = "Previous workout";
 "stats.avg_set_rest" = "Avg. rest between sets";
 "stats.avg_exercise_rest" = "Avg. rest between exercises";
 "stats.recent_exercises" = "Last workout: first 3 exercises";
