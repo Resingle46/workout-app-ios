@@ -149,7 +149,7 @@ struct ActiveWorkoutView: View {
                 HStack(spacing: 12) {
                     WorkoutMetricPanel(
                         title: NSLocalizedString("workout.duration", comment: ""),
-                        value: DateComponentsFormatter.workout.string(from: session.startedAt, to: now) ?? "00:00"
+                        value: durationValue(for: session)
                     )
 
                     WorkoutMetricPanel(
@@ -169,6 +169,9 @@ struct ActiveWorkoutView: View {
                     .foregroundStyle(AppTheme.secondaryText)
                 Text(liveRestValue(for: session))
                     .font(.headline.weight(.heavy))
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
             }
 
             Spacer()
@@ -177,8 +180,11 @@ struct ActiveWorkoutView: View {
                 Text("workout.duration")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(AppTheme.secondaryText)
-                Text(DateComponentsFormatter.workout.string(from: session.startedAt, to: now) ?? "00:00")
+                Text(durationValue(for: session))
                     .font(.headline.weight(.heavy))
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
             }
         }
         .padding(.horizontal, 18)
@@ -193,7 +199,7 @@ struct ActiveWorkoutView: View {
     private func liveRestValue(for session: WorkoutSession) -> String {
         let lastDate = session.exercises.flatMap(\.sets).compactMap(\.completedAt).max()
         guard let lastDate else { return NSLocalizedString("common.no_data", comment: "") }
-        return DateComponentsFormatter.workout.string(from: lastDate, to: now) ?? "00:00"
+        return DateComponentsFormatter.workoutRest.string(from: lastDate, to: now) ?? "00:00"
     }
 
     private func restSummary(for exercise: WorkoutExerciseLog) -> String {
@@ -209,12 +215,21 @@ struct ActiveWorkoutView: View {
         guard completed.count > 1,
               let last = completed.last,
               let previous = completed.dropLast().last else { return nil }
-        return DateComponentsFormatter.workout.string(from: previous, to: last)
+        return DateComponentsFormatter.workoutRest.string(from: previous, to: last)
+    }
+
+    private func durationValue(for session: WorkoutSession) -> String {
+        let interval = now.timeIntervalSince(session.startedAt)
+        if interval >= 3600 {
+            return DateComponentsFormatter.workoutDurationLong.string(from: session.startedAt, to: now) ?? "00:00"
+        }
+        return DateComponentsFormatter.workoutDurationShort.string(from: session.startedAt, to: now) ?? "00:00"
     }
 }
 
 struct WorkoutSetRow: View {
     @Environment(AppStore.self) private var store
+    @FocusState private var isWeightFieldFocused: Bool
 
     let exerciseIndex: Int
     let setIndex: Int
@@ -252,6 +267,7 @@ struct WorkoutSetRow: View {
                 ), format: .number)
                 .multilineTextAlignment(.trailing)
                 .keyboardType(.decimalPad)
+                .focused($isWeightFieldFocused)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
                 .frame(width: 110)
@@ -286,6 +302,14 @@ struct WorkoutSetRow: View {
             RoundedRectangle(cornerRadius: 22, style: .continuous)
                 .stroke(AppTheme.stroke, lineWidth: 1)
         )
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("action.done") {
+                    isWeightFieldFocused = false
+                }
+            }
+        }
     }
 
     private func updateSet(_ change: (inout WorkoutSetLog) -> Void) {
@@ -305,7 +329,10 @@ private struct WorkoutMetricPanel: View {
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(AppTheme.secondaryText)
             Text(value)
-                .font(.system(size: 28, weight: .black, design: .rounded))
+                .font(.system(size: 22, weight: .bold, design: .rounded))
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -326,9 +353,25 @@ private struct WorkoutScrollOffsetPreferenceKey: PreferenceKey {
 }
 
 extension DateComponentsFormatter {
-    static let workout: DateComponentsFormatter = {
+    static let workoutDurationShort: DateComponentsFormatter = {
+        let formatter = DateComponentsFormatter()
+        formatter.allowedUnits = [.minute, .second]
+        formatter.unitsStyle = .positional
+        formatter.zeroFormattingBehavior = [.pad]
+        return formatter
+    }()
+
+    static let workoutDurationLong: DateComponentsFormatter = {
         let formatter = DateComponentsFormatter()
         formatter.allowedUnits = [.hour, .minute, .second]
+        formatter.unitsStyle = .positional
+        formatter.zeroFormattingBehavior = [.pad]
+        return formatter
+    }()
+
+    static let workoutRest: DateComponentsFormatter = {
+        let formatter = DateComponentsFormatter()
+        formatter.allowedUnits = [.minute, .second]
         formatter.unitsStyle = .positional
         formatter.zeroFormattingBehavior = [.pad]
         return formatter

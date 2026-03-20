@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import ObjectiveC
 
 @Observable
 final class AppStore {
@@ -30,10 +31,12 @@ final class AppStore {
         self.history = snapshot.history.sorted { $0.startedAt > $1.startedAt }
         self.lastFinishedSession = snapshot.history.sorted { $0.startedAt > $1.startedAt }.first(where: { $0.isFinished })
         self.profile = AppStore.normalizedProfile(snapshot.profile)
+        Bundle.overrideLocalization(languageCode: selectedLanguageCode)
     }
 
     func save() {
         profile = Self.normalizedProfile(profile)
+        Bundle.overrideLocalization(languageCode: selectedLanguageCode)
         persistence.save(snapshot: AppSnapshot(programs: programs, exercises: exercises, history: history, profile: profile))
     }
 
@@ -61,6 +64,19 @@ final class AppStore {
 
     func workout(programID: UUID, workoutID: UUID) -> WorkoutTemplate? {
         program(for: programID)?.workouts.first { $0.id == workoutID }
+    }
+
+    var selectedLanguageCode: String {
+        Self.normalizedLanguageCode(profile.appLanguageCode)
+    }
+
+    var locale: Locale {
+        Locale(identifier: selectedLanguageCode)
+    }
+
+    func updateLanguage(_ languageCode: String) {
+        profile.appLanguageCode = Self.normalizedLanguageCode(languageCode)
+        save()
     }
 
     func startWorkout(template: WorkoutTemplate) {
@@ -259,11 +275,31 @@ final class AppStore {
         let normalizedAge = min(max(profile.age, 10), 100)
         let normalizedWeight = normalizedHalfStep(min(max(profile.weight, 30), 250))
         let normalizedHeight = min(max(profile.height, 120), 230)
-        return UserProfile(sex: normalizedSex, age: normalizedAge, weight: normalizedWeight, height: normalizedHeight)
+        let normalizedLanguageCode = normalizedLanguageCode(profile.appLanguageCode)
+        return UserProfile(
+            sex: normalizedSex,
+            age: normalizedAge,
+            weight: normalizedWeight,
+            height: normalizedHeight,
+            appLanguageCode: normalizedLanguageCode
+        )
     }
 
     private static func normalizedHalfStep(_ value: Double) -> Double {
         (value * 2).rounded() / 2
+    }
+
+    private static func normalizedLanguageCode(_ value: String?) -> String {
+        let normalized = value?.lowercased()
+        if normalized == "ru" {
+            return "ru"
+        }
+        if normalized == "en" {
+            return "en"
+        }
+
+        let preferred = Locale.preferredLanguages.first?.lowercased() ?? "en"
+        return preferred.hasPrefix("ru") ? "ru" : "en"
     }
 }
 
@@ -290,5 +326,26 @@ struct PersistenceController {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         guard let data = try? encoder.encode(snapshot) else { return }
         try? data.write(to: fileURL, options: .atomic)
+    }
+}
+
+private var bundleLanguageKey: UInt8 = 0
+
+private final class LocalizedMainBundle: Bundle, @unchecked Sendable {
+    override func localizedString(forKey key: String, value: String?, table tableName: String?) -> String {
+        if let bundle = objc_getAssociatedObject(self, &bundleLanguageKey) as? Bundle {
+            return bundle.localizedString(forKey: key, value: value, table: tableName)
+        }
+        return super.localizedString(forKey: key, value: value, table: tableName)
+    }
+}
+
+private extension Bundle {
+    static func overrideLocalization(languageCode: String) {
+        object_setClass(Bundle.main, LocalizedMainBundle.self)
+        let path = Bundle.main.path(forResource: languageCode, ofType: "lproj")
+            ?? Bundle.main.path(forResource: "en", ofType: "lproj")
+        let bundle = path.flatMap(Bundle.init(path:))
+        objc_setAssociatedObject(Bundle.main, &bundleLanguageKey, bundle, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
     }
 }

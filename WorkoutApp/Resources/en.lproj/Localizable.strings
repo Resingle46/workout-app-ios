@@ -101,6 +101,7 @@
 "profile.personal" = "Personal profile";
 "profile.card_title" = "Profile";
 "profile.card_description" = "Quick settings for the metrics used across your workouts.";
+"profile.language" = "Language";
 "profile.sex" = "Sex";
 "profile.age" = "Age";
 "profile.age_value" = "Age: %d";

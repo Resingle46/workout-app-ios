@@ -179,7 +179,7 @@ struct StatisticsView: View {
 
     private func sessionSubtitle(for session: WorkoutSession) -> String {
         let exerciseCount = session.exercises.count
-        let duration = session.endedAt.map { DateComponentsFormatter.workout.string(from: session.startedAt, to: $0) ?? "00:00" } ?? NSLocalizedString("common.no_data", comment: "")
+        let duration = session.endedAt.map { formattedDuration(startedAt: session.startedAt, endedAt: $0) } ?? NSLocalizedString("common.no_data", comment: "")
         return String(format: NSLocalizedString("stats.history_meta", comment: ""), exerciseCount, duration)
     }
 
@@ -241,7 +241,7 @@ struct WorkoutSummaryView: View {
 
     private var duration: String {
         guard let endedAt = session.endedAt else { return NSLocalizedString("common.no_data", comment: "") }
-        return DateComponentsFormatter.workout.string(from: session.startedAt, to: endedAt) ?? "00:00"
+        return formattedDuration(startedAt: session.startedAt, endedAt: endedAt)
     }
 
     private var averageSetRest: String {
@@ -267,5 +267,13 @@ struct WorkoutSummaryView: View {
             Text(value)
                 .foregroundStyle(AppTheme.secondaryText)
         }
+    }
+
+    private func formattedDuration(startedAt: Date, endedAt: Date) -> String {
+        let interval = endedAt.timeIntervalSince(startedAt)
+        if interval >= 3600 {
+            return DateComponentsFormatter.workoutDurationLong.string(from: startedAt, to: endedAt) ?? "00:00"
+        }
+        return DateComponentsFormatter.workoutDurationShort.string(from: startedAt, to: endedAt) ?? "00:00"
     }
 }

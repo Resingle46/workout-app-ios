@@ -35,6 +35,7 @@ struct RootTabView: View {
                 .tabItem { Label("tab.profile", systemImage: "person.crop.circle") }
         }
         .tint(.white)
+        .environment(\.locale, store.locale)
         .toolbarColorScheme(.dark, for: .tabBar)
         .toolbarBackground(.visible, for: .tabBar)
         .toolbarBackground(AppTheme.surface, for: .tabBar)
@@ -74,7 +75,7 @@ struct AppSectionTitle: View {
 struct AppPrimaryButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.headline.weight(.semibold))
+            .font(.system(size: 17, weight: .medium, design: .rounded))
             .foregroundStyle(Color.black)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 18)
@@ -87,7 +88,7 @@ struct AppPrimaryButtonStyle: ButtonStyle {
 struct AppSecondaryButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.headline.weight(.semibold))
+            .font(.system(size: 17, weight: .medium, design: .rounded))
             .foregroundStyle(AppTheme.primaryText)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 16)
@@ -104,7 +105,7 @@ struct AppSecondaryButtonStyle: ButtonStyle {
 struct AppOutlinedButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.headline.weight(.semibold))
+            .font(.system(size: 17, weight: .medium, design: .rounded))
             .foregroundStyle(AppTheme.primaryText)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 18)

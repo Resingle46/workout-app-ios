@@ -159,6 +159,7 @@ struct UserProfile: Codable, Hashable {
     var age: Int
     var weight: Double
     var height: Double
+    var appLanguageCode: String?
 
-    static let empty = UserProfile(sex: "M", age: 25, weight: 70, height: 175)
+    static let empty = UserProfile(sex: "M", age: 25, weight: 70, height: 175, appLanguageCode: nil)
 }

@@ -5,6 +5,8 @@ struct ProfileView: View {
     @State private var activePicker: ProfilePickerField?
 
     var body: some View {
+        @Bindable var store = store
+
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 Text("tab.profile")
@@ -40,6 +42,21 @@ struct ProfileView: View {
                         }
                     }
                 }
+
+                AppCard {
+                    VStack(alignment: .leading, spacing: 16) {
+                        AppSectionTitle(titleKey: "profile.language")
+
+                        Picker("", selection: Binding(
+                            get: { store.selectedLanguageCode },
+                            set: { store.updateLanguage($0) }
+                        )) {
+                            Text("English").tag("en")
+                            Text("Русский").tag("ru")
+                        }
+                        .pickerStyle(.segmented)
+                    }
+                }
             }
             .padding(20)
         }
@@ -54,7 +71,8 @@ struct ProfileView: View {
                 }
             )
             .presentationDetents([.height(360)])
-            .presentationDragIndicator(.visible)
+            .presentationDragIndicator(.hidden)
+            .presentationBackground(.clear)
         }
         .navigationBarTitleDisplayMode(.inline)
         .appScreenBackground()
@@ -110,62 +128,82 @@ private struct ProfilePickerSheet: View {
     }
 
     var body: some View {
-        NavigationStack {
-            VStack(spacing: 12) {
-                switch picker {
-                case .sex:
-                    Picker("", selection: $sex) {
-                        Text("M").tag("M")
-                        Text("F").tag("F")
-                    }
-                    .pickerStyle(.wheel)
+        VStack(spacing: 0) {
+            Capsule()
+                .fill(Color.white.opacity(0.28))
+                .frame(width: 44, height: 5)
+                .padding(.top, 10)
+                .padding(.bottom, 18)
 
-                case .age:
-                    Picker("", selection: $age) {
-                        ForEach(10...100, id: \.self) { value in
-                            Text("\(value)")
-                                .tag(value)
-                        }
-                    }
-                    .pickerStyle(.wheel)
-
-                case .weight:
-                    Picker("", selection: $weightStep) {
-                        ForEach(60...500, id: \.self) { value in
-                            Text("\(Double(value) / 2, specifier: "%.1f")")
-                                .tag(value)
-                        }
-                    }
-                    .pickerStyle(.wheel)
-
-                case .height:
-                    Picker("", selection: $height) {
-                        ForEach(120...230, id: \.self) { value in
-                            Text("\(value)")
-                                .tag(value)
-                        }
-                    }
-                    .pickerStyle(.wheel)
-                }
-            }
-            .navigationTitle(title(for: picker))
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("action.done") {
-                        onSave(
-                            UserProfile(
-                                sex: sex,
-                                age: age,
-                                weight: Double(weightStep) / 2,
-                                height: Double(height)
-                            )
+            HStack {
+                Text(title(for: picker))
+                    .font(.title3.weight(.heavy))
+                    .foregroundStyle(AppTheme.primaryText)
+                Spacer()
+                Button("action.done") {
+                    onSave(
+                        UserProfile(
+                            sex: sex,
+                            age: age,
+                            weight: Double(weightStep) / 2,
+                            height: Double(height),
+                            appLanguageCode: profile.appLanguageCode
                         )
-                        dismiss()
-                    }
+                    )
+                    dismiss()
+                }
+                .foregroundStyle(AppTheme.primaryText)
+            }
+            .padding(.horizontal, 20)
+            .padding(.bottom, 8)
+
+            pickerContent
+                .frame(maxWidth: .infinity)
+                .frame(height: 220)
+                .clipped()
+        }
+        .padding(.horizontal, 20)
+        .padding(.bottom, 12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(AppTheme.surface.ignoresSafeArea())
+    }
+
+    @ViewBuilder
+    private var pickerContent: some View {
+        switch picker {
+        case .sex:
+            Picker("", selection: $sex) {
+                Text("M").tag("M")
+                Text("F").tag("F")
+            }
+            .pickerStyle(.wheel)
+
+        case .age:
+            Picker("", selection: $age) {
+                ForEach(10...100, id: \.self) { value in
+                    Text("\(value)")
+                        .tag(value)
                 }
             }
-            .appScreenBackground()
+            .pickerStyle(.wheel)
+
+        case .weight:
+            Picker("", selection: $weightStep) {
+                ForEach(60...500, id: \.self) { value in
+                    Text("\(Double(value) / 2, specifier: "%.1f")")
+                        .tag(value)
+                }
+            }
+            .pickerStyle(.wheel)
+
+        case .height:
+            Picker("", selection: $height) {
+                ForEach(120...230, id: \.self) { value in
+                    Text("\(value)")
+                        .tag(value)
+                }
+            }
+            .pickerStyle(.wheel)
         }
     }
 

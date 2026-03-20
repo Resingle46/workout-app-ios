@@ -101,6 +101,7 @@
 "profile.personal" = "Личный профиль";
 "profile.card_title" = "Профиль";
 "profile.card_description" = "Быстрые настройки основных показателей, которые используются по всему приложению.";
+"profile.language" = "Язык";
 "profile.sex" = "Пол";
 "profile.age" = "Возраст";
 "profile.age_value" = "Возраст: %d";

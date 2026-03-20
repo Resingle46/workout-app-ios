@@ -413,7 +413,8 @@ struct AddExerciseToWorkoutView: View {
                     }
                 )
                 .presentationDetents([.height(380)])
-                .presentationDragIndicator(.visible)
+                .presentationDragIndicator(.hidden)
+                .presentationBackground(.clear)
             }
             .appScreenBackground()
         }
@@ -566,64 +567,74 @@ struct TemplateExerciseConfigSheet: View {
     }
 
     var body: some View {
-        NavigationStack {
-            VStack(alignment: .leading, spacing: 18) {
+        VStack(spacing: 0) {
+            Capsule()
+                .fill(Color.white.opacity(0.28))
+                .frame(width: 44, height: 5)
+                .padding(.top, 10)
+                .padding(.bottom, 18)
+
+            HStack {
+                Button("action.cancel") {
+                    onCancel()
+                    dismiss()
+                }
+                .foregroundStyle(AppTheme.secondaryText)
+
+                Spacer()
+
                 Text(title)
-                    .font(.title3.weight(.heavy))
-                    .padding(.horizontal, 20)
-                    .padding(.top, 8)
+                    .font(.headline.weight(.heavy))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
 
-                HStack(spacing: 0) {
-                    wheelColumn(titleKey: "template.weight_picker", width: 150) {
-                        Picker("", selection: $weightStep) {
-                            ForEach(0...600, id: \.self) { step in
-                                Text("\(Double(step) / 2, specifier: "%.1f")")
-                                    .tag(step)
-                            }
-                        }
-                        .pickerStyle(.wheel)
-                    }
+                Spacer()
 
-                    wheelColumn(titleKey: "template.sets_picker", width: 110) {
-                        Picker("", selection: $selectedSetsCount) {
-                            ForEach(1...10, id: \.self) { value in
-                                Text("\(value)")
-                                    .tag(value)
-                            }
-                        }
-                        .pickerStyle(.wheel)
-                    }
-
-                    wheelColumn(titleKey: "template.reps_picker", width: 110) {
-                        Picker("", selection: $selectedReps) {
-                            ForEach(1...30, id: \.self) { value in
-                                Text("\(value)")
-                                    .tag(value)
-                            }
-                        }
-                        .pickerStyle(.wheel)
-                    }
-                }
-                .padding(.bottom, 8)
-            }
-            .navigationTitle("template.configure")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("action.cancel") {
-                        onCancel()
-                        dismiss()
-                    }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("action.done") {
-                        onSave(selectedSetsCount, selectedReps, Double(weightStep) / 2)
-                        dismiss()
-                    }
+                Button("action.done") {
+                    onSave(selectedSetsCount, selectedReps, Double(weightStep) / 2)
+                    dismiss()
                 }
             }
-            .appScreenBackground()
+            .padding(.horizontal, 20)
+            .padding(.bottom, 10)
+
+            HStack(spacing: 0) {
+                wheelColumn(titleKey: "template.weight_picker", width: 150) {
+                    Picker("", selection: $weightStep) {
+                        ForEach(0...600, id: \.self) { step in
+                            Text("\(Double(step) / 2, specifier: "%.1f")")
+                                .tag(step)
+                        }
+                    }
+                    .pickerStyle(.wheel)
+                }
+
+                wheelColumn(titleKey: "template.sets_picker", width: 110) {
+                    Picker("", selection: $selectedSetsCount) {
+                        ForEach(1...10, id: \.self) { value in
+                            Text("\(value)")
+                                .tag(value)
+                        }
+                    }
+                    .pickerStyle(.wheel)
+                }
+
+                wheelColumn(titleKey: "template.reps_picker", width: 110) {
+                    Picker("", selection: $selectedReps) {
+                        ForEach(1...30, id: \.self) { value in
+                            Text("\(value)")
+                                .tag(value)
+                        }
+                    }
+                    .pickerStyle(.wheel)
+                }
+            }
+            .padding(.bottom, 10)
         }
+        .padding(.horizontal, 20)
+        .padding(.bottom, 12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(AppTheme.surface.ignoresSafeArea())
     }
 
     private func wheelColumn<Content: View>(titleKey: LocalizedStringKey, width: CGFloat, @ViewBuilder content: () -> Content) -> some View {
