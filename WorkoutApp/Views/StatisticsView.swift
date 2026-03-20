@@ -21,7 +21,7 @@ struct StatisticsView: View {
                         Picker(NSLocalizedString("stats.exercise", comment: ""), selection: $selectedExerciseID) {
                             Text("common.select").tag(UUID?.none)
                             ForEach(store.exercises) { exercise in
-                                Text(exercise.name).tag(UUID?.some(exercise.id))
+                                Text(exercise.localizedName).tag(UUID?.some(exercise.id))
                             }
                         }
                         .pickerStyle(.menu)
@@ -126,7 +126,7 @@ struct StatisticsView: View {
 
         return AppCard {
             VStack(alignment: .leading, spacing: 16) {
-                Text(exercise.name)
+                Text(exercise.localizedName)
                     .font(.title3.weight(.heavy))
 
                 if points.isEmpty {
@@ -211,7 +211,7 @@ struct WorkoutSummaryView: View {
                     if let item = store.exercise(for: exercise.exerciseID) {
                         AppCard {
                             VStack(alignment: .leading, spacing: 14) {
-                                Text(item.name)
+                                Text(item.localizedName)
                                     .font(.title3.weight(.heavy))
 
                                 ForEach(Array(exercise.sets.enumerated()), id: \.element.id) { index, set in

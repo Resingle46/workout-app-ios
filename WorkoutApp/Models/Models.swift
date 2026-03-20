@@ -163,3 +163,41 @@ struct UserProfile: Codable, Hashable {
 
     static let empty = UserProfile(sex: "M", age: 25, weight: 70, height: 175, appLanguageCode: nil)
 }
+
+extension Exercise {
+    var localizedName: String {
+        guard let localizationKey = Self.seedLocalizationKeys[name] else { return name }
+        return Bundle.main.localizedString(forKey: localizationKey, value: name, table: nil)
+    }
+
+    var searchableNames: [String] {
+        Array(Set([name, localizedName]))
+    }
+
+    private static let seedLocalizationKeys: [String: String] = [
+        "Barbell Bench Press": "exercise.seed.barbell_bench_press",
+        "Incline Dumbbell Press": "exercise.seed.incline_dumbbell_press",
+        "Chest Fly": "exercise.seed.chest_fly",
+        "Push-Up": "exercise.seed.push_up",
+        "Pull-Up": "exercise.seed.pull_up",
+        "Lat Pulldown": "exercise.seed.lat_pulldown",
+        "Barbell Row": "exercise.seed.barbell_row",
+        "Seated Cable Row": "exercise.seed.seated_cable_row",
+        "Back Squat": "exercise.seed.back_squat",
+        "Romanian Deadlift": "exercise.seed.romanian_deadlift",
+        "Leg Press": "exercise.seed.leg_press",
+        "Walking Lunges": "exercise.seed.walking_lunges",
+        "Overhead Press": "exercise.seed.overhead_press",
+        "Lateral Raise": "exercise.seed.lateral_raise",
+        "Rear Delt Fly": "exercise.seed.rear_delt_fly",
+        "Arnold Press": "exercise.seed.arnold_press",
+        "Barbell Curl": "exercise.seed.barbell_curl",
+        "Hammer Curl": "exercise.seed.hammer_curl",
+        "Triceps Pushdown": "exercise.seed.triceps_pushdown",
+        "Skull Crusher": "exercise.seed.skull_crusher",
+        "Plank": "exercise.seed.plank",
+        "Cable Crunch": "exercise.seed.cable_crunch",
+        "Hanging Leg Raise": "exercise.seed.hanging_leg_raise",
+        "Russian Twist": "exercise.seed.russian_twist"
+    ]
+}

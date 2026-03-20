@@ -23,7 +23,7 @@ struct ActiveWorkoutView: View {
                                         VStack(alignment: .leading, spacing: 16) {
                                             HStack(alignment: .top, spacing: 12) {
                                                 VStack(alignment: .leading, spacing: 8) {
-                                                    Text(exercise.name)
+                                                    Text(exercise.localizedName)
                                                         .font(.title3.weight(.heavy))
                                                     if item.groupKind == .superset {
                                                         Label("label.superset", systemImage: "bolt.fill")

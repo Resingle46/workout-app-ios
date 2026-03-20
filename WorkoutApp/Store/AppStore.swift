@@ -249,7 +249,7 @@ final class AppStore {
             return RecentWorkoutExerciseSummary(
                 id: exerciseLog.id,
                 exerciseID: exercise.id,
-                exerciseName: exercise.name,
+                exerciseName: exercise.localizedName,
                 performedAt: session.startedAt,
                 sets: exerciseLog.sets
             )

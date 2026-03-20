@@ -132,7 +132,7 @@ struct WorkoutTemplateDetailView: View {
                         VStack(alignment: .leading, spacing: 12) {
                             HStack(alignment: .top, spacing: 12) {
                                 VStack(alignment: .leading, spacing: 8) {
-                                    Text(exercise.name)
+                                    Text(exercise.localizedName)
                                         .font(.title3.weight(.heavy))
                                     if !exercise.equipment.isEmpty {
                                         Text(exercise.equipment)
@@ -150,7 +150,7 @@ struct WorkoutTemplateDetailView: View {
                                     Button {
                                         editingExercise = EditableTemplateExercise(
                                             id: item.id,
-                                            exerciseName: exercise.name,
+                                            exerciseName: exercise.localizedName,
                                             setsCount: item.sets.count,
                                             reps: item.sets.first?.reps ?? 10,
                                             suggestedWeight: item.sets.first?.suggestedWeight ?? 0
@@ -247,7 +247,7 @@ struct AddExerciseToWorkoutView: View {
             let matchesCategory = selectedCategoryID == nil || exercise.categoryID == selectedCategoryID
             let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
             let matchesQuery = normalizedQuery.isEmpty ||
-                exercise.name.localizedCaseInsensitiveContains(normalizedQuery) ||
+                exercise.searchableNames.contains(where: { $0.localizedCaseInsensitiveContains(normalizedQuery) }) ||
                 exercise.equipment.localizedCaseInsensitiveContains(normalizedQuery)
             return matchesCategory && matchesQuery
         }
@@ -410,7 +410,7 @@ struct AddExerciseToWorkoutView: View {
         guard pendingConfiguration == nil else { return }
 
         if isSuperset, selectedExerciseIDs.count == 2 {
-            let names = selectedExerciseIDs.compactMap { store.exercise(for: $0)?.name }
+            let names = selectedExerciseIDs.compactMap { store.exercise(for: $0)?.localizedName }
             pendingConfiguration = PendingExerciseConfiguration(
                 exerciseIDs: selectedExerciseIDs,
                 isSuperset: true,
@@ -420,7 +420,7 @@ struct AddExerciseToWorkoutView: View {
             pendingConfiguration = PendingExerciseConfiguration(
                 exerciseIDs: [exerciseID],
                 isSuperset: false,
-                title: exercise.name
+                title: exercise.localizedName
             )
         }
     }
@@ -458,7 +458,7 @@ private struct ExerciseSelectionCard: View {
                             .foregroundStyle(Color.white.opacity(0.72))
                     }
 
-                    Text(exercise.name)
+                    Text(exercise.localizedName)
                         .font(.system(size: 22, weight: .medium, design: .rounded))
                         .foregroundStyle(.white)
                         .frame(maxWidth: .infinity, alignment: .leading)
