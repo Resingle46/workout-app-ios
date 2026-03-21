@@ -405,7 +405,6 @@ enum BackupDocumentPickerMode: String, Identifiable {
     var id: String { rawValue }
 }
 
-@MainActor
 enum BackupRestoreRequest: Identifiable {
     case latest
     case importFile(URL)

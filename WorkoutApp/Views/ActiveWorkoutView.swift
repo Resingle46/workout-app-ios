@@ -482,20 +482,19 @@ private struct WorkoutDurationText: View {
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
-            let now = context.date
-            let interval = now.timeIntervalSince(startedAt)
-            let value: String
-            if interval >= 3600 {
-                value = DateComponentsFormatter.workoutDurationLong.string(from: startedAt, to: now) ?? "00:00"
-            } else {
-                value = DateComponentsFormatter.workoutDurationShort.string(from: startedAt, to: now) ?? "00:00"
-            }
-
-            Text(value)
+            Text(formattedDuration(at: context.date))
                 .monospacedDigit()
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
         }
+    }
+
+    private func formattedDuration(at now: Date) -> String {
+        let interval = now.timeIntervalSince(startedAt)
+        if interval >= 3600 {
+            return DateComponentsFormatter.workoutDurationLong.string(from: startedAt, to: now) ?? "00:00"
+        }
+        return DateComponentsFormatter.workoutDurationShort.string(from: startedAt, to: now) ?? "00:00"
     }
 }
 
@@ -504,19 +503,19 @@ private struct WorkoutLiveRestText: View {
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
-            let lastDate = session.exercises.flatMap(\.sets).compactMap(\.completedAt).max()
-            let value: String
-            if let lastDate {
-                value = DateComponentsFormatter.workoutRest.string(from: lastDate, to: context.date) ?? "00:00"
-            } else {
-                value = NSLocalizedString("common.no_data", comment: "")
-            }
-
-            Text(value)
+            Text(formattedLiveRest(at: context.date))
                 .monospacedDigit()
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
         }
+    }
+
+    private func formattedLiveRest(at now: Date) -> String {
+        let lastDate = session.exercises.flatMap(\.sets).compactMap(\.completedAt).max()
+        guard let lastDate else {
+            return NSLocalizedString("common.no_data", comment: "")
+        }
+        return DateComponentsFormatter.workoutRest.string(from: lastDate, to: now) ?? "00:00"
     }
 }
 
