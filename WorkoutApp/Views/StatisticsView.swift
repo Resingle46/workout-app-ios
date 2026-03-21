@@ -329,33 +329,28 @@ struct WorkoutSummaryView: View {
     }
 
     private var continueCTA: some View {
-        VStack(spacing: 0) {
-            Divider()
-                .overlay(AppTheme.stroke)
-            Button("action.continue") {
-                onContinue?()
-            }
-            .buttonStyle(AppPrimaryButtonStyle())
-            .padding(.horizontal, 20)
-            .padding(.top, 14)
-            .padding(.bottom, 12)
-            .background(.ultraThinMaterial.opacity(0.2))
+        summaryCTA("action.continue") {
+            onContinue?()
         }
     }
 
     private var startWorkoutCTA: some View {
+        summaryCTA("action.start_workout") {
+            onDone?()
+        }
+    }
+
+    private func summaryCTA(_ titleKey: LocalizedStringKey, action: @escaping () -> Void) -> some View {
         VStack(spacing: 0) {
             Divider()
                 .overlay(AppTheme.stroke)
-            Button("action.start_workout") {
-                onDone?()
-            }
+            Button(titleKey, action: action)
             .buttonStyle(AppPrimaryButtonStyle())
             .padding(.horizontal, 20)
             .padding(.top, 14)
             .padding(.bottom, 12)
-            .background(.ultraThinMaterial.opacity(0.2))
         }
+        .background(AppTheme.background)
     }
 
     private var duration: String {

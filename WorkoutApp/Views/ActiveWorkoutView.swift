@@ -620,8 +620,15 @@ private struct WorkoutSetRow: View {
     private func updateWeight(_ newWeight: Double) {
         store.updateActiveSession { session in
             guard exerciseIndex < session.exercises.count else { return }
-            for index in setIndex..<session.exercises[exerciseIndex].sets.count {
-                session.exercises[exerciseIndex].sets[index].weight = newWeight
+            guard setIndex < session.exercises[exerciseIndex].sets.count else { return }
+
+            session.exercises[exerciseIndex].sets[setIndex].weight = newWeight
+
+            if setIndex + 1 < session.exercises[exerciseIndex].sets.count {
+                for index in (setIndex + 1)..<session.exercises[exerciseIndex].sets.count
+                where session.exercises[exerciseIndex].sets[index].completedAt == nil {
+                    session.exercises[exerciseIndex].sets[index].weight = newWeight
+                }
             }
         }
     }
@@ -629,8 +636,15 @@ private struct WorkoutSetRow: View {
     private func updateReps(_ newReps: Int) {
         store.updateActiveSession { session in
             guard exerciseIndex < session.exercises.count else { return }
-            for index in setIndex..<session.exercises[exerciseIndex].sets.count {
-                session.exercises[exerciseIndex].sets[index].reps = newReps
+            guard setIndex < session.exercises[exerciseIndex].sets.count else { return }
+
+            session.exercises[exerciseIndex].sets[setIndex].reps = newReps
+
+            if setIndex + 1 < session.exercises[exerciseIndex].sets.count {
+                for index in (setIndex + 1)..<session.exercises[exerciseIndex].sets.count
+                where session.exercises[exerciseIndex].sets[index].completedAt == nil {
+                    session.exercises[exerciseIndex].sets[index].reps = newReps
+                }
             }
         }
     }
