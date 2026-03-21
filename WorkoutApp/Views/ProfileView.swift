@@ -425,6 +425,7 @@ private enum BackupRestoreRequest: Identifiable {
         }
     }
 
+    @MainActor
     func message(store: AppStore) -> String {
         switch self {
         case .latest:
