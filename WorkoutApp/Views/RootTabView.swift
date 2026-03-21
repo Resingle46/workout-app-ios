@@ -18,6 +18,9 @@ enum AppTheme {
 
 struct RootTabView: View {
     @Environment(AppStore.self) private var store
+    @State private var showBackupSetupPrompt = false
+    @State private var launchBackupPickerMode: BackupDocumentPickerMode?
+    @State private var launchRestoreRequest: BackupRestoreRequest?
 
     var body: some View {
         @Bindable var store = store
@@ -44,6 +47,45 @@ struct RootTabView: View {
         .toolbarColorScheme(.dark, for: .tabBar)
         .toolbarBackground(.visible, for: .tabBar)
         .toolbarBackground(AppTheme.surface, for: .tabBar)
+        .onChange(of: store.shouldPromptForBackupSetup, initial: true) { _, newValue in
+            showBackupSetupPrompt = newValue
+        }
+        .confirmationDialog("backup.setup.title", isPresented: $showBackupSetupPrompt, titleVisibility: .visible) {
+            Button("backup.setup.choose_folder") {
+                store.dismissBackupSetupPrompt()
+                launchBackupPickerMode = .folder
+            }
+            Button("backup.setup.later", role: .cancel) {
+                store.dismissBackupSetupPrompt()
+            }
+        } message: {
+            Text("backup.setup.message")
+        }
+        .sheet(item: $launchBackupPickerMode) { mode in
+            BackupDocumentPicker(mode: mode, onPick: { url in
+                launchBackupPickerMode = nil
+                Task {
+                    let hadExistingBackups = await store.chooseBackupFolder(url)
+                    if hadExistingBackups {
+                        launchRestoreRequest = .latest
+                    }
+                }
+            }, onCancel: {
+                launchBackupPickerMode = nil
+            })
+        }
+        .alert(item: $launchRestoreRequest) { request in
+            Alert(
+                title: Text("backup.setup.restore_found_title"),
+                message: Text(request.message(store: store)),
+                primaryButton: .default(Text("backup.action.restore")) {
+                    Task {
+                        await store.restoreLatestBackup()
+                    }
+                },
+                secondaryButton: .cancel(Text("backup.setup.restore_later"))
+            )
+        }
     }
 }
 

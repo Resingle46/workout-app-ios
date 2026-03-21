@@ -178,6 +178,12 @@
 "backup.action.restore_latest" = "Восстановить последний";
 "backup.action.import_file" = "Импортировать файл бэкапа";
 "backup.action.restore" = "Восстановить";
+"backup.setup.title" = "Настроить бэкапы?";
+"backup.setup.message" = "Выберите папку для бэкапов сейчас, чтобы после переустановки приложения можно было восстановить программы и историю тренировок.";
+"backup.setup.choose_folder" = "Выбрать папку";
+"backup.setup.later" = "Позже";
+"backup.setup.restore_found_title" = "Найдены существующие бэкапы";
+"backup.setup.restore_later" = "Не сейчас";
 "backup.progress.backup" = "Сохранение файла бэкапа...";
 "backup.progress.restore" = "Восстановление данных...";
 "backup.restore.latest_title" = "Восстановить последний бэкап?";

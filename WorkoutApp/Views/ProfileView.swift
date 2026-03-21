@@ -396,14 +396,14 @@ private struct ProfilePickerSheet: View {
     }
 }
 
-private enum BackupDocumentPickerMode: String, Identifiable {
+enum BackupDocumentPickerMode: String, Identifiable {
     case folder
     case backupFile
 
     var id: String { rawValue }
 }
 
-private enum BackupRestoreRequest: Identifiable {
+enum BackupRestoreRequest: Identifiable {
     case latest
     case importFile(URL)
 
@@ -447,7 +447,7 @@ private enum BackupRestoreRequest: Identifiable {
     }
 }
 
-private struct BackupDocumentPicker: UIViewControllerRepresentable {
+struct BackupDocumentPicker: UIViewControllerRepresentable {
     let mode: BackupDocumentPickerMode
     let onPick: (URL) -> Void
     let onCancel: () -> Void

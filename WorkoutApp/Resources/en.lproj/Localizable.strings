@@ -133,6 +133,12 @@
 "backup.action.restore_latest" = "Restore Latest";
 "backup.action.import_file" = "Import Backup File";
 "backup.action.restore" = "Restore";
+"backup.setup.title" = "Set up backups?";
+"backup.setup.message" = "Choose a backup folder now so your programs and workout history can be restored after reinstalling the app.";
+"backup.setup.choose_folder" = "Choose Folder";
+"backup.setup.later" = "Later";
+"backup.setup.restore_found_title" = "Existing backups found";
+"backup.setup.restore_later" = "Not now";
 "backup.progress.backup" = "Writing backup file...";
 "backup.progress.restore" = "Restoring backup...";
 "backup.restore.latest_title" = "Restore latest backup?";

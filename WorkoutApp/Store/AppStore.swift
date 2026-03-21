@@ -14,6 +14,7 @@ final class AppStore {
     var profile: UserProfile
     var selectedTab: RootTab = .programs
     var backupStatus: BackupStatus
+    var shouldPromptForBackupSetup: Bool
 
     var canBackupNow: Bool {
         backupStatus.canBackupNow
@@ -30,6 +31,7 @@ final class AppStore {
     private let persistence = PersistenceController()
     @ObservationIgnored private let backupCoordinator: BackupCoordinator
     @ObservationIgnored private var backupDebounceTask: Task<Void, Never>?
+    @ObservationIgnored private let defaults: UserDefaults
     private var hasPersistedSnapshot: Bool
     private var localSnapshotModifiedAt: Date?
 
@@ -50,12 +52,14 @@ final class AppStore {
         self.history = snapshot.history.sorted { $0.startedAt > $1.startedAt }
         self.lastFinishedSession = snapshot.history.sorted { $0.startedAt > $1.startedAt }.first(where: { $0.isFinished })
         self.profile = AppStore.normalizedProfile(snapshot.profile)
+        self.defaults = .standard
         self.backupCoordinator = BackupCoordinator()
         self.backupStatus = BackupStatus()
         self.hasPersistedSnapshot = storedSnapshot != nil
         self.localSnapshotModifiedAt = storedSnapshot?.modifiedAt
         Bundle.overrideLocalization(languageCode: selectedLanguageCode)
         self.backupStatus = BackupCoordinator.initialStatus()
+        self.shouldPromptForBackupSetup = Self.shouldPromptForBackupSetup(defaults: defaults, backupStatus: backupStatus)
     }
 
     func currentSnapshot() -> AppSnapshot {
@@ -91,6 +95,10 @@ final class AppStore {
 
     func handleAppLaunch() async {
         await refreshBackupStatus()
+        shouldPromptForBackupSetup = Self.shouldPromptForBackupSetup(defaults: defaults, backupStatus: backupStatus)
+        if !shouldPromptForBackupSetup {
+            defaults.set(true, forKey: PreferenceKey.didCompleteFirstLaunch)
+        }
     }
 
     func handleSceneDidEnterBackground() async {
@@ -118,20 +126,31 @@ final class AppStore {
         await performBackup(showErrors: true)
     }
 
-    func chooseBackupFolder(_ url: URL) async {
+    @discardableResult
+    func chooseBackupFolder(_ url: URL) async -> Bool {
         do {
             backupStatus.lastErrorDescription = nil
             backupStatus = try await backupCoordinator.selectBackupFolder(url)
+            let hadExistingBackups = backupStatus.latestBackup != nil
+            shouldPromptForBackupSetup = false
+            defaults.set(true, forKey: PreferenceKey.didCompleteFirstLaunch)
             let shouldCreateImmediateBackup = hasPersistedSnapshot || backupStatus.latestBackup == nil
             if shouldCreateImmediateBackup {
                 persistCurrentSnapshotIfNeeded()
                 await performBackup(showErrors: true)
             }
+            return hadExistingBackups
         } catch {
             backupStatus.lastErrorDescription = (error as? LocalizedError)?.errorDescription ?? (error as NSError).localizedDescription
             backupStatus = await backupCoordinator.refreshStatus()
             backupStatus.lastErrorDescription = (error as? LocalizedError)?.errorDescription ?? (error as NSError).localizedDescription
+            return false
         }
+    }
+
+    func dismissBackupSetupPrompt() {
+        shouldPromptForBackupSetup = false
+        defaults.set(true, forKey: PreferenceKey.didCompleteFirstLaunch)
     }
 
     func restoreLatestBackup() async {
@@ -507,6 +526,15 @@ final class AppStore {
 
         let preferred = Locale.preferredLanguages.first?.lowercased() ?? "en"
         return preferred.hasPrefix("ru") ? "ru" : "en"
+    }
+
+    private static func shouldPromptForBackupSetup(defaults: UserDefaults, backupStatus: BackupStatus) -> Bool {
+        let isFirstLaunch = defaults.object(forKey: PreferenceKey.didCompleteFirstLaunch) == nil
+        return isFirstLaunch && !backupStatus.hasSelectedFolder
+    }
+
+    private enum PreferenceKey {
+        static let didCompleteFirstLaunch = "app.didCompleteFirstLaunch"
     }
 }
 
