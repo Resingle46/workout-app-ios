@@ -480,7 +480,7 @@ private struct WorkoutSetRow: View {
                 ), format: .number)
                 .multilineTextAlignment(.trailing)
                 .keyboardType(.decimalPad)
-                .focused($focusedField, equals: .weight(exerciseIndex, setIndex))
+                .focused(focusedField, equals: .weight(exerciseIndex, setIndex))
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
                 .frame(width: 110)
@@ -559,7 +559,7 @@ private struct WorkoutSetRow: View {
             .textFieldStyle(.plain)
             .keyboardType(.numberPad)
             .multilineTextAlignment(.center)
-            .focused($focusedField, equals: .reps(exerciseIndex, setIndex))
+            .focused(focusedField, equals: .reps(exerciseIndex, setIndex))
             .frame(width: 56)
 
             Rectangle()
