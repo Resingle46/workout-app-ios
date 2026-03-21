@@ -196,7 +196,7 @@ actor BackupCoordinator {
     init(
         container: CKContainer? = nil,
         defaults: UserDefaults = .standard,
-        now: @escaping @Sendable () -> Date = Date.init,
+        now: @escaping @Sendable () -> Date = { Date() },
         fileManager: FileManager = .default
     ) {
         if let container {

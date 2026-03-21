@@ -26,7 +26,7 @@ final class AppStore {
 
     private let persistence = PersistenceController()
     private let cloudBackupSupported: Bool
-    private lazy var backupCoordinator = BackupCoordinator()
+    @ObservationIgnored private var backupCoordinator: BackupCoordinator?
     private var hasPersistedSnapshot: Bool
     private var localSnapshotModifiedAt: Date?
 
@@ -104,6 +104,7 @@ final class AppStore {
 
     func refreshBackupStatus() async {
         guard ensureCloudBackupAvailable(showError: true) else { return }
+        let backupCoordinator = backupCoordinatorInstance()
         let result = await backupCoordinator.refreshStatus(
             localSnapshotExists: hasPersistedSnapshot,
             localSnapshotModifiedAt: localSnapshotModifiedAt
@@ -120,6 +121,7 @@ final class AppStore {
 
         backupStatus.isBackupInProgress = true
         backupStatus.lastErrorDescription = nil
+        let backupCoordinator = backupCoordinatorInstance()
         let status = await backupCoordinator.backupNow(snapshot: currentSnapshot())
         backupStatus = status
     }
@@ -127,6 +129,7 @@ final class AppStore {
     func prepareManualRestore() async {
         guard ensureCloudBackupAvailable(showError: true) else { return }
         backupStatus.lastErrorDescription = nil
+        let backupCoordinator = backupCoordinatorInstance()
         let result = await backupCoordinator.manualRestorePrompt()
         applyBackupSyncResult(result, allowRestorePrompt: true)
     }
@@ -141,6 +144,7 @@ final class AppStore {
         backupStatus.lastErrorDescription = nil
 
         do {
+            let backupCoordinator = backupCoordinatorInstance()
             let envelope = try await backupCoordinator.restoreLatestBackup()
             pendingRestorePrompt = nil
             apply(snapshot: envelope.snapshot)
@@ -170,6 +174,7 @@ final class AppStore {
             return
         }
 
+        let backupCoordinator = backupCoordinatorInstance()
         await backupCoordinator.dismissRestorePrompt(for: prompt.metadata)
         pendingRestorePrompt = nil
         let refresh = await backupCoordinator.refreshStatus(
@@ -420,6 +425,7 @@ final class AppStore {
     }
 
     private func runBackupSync(reason: BackupTriggerReason, allowRestorePrompt: Bool) async {
+        let backupCoordinator = backupCoordinatorInstance()
         let result = await backupCoordinator.syncIfNeeded(
             snapshot: currentSnapshot(),
             localSnapshotExists: hasPersistedSnapshot,
@@ -453,6 +459,16 @@ final class AppStore {
         }
 
         return true
+    }
+
+    private func backupCoordinatorInstance() -> BackupCoordinator {
+        if let backupCoordinator {
+            return backupCoordinator
+        }
+
+        let backupCoordinator = BackupCoordinator()
+        self.backupCoordinator = backupCoordinator
+        return backupCoordinator
     }
 
     private func normalizedSnapshot(from snapshot: AppSnapshot) -> AppSnapshot {
