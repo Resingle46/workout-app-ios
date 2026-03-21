@@ -1,7 +1,6 @@
 import CloudKit
 import CryptoKit
 import Foundation
-import Security
 
 enum BackupTriggerReason: String, Codable, Sendable {
     case launch
@@ -175,16 +174,7 @@ enum BackupConstants {
 
 actor BackupCoordinator {
     static var isRuntimeAvailable: Bool {
-        guard let task = SecTaskCreateFromSelf(nil),
-              let services = SecTaskCopyValueForEntitlement(
-                  task,
-                  "com.apple.developer.icloud-services" as CFString,
-                  nil
-              ) as? [String] else {
-            return false
-        }
-
-        return services.contains("CloudKit")
+        (Bundle.main.object(forInfoDictionaryKey: "CloudBackupFeatureEnabled") as? Bool) == true
     }
 
     private let container: CKContainer
