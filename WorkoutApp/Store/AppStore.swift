@@ -17,7 +17,7 @@ final class AppStore {
     var pendingRestorePrompt: BackupRestorePrompt?
 
     var canCreateCloudBackup: Bool {
-        hasPersistedSnapshot && backupStatus.canBackupNow
+        cloudBackupSupported && hasPersistedSnapshot && backupStatus.canBackupNow
     }
 
     var localStateUpdatedAt: Date? {
@@ -25,7 +25,8 @@ final class AppStore {
     }
 
     private let persistence = PersistenceController()
-    private let backupCoordinator = BackupCoordinator()
+    private let cloudBackupSupported: Bool
+    private lazy var backupCoordinator = BackupCoordinator()
     private var hasPersistedSnapshot: Bool
     private var localSnapshotModifiedAt: Date?
 
@@ -46,8 +47,12 @@ final class AppStore {
         self.history = snapshot.history.sorted { $0.startedAt > $1.startedAt }
         self.lastFinishedSession = snapshot.history.sorted { $0.startedAt > $1.startedAt }.first(where: { $0.isFinished })
         self.profile = AppStore.normalizedProfile(snapshot.profile)
+        self.cloudBackupSupported = BackupCoordinator.isRuntimeAvailable
         self.hasPersistedSnapshot = storedSnapshot != nil
         self.localSnapshotModifiedAt = storedSnapshot?.modifiedAt
+        if !cloudBackupSupported {
+            backupStatus.availability = .temporarilyUnavailable
+        }
         Bundle.overrideLocalization(languageCode: selectedLanguageCode)
     }
 
@@ -82,19 +87,23 @@ final class AppStore {
     }
 
     func handleAppLaunch() async {
+        guard ensureCloudBackupAvailable() else { return }
         await runBackupSync(reason: .launch, allowRestorePrompt: true)
     }
 
     func handleSceneDidEnterBackground() async {
+        guard ensureCloudBackupAvailable() else { return }
         await runBackupSync(reason: .sceneBackground, allowRestorePrompt: false)
     }
 
     func handleBackgroundBackupTask() async -> Bool {
+        guard ensureCloudBackupAvailable() else { return true }
         await runBackupSync(reason: .backgroundTask, allowRestorePrompt: false)
         return backupStatus.lastErrorDescription == nil
     }
 
     func refreshBackupStatus() async {
+        guard ensureCloudBackupAvailable(showError: true) else { return }
         let result = await backupCoordinator.refreshStatus(
             localSnapshotExists: hasPersistedSnapshot,
             localSnapshotModifiedAt: localSnapshotModifiedAt
@@ -103,6 +112,7 @@ final class AppStore {
     }
 
     func backupNow() async {
+        guard ensureCloudBackupAvailable(showError: true) else { return }
         guard hasPersistedSnapshot else {
             backupStatus.lastErrorDescription = Bundle.main.localizedString(forKey: "backup.error.no_local_data", value: nil, table: nil)
             return
@@ -115,12 +125,14 @@ final class AppStore {
     }
 
     func prepareManualRestore() async {
+        guard ensureCloudBackupAvailable(showError: true) else { return }
         backupStatus.lastErrorDescription = nil
         let result = await backupCoordinator.manualRestorePrompt()
         applyBackupSyncResult(result, allowRestorePrompt: true)
     }
 
     func confirmPendingRestore() async {
+        guard ensureCloudBackupAvailable(showError: true) else { return }
         guard pendingRestorePrompt != nil else {
             return
         }
@@ -145,6 +157,10 @@ final class AppStore {
     }
 
     func dismissPendingRestorePrompt() async {
+        guard ensureCloudBackupAvailable() else {
+            pendingRestorePrompt = nil
+            return
+        }
         guard let prompt = pendingRestorePrompt else {
             return
         }
@@ -418,6 +434,25 @@ final class AppStore {
         if allowRestorePrompt {
             pendingRestorePrompt = result.restorePrompt
         }
+    }
+
+    private func ensureCloudBackupAvailable(showError: Bool = false) -> Bool {
+        guard cloudBackupSupported else {
+            backupStatus.availability = .temporarilyUnavailable
+            backupStatus.isBackupInProgress = false
+            backupStatus.isRestoreInProgress = false
+            pendingRestorePrompt = nil
+            if showError {
+                backupStatus.lastErrorDescription = Bundle.main.localizedString(
+                    forKey: "backup.error.unavailable",
+                    value: nil,
+                    table: nil
+                )
+            }
+            return false
+        }
+
+        return true
     }
 
     private func normalizedSnapshot(from snapshot: AppSnapshot) -> AppSnapshot {
