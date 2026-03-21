@@ -122,8 +122,11 @@ final class AppStore {
         do {
             backupStatus.lastErrorDescription = nil
             backupStatus = try await backupCoordinator.selectBackupFolder(url)
-            persistCurrentSnapshotIfNeeded()
-            await performBackup(showErrors: true)
+            let shouldCreateImmediateBackup = hasPersistedSnapshot || backupStatus.latestBackup == nil
+            if shouldCreateImmediateBackup {
+                persistCurrentSnapshotIfNeeded()
+                await performBackup(showErrors: true)
+            }
         } catch {
             backupStatus.lastErrorDescription = (error as? LocalizedError)?.errorDescription ?? (error as NSError).localizedDescription
             backupStatus = await backupCoordinator.refreshStatus()
