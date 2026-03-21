@@ -14,7 +14,7 @@ final class AppStore {
     var profile: UserProfile
     var selectedTab: RootTab = .programs
     var backupStatus: BackupStatus
-    var shouldPromptForBackupSetup: Bool
+    var shouldPromptForBackupSetup = false
 
     var canBackupNow: Bool {
         backupStatus.canBackupNow
@@ -59,7 +59,6 @@ final class AppStore {
         self.localSnapshotModifiedAt = storedSnapshot?.modifiedAt
         Bundle.overrideLocalization(languageCode: selectedLanguageCode)
         self.backupStatus = BackupCoordinator.initialStatus()
-        self.shouldPromptForBackupSetup = Self.shouldPromptForBackupSetup(defaults: defaults, backupStatus: backupStatus)
     }
 
     func currentSnapshot() -> AppSnapshot {

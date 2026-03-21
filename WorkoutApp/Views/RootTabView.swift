@@ -16,6 +16,7 @@ enum AppTheme {
     static let neonOrange = Color(red: 0.98, green: 0.48, blue: 0.26)
 }
 
+@MainActor
 struct RootTabView: View {
     @Environment(AppStore.self) private var store
     @State private var showBackupSetupPrompt = false

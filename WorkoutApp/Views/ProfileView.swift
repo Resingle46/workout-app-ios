@@ -2,6 +2,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 import UIKit
 
+@MainActor
 struct ProfileView: View {
     @Environment(AppStore.self) private var store
     @State private var activePicker: ProfilePickerField?
@@ -100,6 +101,7 @@ struct ProfileView: View {
     }
 }
 
+@MainActor
 private struct BackupControlsCard: View {
     @Environment(AppStore.self) private var store
     @State private var pickerMode: BackupDocumentPickerMode?
@@ -403,6 +405,7 @@ enum BackupDocumentPickerMode: String, Identifiable {
     var id: String { rawValue }
 }
 
+@MainActor
 enum BackupRestoreRequest: Identifiable {
     case latest
     case importFile(URL)
