@@ -3,12 +3,9 @@ import SwiftUI
 struct ActiveWorkoutView: View {
     @Environment(AppStore.self) private var store
 
-    @State private var now = Date()
     @State private var scrollOffset: CGFloat = 0
     @State private var presentedSummary: PresentedWorkoutSummary?
     @FocusState private var focusedField: WorkoutSetField?
-
-    private let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
         Group {
@@ -99,7 +96,6 @@ struct ActiveWorkoutView: View {
                 }
             }
             .onPreferenceChange(WorkoutScrollOffsetPreferenceKey.self) { scrollOffset = $0 }
-            .onReceive(timer) { now = $0 }
             .appScreenBackground()
         }
     }
@@ -252,14 +248,16 @@ struct ActiveWorkoutView: View {
 
                 HStack(spacing: 12) {
                     WorkoutMetricPanel(
-                        title: NSLocalizedString("workout.duration", comment: ""),
-                        value: durationValue(for: session)
-                    )
+                        title: NSLocalizedString("workout.duration", comment: "")
+                    ) {
+                        WorkoutDurationText(startedAt: session.startedAt)
+                    }
 
                     WorkoutMetricPanel(
-                        title: NSLocalizedString("workout.rest_live", comment: ""),
-                        value: liveRestValue(for: session)
-                    )
+                        title: NSLocalizedString("workout.rest_live", comment: "")
+                    ) {
+                        WorkoutLiveRestText(session: session)
+                    }
                 }
             }
         }
@@ -271,11 +269,8 @@ struct ActiveWorkoutView: View {
                 Text("workout.rest_live")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(AppTheme.secondaryText)
-                Text(liveRestValue(for: session))
+                WorkoutLiveRestText(session: session)
                     .font(.headline.weight(.heavy))
-                    .monospacedDigit()
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
             }
 
             Spacer()
@@ -284,11 +279,8 @@ struct ActiveWorkoutView: View {
                 Text("workout.duration")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(AppTheme.secondaryText)
-                Text(durationValue(for: session))
+                WorkoutDurationText(startedAt: session.startedAt)
                     .font(.headline.weight(.heavy))
-                    .monospacedDigit()
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
             }
         }
         .padding(.horizontal, 18)
@@ -298,12 +290,6 @@ struct ActiveWorkoutView: View {
             RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .stroke(Color.white.opacity(0.12), lineWidth: 1)
         )
-    }
-
-    private func liveRestValue(for session: WorkoutSession) -> String {
-        let lastDate = session.exercises.flatMap(\.sets).compactMap(\.completedAt).max()
-        guard let lastDate else { return NSLocalizedString("common.no_data", comment: "") }
-        return DateComponentsFormatter.workoutRest.string(from: lastDate, to: now) ?? "00:00"
     }
 
     private func restSummary(for exercise: WorkoutExerciseLog) -> String {
@@ -320,14 +306,6 @@ struct ActiveWorkoutView: View {
               let last = completed.last,
               let previous = completed.dropLast().last else { return nil }
         return DateComponentsFormatter.workoutRest.string(from: previous, to: last)
-    }
-
-    private func durationValue(for session: WorkoutSession) -> String {
-        let interval = now.timeIntervalSince(session.startedAt)
-        if interval >= 3600 {
-            return DateComponentsFormatter.workoutDurationLong.string(from: session.startedAt, to: now) ?? "00:00"
-        }
-        return DateComponentsFormatter.workoutDurationShort.string(from: session.startedAt, to: now) ?? "00:00"
     }
 
     private func workoutProgress(for session: WorkoutSession) -> WorkoutExerciseProgress {
@@ -496,6 +474,49 @@ private struct WorkoutHeroCard<Content: View>: View {
         }
         .opacity(0.95)
         .allowsHitTesting(false)
+    }
+}
+
+private struct WorkoutDurationText: View {
+    let startedAt: Date
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            let now = context.date
+            let interval = now.timeIntervalSince(startedAt)
+            let value: String
+            if interval >= 3600 {
+                value = DateComponentsFormatter.workoutDurationLong.string(from: startedAt, to: now) ?? "00:00"
+            } else {
+                value = DateComponentsFormatter.workoutDurationShort.string(from: startedAt, to: now) ?? "00:00"
+            }
+
+            Text(value)
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+        }
+    }
+}
+
+private struct WorkoutLiveRestText: View {
+    let session: WorkoutSession
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            let lastDate = session.exercises.flatMap(\.sets).compactMap(\.completedAt).max()
+            let value: String
+            if let lastDate {
+                value = DateComponentsFormatter.workoutRest.string(from: lastDate, to: context.date) ?? "00:00"
+            } else {
+                value = NSLocalizedString("common.no_data", comment: "")
+            }
+
+            Text(value)
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+        }
     }
 }
 
@@ -879,9 +900,14 @@ private struct WorkoutFinishButtonStyle: ButtonStyle {
     }
 }
 
-private struct WorkoutMetricPanel: View {
+private struct WorkoutMetricPanel<Content: View>: View {
     let title: String
-    let value: String
+    let content: Content
+
+    init(title: String, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.content = content()
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -889,11 +915,8 @@ private struct WorkoutMetricPanel: View {
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(AppTheme.secondaryText)
                 .lineLimit(3)
-            Text(value)
+            content
                 .font(.system(size: 22, weight: .bold, design: .rounded))
-                .monospacedDigit()
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
         }
         .padding(16)
         .frame(maxWidth: .infinity, minHeight: 118, maxHeight: 118, alignment: .topLeading)

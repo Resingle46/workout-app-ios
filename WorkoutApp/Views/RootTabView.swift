@@ -183,6 +183,8 @@ private struct AppScreenBackgroundModifier: ViewModifier {
 }
 
 private struct AppAmbientBackground: View {
+    @State private var driftForward = false
+
     var body: some View {
         GeometryReader { proxy in
             let width = proxy.size.width
@@ -201,61 +203,75 @@ private struct AppAmbientBackground: View {
 
                 ambientBlob(
                     colors: [
-                        AppTheme.neonOrange.opacity(0.2),
-                        AppTheme.neonViolet.opacity(0.12),
+                        AppTheme.neonOrange.opacity(0.28),
+                        AppTheme.neonViolet.opacity(0.18),
                         Color.clear
                     ],
-                    size: CGSize(width: width * 0.92, height: height * 0.42),
-                    offset: CGSize(width: -width * 0.28, height: -height * 0.2),
-                    blur: 120
+                    size: CGSize(width: width * 1.35, height: height * 0.6),
+                    startOffset: CGSize(width: -width * 0.58, height: -height * 0.28),
+                    endOffset: CGSize(width: width * 0.18, height: -height * 0.2),
+                    blur: 126,
+                    driftForward: driftForward
                 )
 
                 ambientBlob(
                     colors: [
-                        AppTheme.neonBlue.opacity(0.18),
+                        AppTheme.neonBlue.opacity(0.24),
+                        AppTheme.neonCyan.opacity(0.16),
+                        Color.clear
+                    ],
+                    size: CGSize(width: width * 1.1, height: height * 0.52),
+                    startOffset: CGSize(width: width * 0.54, height: -height * 0.18),
+                    endOffset: CGSize(width: -width * 0.12, height: -height * 0.04),
+                    blur: 118,
+                    driftForward: driftForward
+                )
+
+                ambientBlob(
+                    colors: [
+                        AppTheme.neonViolet.opacity(0.2),
+                        AppTheme.neonBlue.opacity(0.14),
+                        Color.clear
+                    ],
+                    size: CGSize(width: width * 1.28, height: height * 0.58),
+                    startOffset: CGSize(width: -width * 0.18, height: height * 0.48),
+                    endOffset: CGSize(width: width * 0.28, height: height * 0.24),
+                    blur: 136,
+                    driftForward: driftForward
+                )
+
+                ambientBlob(
+                    colors: [
+                        AppTheme.neonLime.opacity(0.14),
                         AppTheme.neonCyan.opacity(0.12),
                         Color.clear
                     ],
-                    size: CGSize(width: width * 0.78, height: height * 0.34),
-                    offset: CGSize(width: width * 0.34, height: -height * 0.1),
-                    blur: 112
-                )
-
-                ambientBlob(
-                    colors: [
-                        AppTheme.neonViolet.opacity(0.16),
-                        AppTheme.neonBlue.opacity(0.1),
-                        Color.clear
-                    ],
-                    size: CGSize(width: width * 1.05, height: height * 0.38),
-                    offset: CGSize(width: -width * 0.08, height: height * 0.36),
-                    blur: 132
-                )
-
-                ambientBlob(
-                    colors: [
-                        AppTheme.neonLime.opacity(0.08),
-                        AppTheme.neonCyan.opacity(0.06),
-                        Color.clear
-                    ],
-                    size: CGSize(width: width * 0.62, height: height * 0.24),
-                    offset: CGSize(width: width * 0.2, height: height * 0.24),
-                    blur: 96
+                    size: CGSize(width: width * 0.94, height: height * 0.38),
+                    startOffset: CGSize(width: width * 0.42, height: height * 0.12),
+                    endOffset: CGSize(width: -width * 0.08, height: height * 0.3),
+                    blur: 104,
+                    driftForward: driftForward
                 )
 
                 LinearGradient(
                     colors: [
-                        Color.black.opacity(0.18),
-                        AppTheme.background.opacity(0.56),
-                        Color.black.opacity(0.34)
+                        Color.black.opacity(0.1),
+                        AppTheme.background.opacity(0.36),
+                        Color.black.opacity(0.22)
                     ],
                     startPoint: .top,
                     endPoint: .bottom
                 )
 
-                Color.black.opacity(0.14)
+                Color.black.opacity(0.08)
             }
             .ignoresSafeArea()
+            .onAppear {
+                guard !driftForward else { return }
+                withAnimation(.easeInOut(duration: 28).repeatForever(autoreverses: true)) {
+                    driftForward = true
+                }
+            }
         }
         .allowsHitTesting(false)
     }
@@ -263,8 +279,10 @@ private struct AppAmbientBackground: View {
     private func ambientBlob(
         colors: [Color],
         size: CGSize,
-        offset: CGSize,
-        blur: CGFloat
+        startOffset: CGSize,
+        endOffset: CGSize,
+        blur: CGFloat,
+        driftForward: Bool
     ) -> some View {
         Ellipse()
             .fill(
@@ -276,8 +294,9 @@ private struct AppAmbientBackground: View {
                 )
             )
             .frame(width: size.width, height: size.height)
-            .offset(offset)
+            .offset(driftForward ? endOffset : startOffset)
             .blur(radius: blur)
+            .blendMode(.screen)
     }
 }
 
