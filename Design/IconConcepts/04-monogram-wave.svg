@@ -1,0 +1,45 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="110" y1="98" x2="920" y2="936" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#090B11"/>
+      <stop offset="0.52" stop-color="#151228"/>
+      <stop offset="1" stop-color="#05060A"/>
+    </linearGradient>
+    <radialGradient id="violetGlow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(290 308) rotate(35) scale(420 320)">
+      <stop stop-color="#8C33FF" stop-opacity="0.34"/>
+      <stop offset="1" stop-color="#8C33FF" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="limeGlow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(724 706) rotate(35) scale(388 296)">
+      <stop stop-color="#BAFF40" stop-opacity="0.2"/>
+      <stop offset="1" stop-color="#BAFF40" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="wStroke" x1="168" y1="282" x2="856" y2="748" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#8C33FF"/>
+      <stop offset="0.36" stop-color="#365CFF"/>
+      <stop offset="0.7" stop-color="#38E0F5"/>
+      <stop offset="1" stop-color="#BAFF40"/>
+    </linearGradient>
+    <filter id="wGlow" x="72" y="146" width="880" height="708" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="34"/>
+    </filter>
+  </defs>
+
+  <rect width="1024" height="1024" rx="224" fill="url(#bg)"/>
+  <rect width="1024" height="1024" rx="224" fill="url(#violetGlow)"/>
+  <rect width="1024" height="1024" rx="224" fill="url(#limeGlow)"/>
+
+  <rect x="142" y="142" width="740" height="740" rx="180" stroke="white" stroke-opacity="0.08" stroke-width="8"/>
+
+  <g opacity="0.48" filter="url(#wGlow)">
+    <path d="M172 276L344 744L512 392L680 744L852 276" stroke="url(#wStroke)" stroke-width="140" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+
+  <path d="M172 276L344 744L512 392L680 744L852 276" stroke="url(#wStroke)" stroke-width="132" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M172 276L344 744L512 392L680 744L852 276" stroke="white" stroke-opacity="0.14" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <circle cx="512" cy="392" r="26" fill="#F5FAFF"/>
+  <circle cx="512" cy="392" r="10" fill="#0A0D13"/>
+
+  <circle cx="344" cy="744" r="18" fill="white" fill-opacity="0.16"/>
+  <circle cx="680" cy="744" r="18" fill="white" fill-opacity="0.16"/>
+</svg>

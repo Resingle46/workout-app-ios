@@ -1,0 +1,60 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="118" y1="92" x2="910" y2="936" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#080A0F"/>
+      <stop offset="0.46" stop-color="#121729"/>
+      <stop offset="1" stop-color="#05060A"/>
+    </linearGradient>
+    <radialGradient id="blueGlow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(240 768) rotate(15) scale(410 340)">
+      <stop stop-color="#365CFF" stop-opacity="0.26"/>
+      <stop offset="1" stop-color="#365CFF" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="cyanGlow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(774 298) rotate(35) scale(360 310)">
+      <stop stop-color="#38E0F5" stop-opacity="0.3"/>
+      <stop offset="1" stop-color="#38E0F5" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="track" x1="192" y1="742" x2="822" y2="286" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#8C33FF"/>
+      <stop offset="0.42" stop-color="#365CFF"/>
+      <stop offset="0.78" stop-color="#38E0F5"/>
+      <stop offset="1" stop-color="#BAFF40"/>
+    </linearGradient>
+    <linearGradient id="plateFill" x1="218" y1="694" x2="808" y2="296" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#EFF4FF"/>
+      <stop offset="1" stop-color="#9AA8BD"/>
+    </linearGradient>
+    <filter id="trackGlow" x="98" y="176" width="830" height="644" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="34"/>
+    </filter>
+  </defs>
+
+  <rect width="1024" height="1024" rx="224" fill="url(#bg)"/>
+  <rect width="1024" height="1024" rx="224" fill="url(#blueGlow)"/>
+  <rect width="1024" height="1024" rx="224" fill="url(#cyanGlow)"/>
+
+  <g opacity="0.42" filter="url(#trackGlow)">
+    <path d="M190 710C276 710 326 660 390 590C456 518 500 478 566 452C640 422 702 420 820 292" stroke="url(#track)" stroke-width="74" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+
+  <path d="M190 710C276 710 326 660 390 590C456 518 500 478 566 452C640 422 702 420 820 292" stroke="url(#track)" stroke-width="72" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M190 710C276 710 326 660 390 590C456 518 500 478 566 452C640 422 702 420 820 292" stroke="white" stroke-opacity="0.1" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <g>
+    <circle cx="282" cy="708" r="88" fill="url(#plateFill)"/>
+    <circle cx="520" cy="500" r="104" fill="url(#plateFill)"/>
+    <circle cx="760" cy="332" r="118" fill="url(#plateFill)"/>
+  </g>
+
+  <g stroke="white" stroke-opacity="0.14" stroke-width="2">
+    <circle cx="282" cy="708" r="88"/>
+    <circle cx="520" cy="500" r="104"/>
+    <circle cx="760" cy="332" r="118"/>
+  </g>
+
+  <circle cx="282" cy="708" r="28" fill="#0A0D13"/>
+  <circle cx="520" cy="500" r="34" fill="#0A0D13"/>
+  <circle cx="760" cy="332" r="40" fill="#0A0D13"/>
+
+  <rect x="778" y="240" width="132" height="28" rx="14" transform="rotate(-38 778 240)" fill="#F3FAFF" fill-opacity="0.94"/>
+  <rect x="126" y="772" width="152" height="16" rx="8" fill="white" fill-opacity="0.12"/>
+</svg>

@@ -1,0 +1,73 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="124" y1="88" x2="924" y2="936" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#090B10"/>
+      <stop offset="0.48" stop-color="#111522"/>
+      <stop offset="1" stop-color="#05070A"/>
+    </linearGradient>
+    <radialGradient id="violetGlow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(282 250) rotate(35) scale(420 360)">
+      <stop stop-color="#8C33FF" stop-opacity="0.3"/>
+      <stop offset="1" stop-color="#8C33FF" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="cyanGlow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(744 790) rotate(25) scale(410 372)">
+      <stop stop-color="#38E0F5" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#38E0F5" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="steel" x1="512" y1="156" x2="512" y2="868" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#EEF3FF"/>
+      <stop offset="1" stop-color="#9AA7BC"/>
+    </linearGradient>
+    <linearGradient id="plateA" x1="170" y1="260" x2="854" y2="748" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#8C33FF"/>
+      <stop offset="0.46" stop-color="#365CFF"/>
+      <stop offset="1" stop-color="#38E0F5"/>
+    </linearGradient>
+    <linearGradient id="plateB" x1="170" y1="320" x2="854" y2="800" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#DDE5F7"/>
+      <stop offset="1" stop-color="#8997AE"/>
+    </linearGradient>
+    <filter id="plateGlow" x="90" y="180" width="844" height="644" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="28"/>
+    </filter>
+  </defs>
+
+  <rect width="1024" height="1024" rx="224" fill="url(#bg)"/>
+  <rect width="1024" height="1024" rx="224" fill="url(#violetGlow)"/>
+  <rect width="1024" height="1024" rx="224" fill="url(#cyanGlow)"/>
+
+  <g opacity="0.34" filter="url(#plateGlow)">
+    <rect x="170" y="610" width="684" height="138" rx="69" fill="url(#plateA)"/>
+    <rect x="220" y="420" width="584" height="112" rx="56" fill="url(#plateA)"/>
+    <rect x="280" y="260" width="464" height="90" rx="45" fill="url(#plateA)"/>
+  </g>
+
+  <rect x="482" y="148" width="60" height="728" rx="30" fill="url(#steel)"/>
+  <rect x="482" y="148" width="60" height="728" rx="30" stroke="white" stroke-opacity="0.14" stroke-width="2"/>
+
+  <rect x="444" y="112" width="136" height="44" rx="22" fill="#0E121A"/>
+  <rect x="444" y="868" width="136" height="44" rx="22" fill="#0E121A"/>
+  <rect x="444" y="112" width="136" height="44" rx="22" stroke="white" stroke-opacity="0.08" stroke-width="2"/>
+  <rect x="444" y="868" width="136" height="44" rx="22" stroke="white" stroke-opacity="0.08" stroke-width="2"/>
+
+  <g>
+    <rect x="280" y="260" width="170" height="90" rx="45" fill="url(#plateB)"/>
+    <rect x="574" y="260" width="170" height="90" rx="45" fill="url(#plateB)"/>
+    <rect x="220" y="420" width="230" height="112" rx="56" fill="url(#plateA)"/>
+    <rect x="574" y="420" width="230" height="112" rx="56" fill="url(#plateA)"/>
+    <rect x="170" y="610" width="280" height="138" rx="69" fill="url(#plateB)"/>
+    <rect x="574" y="610" width="280" height="138" rx="69" fill="url(#plateB)"/>
+  </g>
+
+  <g stroke="white" stroke-opacity="0.14" stroke-width="2">
+    <rect x="280" y="260" width="170" height="90" rx="45"/>
+    <rect x="574" y="260" width="170" height="90" rx="45"/>
+    <rect x="220" y="420" width="230" height="112" rx="56"/>
+    <rect x="574" y="420" width="230" height="112" rx="56"/>
+    <rect x="170" y="610" width="280" height="138" rx="69"/>
+    <rect x="574" y="610" width="280" height="138" rx="69"/>
+  </g>
+
+  <circle cx="512" cy="305" r="12" fill="#0A0D13"/>
+  <circle cx="512" cy="476" r="12" fill="#0A0D13"/>
+  <circle cx="512" cy="679" r="12" fill="#0A0D13"/>
+</svg>
