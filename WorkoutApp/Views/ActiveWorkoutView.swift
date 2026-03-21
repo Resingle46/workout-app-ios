@@ -436,7 +436,7 @@ private struct WorkoutExerciseInfoRow: View {
     }
 }
 
-struct WorkoutSetRow: View {
+private struct WorkoutSetRow: View {
     @Environment(AppStore.self) private var store
 
     let exerciseIndex: Int
