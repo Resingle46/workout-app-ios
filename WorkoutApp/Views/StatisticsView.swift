@@ -99,6 +99,7 @@ struct StatisticsView: View {
                 }
             }
             .padding(20)
+            .padding(.bottom, 24)
         }
         .onAppear {
             if selectedExerciseID == nil {
@@ -106,6 +107,9 @@ struct StatisticsView: View {
             }
         }
         .navigationBarTitleDisplayMode(.inline)
+        .toolbarColorScheme(.dark, for: .tabBar)
+        .toolbarBackground(.visible, for: .tabBar)
+        .toolbarBackground(AppTheme.surface, for: .tabBar)
         .appScreenBackground()
     }
 

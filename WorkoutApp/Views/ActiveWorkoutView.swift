@@ -6,7 +6,6 @@ struct ActiveWorkoutView: View {
     @State private var now = Date()
     @State private var scrollOffset: CGFloat = 0
     @State private var presentedSummary: PresentedWorkoutSummary?
-    @State private var pendingAutoScrollTarget: CurrentWorkoutSetPosition?
     @FocusState private var focusedField: WorkoutSetField?
 
     private let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
@@ -86,7 +85,8 @@ struct ActiveWorkoutView: View {
             ScrollView {
                 activeSessionScrollContent(
                     for: session,
-                    currentSetPosition: currentSetPosition
+                    currentSetPosition: currentSetPosition,
+                    onMarkedDone: { scrollToCurrentSet(using: proxy) }
                 )
             }
             .coordinateSpace(name: "workout-scroll")
@@ -98,19 +98,6 @@ struct ActiveWorkoutView: View {
                         .transition(.move(edge: .top).combined(with: .opacity))
                 }
             }
-            .onChange(of: pendingAutoScrollTarget) { _, newValue in
-                guard let newValue else { return }
-                DispatchQueue.main.async {
-                    withAnimation(.easeInOut(duration: 0.32)) {
-                        proxy.scrollTo(newValue, anchor: .center)
-                    }
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                        if pendingAutoScrollTarget == newValue {
-                            pendingAutoScrollTarget = nil
-                        }
-                    }
-                }
-            }
             .onPreferenceChange(WorkoutScrollOffsetPreferenceKey.self) { scrollOffset = $0 }
             .onReceive(timer) { now = $0 }
             .appScreenBackground()
@@ -119,12 +106,13 @@ struct ActiveWorkoutView: View {
 
     private func activeSessionScrollContent(
         for session: WorkoutSession,
-        currentSetPosition: CurrentWorkoutSetPosition?
+        currentSetPosition: CurrentWorkoutSetPosition?,
+        onMarkedDone: @escaping () -> Void
     ) -> some View {
         VStack(alignment: .leading, spacing: 18) {
             scrollOffsetReader
             expandedHeader(for: session)
-            exerciseList(for: session, currentSetPosition: currentSetPosition)
+            exerciseList(for: session, currentSetPosition: currentSetPosition, onMarkedDone: onMarkedDone)
             finishWorkoutCTA
         }
         .padding(.horizontal, 20)
@@ -134,7 +122,8 @@ struct ActiveWorkoutView: View {
 
     private func exerciseList(
         for session: WorkoutSession,
-        currentSetPosition: CurrentWorkoutSetPosition?
+        currentSetPosition: CurrentWorkoutSetPosition?,
+        onMarkedDone: @escaping () -> Void
     ) -> some View {
         LazyVStack(spacing: 16) {
             ForEach(Array(session.exercises.enumerated()), id: \.element.id) { exerciseIndex, item in
@@ -144,7 +133,8 @@ struct ActiveWorkoutView: View {
                         item: item,
                         session: session,
                         exerciseIndex: exerciseIndex,
-                        currentSetPosition: currentSetPosition
+                        currentSetPosition: currentSetPosition,
+                        onMarkedDone: onMarkedDone
                     )
                 }
             }
@@ -156,7 +146,8 @@ struct ActiveWorkoutView: View {
         item: WorkoutExerciseLog,
         session: WorkoutSession,
         exerciseIndex: Int,
-        currentSetPosition: CurrentWorkoutSetPosition?
+        currentSetPosition: CurrentWorkoutSetPosition?,
+        onMarkedDone: @escaping () -> Void
     ) -> some View {
         AppCard {
             VStack(alignment: .leading, spacing: 16) {
@@ -185,7 +176,8 @@ struct ActiveWorkoutView: View {
                 setRows(
                     for: item,
                     exerciseIndex: exerciseIndex,
-                    currentSetPosition: currentSetPosition
+                    currentSetPosition: currentSetPosition,
+                    onMarkedDone: onMarkedDone
                 )
 
                 Button {
@@ -212,7 +204,8 @@ struct ActiveWorkoutView: View {
     private func setRows(
         for item: WorkoutExerciseLog,
         exerciseIndex: Int,
-        currentSetPosition: CurrentWorkoutSetPosition?
+        currentSetPosition: CurrentWorkoutSetPosition?,
+        onMarkedDone: @escaping () -> Void
     ) -> some View {
         ForEach(Array(item.sets.enumerated()), id: \.element.id) { setIndex, set in
             WorkoutSetRow(
@@ -225,7 +218,7 @@ struct ActiveWorkoutView: View {
                     setIndex: setIndex
                 ),
                 focusedField: $focusedField,
-                onMarkedDone: queueAutoScrollUpdate
+                onMarkedDone: onMarkedDone
             )
             .id(CurrentWorkoutSetPosition(exerciseIndex: exerciseIndex, setIndex: setIndex))
         }
@@ -375,13 +368,6 @@ struct ActiveWorkoutView: View {
         currentSetPosition?.exerciseIndex == exerciseIndex && currentSetPosition?.setIndex == setIndex
     }
 
-    private func queueAutoScrollUpdate() {
-        DispatchQueue.main.async {
-            guard let updatedSession = store.activeSession else { return }
-            pendingAutoScrollTarget = currentSetPosition(in: updatedSession)
-        }
-    }
-
     private func currentSetPosition(in session: WorkoutSession) -> CurrentWorkoutSetPosition? {
         for (exerciseIndex, exercise) in session.exercises.enumerated() {
             if let setIndex = exercise.sets.firstIndex(where: { $0.completedAt == nil }) {
@@ -390,6 +376,16 @@ struct ActiveWorkoutView: View {
         }
 
         return nil
+    }
+
+    private func scrollToCurrentSet(using proxy: ScrollViewProxy) {
+        DispatchQueue.main.async {
+            guard let updatedSession = store.activeSession,
+                  let target = currentSetPosition(in: updatedSession) else { return }
+            withAnimation(.easeInOut(duration: 0.32)) {
+                proxy.scrollTo(target, anchor: .center)
+            }
+        }
     }
 }
 
