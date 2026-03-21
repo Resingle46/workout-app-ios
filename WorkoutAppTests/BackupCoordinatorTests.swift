@@ -29,102 +29,85 @@ final class BackupCoordinatorTests: XCTestCase {
         )
     }
 
-    func testAutomaticUploadRequiresMissingOrStaleCloudBackup() {
-        let now = Date(timeIntervalSince1970: 1_710_000_000)
+    func testBackupWritesJSONFileToSelectedFolder() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanup() }
 
-        XCTAssertFalse(
-            BackupPolicy.shouldUploadAutomatically(
-                localSnapshotExists: false,
-                snapshotHash: "hash-a",
-                latestCloudBackup: nil,
-                now: now
-            )
-        )
+        let status = try await fixture.coordinator.selectBackupFolder(fixture.folderURL)
+        XCTAssertEqual(status.availability, .ready)
 
-        XCTAssertFalse(
-            BackupPolicy.shouldUploadAutomatically(
-                localSnapshotExists: true,
-                snapshotHash: "hash-a",
-                latestCloudBackup: BackupMetadata(
-                    createdAt: now.addingTimeInterval(-4_000),
-                    snapshotHash: "hash-a",
-                    schemaVersion: 1,
-                    appVersion: "1.0",
-                    buildNumber: "1"
-                ),
-                now: now
-            )
-        )
+        let backupStatus = await fixture.coordinator.backupNow(snapshot: makeSnapshot())
+        let files = try backupFiles(in: fixture.folderURL)
 
-        XCTAssertTrue(
-            BackupPolicy.shouldUploadAutomatically(
-                localSnapshotExists: true,
-                snapshotHash: "hash-b",
-                latestCloudBackup: BackupMetadata(
-                    createdAt: now.addingTimeInterval(-(25 * 60 * 60)),
-                    snapshotHash: "hash-a",
-                    schemaVersion: 1,
-                    appVersion: "1.0",
-                    buildNumber: "1"
-                ),
-                now: now
-            )
-        )
+        XCTAssertEqual(files.count, 1)
+        XCTAssertEqual(backupStatus.latestBackup?.fileName, files.first?.lastPathComponent)
+        XCTAssertEqual(backupStatus.availability, .ready)
     }
 
-    func testRestorePromptIsShownForMissingLocalSnapshot() {
-        let cloudBackup = BackupMetadata(
-            createdAt: Date(timeIntervalSince1970: 1_710_000_000),
-            snapshotHash: "hash-a",
-            schemaVersion: 1,
-            appVersion: "1.0",
-            buildNumber: "1"
-        )
+    func testRotationKeepsOnlyThreeLatestBackups() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanup() }
 
-        let prompt = BackupPolicy.restorePrompt(
-            localSnapshotExists: false,
-            localSnapshotModifiedAt: nil,
-            cloudBackup: cloudBackup,
-            dismissedSnapshotHash: nil
-        )
+        _ = try await fixture.coordinator.selectBackupFolder(fixture.folderURL)
 
-        XCTAssertEqual(prompt?.kind, .emptyLocal)
+        for index in 0..<4 {
+            fixture.clock.currentDate = Date(timeIntervalSince1970: 1_710_000_000 + TimeInterval(index * 60))
+            var snapshot = makeSnapshot()
+            snapshot.profile.age += index
+            _ = await fixture.coordinator.backupNow(snapshot: snapshot)
+        }
+
+        let files = try backupFiles(in: fixture.folderURL)
+        XCTAssertEqual(files.count, 3)
+        XCTAssertEqual(files.first?.lastPathComponent, "WorkoutApp-backup-2024-03-09-16-03-00.json")
     }
 
-    func testRestorePromptIsShownWhenCloudBackupIsNewerThanLocal() {
-        let prompt = BackupPolicy.restorePrompt(
-            localSnapshotExists: true,
-            localSnapshotModifiedAt: Date(timeIntervalSince1970: 1_710_000_000),
-            cloudBackup: BackupMetadata(
-                createdAt: Date(timeIntervalSince1970: 1_710_000_100),
-                snapshotHash: "hash-a",
-                schemaVersion: 1,
-                appVersion: "1.0",
-                buildNumber: "1"
-            ),
-            dismissedSnapshotHash: nil
-        )
+    func testRestoreLatestReturnsNewestValidSnapshot() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanup() }
 
-        XCTAssertEqual(prompt?.kind, .cloudNewerThanLocal)
+        _ = try await fixture.coordinator.selectBackupFolder(fixture.folderURL)
+
+        var firstSnapshot = makeSnapshot()
+        firstSnapshot.profile.weight = 80
+        fixture.clock.currentDate = Date(timeIntervalSince1970: 1_710_000_000)
+        _ = await fixture.coordinator.backupNow(snapshot: firstSnapshot)
+
+        var secondSnapshot = makeSnapshot()
+        secondSnapshot.profile.weight = 96
+        fixture.clock.currentDate = Date(timeIntervalSince1970: 1_710_000_120)
+        _ = await fixture.coordinator.backupNow(snapshot: secondSnapshot)
+
+        let restored = try await fixture.coordinator.restoreLatestBackup()
+        XCTAssertEqual(restored.snapshot, secondSnapshot)
     }
 
-    func testRestorePromptIsSuppressedAfterDismissalUntilCloudChanges() {
-        let cloudBackup = BackupMetadata(
-            createdAt: Date(timeIntervalSince1970: 1_710_000_100),
-            snapshotHash: "hash-a",
-            schemaVersion: 1,
-            appVersion: "1.0",
-            buildNumber: "1"
-        )
+    func testBackupIsSkippedWhenSnapshotDidNotChange() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanup() }
 
-        let prompt = BackupPolicy.restorePrompt(
-            localSnapshotExists: true,
-            localSnapshotModifiedAt: Date(timeIntervalSince1970: 1_710_000_000),
-            cloudBackup: cloudBackup,
-            dismissedSnapshotHash: "hash-a"
-        )
+        _ = try await fixture.coordinator.selectBackupFolder(fixture.folderURL)
 
-        XCTAssertNil(prompt)
+        let snapshot = makeSnapshot()
+        fixture.clock.currentDate = Date(timeIntervalSince1970: 1_710_000_000)
+        _ = await fixture.coordinator.backupNow(snapshot: snapshot)
+
+        fixture.clock.currentDate = Date(timeIntervalSince1970: 1_710_000_120)
+        _ = await fixture.coordinator.backupNow(snapshot: snapshot)
+
+        let files = try backupFiles(in: fixture.folderURL)
+        XCTAssertEqual(files.count, 1)
+    }
+
+    func testRefreshStatusMarksLostFolderAccess() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanup() }
+
+        _ = try await fixture.coordinator.selectBackupFolder(fixture.folderURL)
+        try FileManager.default.removeItem(at: fixture.folderURL)
+
+        let status = await fixture.coordinator.refreshStatus()
+        XCTAssertEqual(status.availability, .accessLost)
     }
 
     @MainActor
@@ -139,6 +122,42 @@ final class BackupCoordinatorTests: XCTestCase {
         XCTAssertNil(store.activeSession)
         XCTAssertEqual(store.history, snapshot.history.sorted { $0.startedAt > $1.startedAt })
         XCTAssertEqual(store.profile, snapshot.profile)
+    }
+
+    private func backupFiles(in folderURL: URL) throws -> [URL] {
+        try FileManager.default.contentsOfDirectory(
+            at: folderURL,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        )
+        .filter {
+            $0.lastPathComponent.hasPrefix(BackupConstants.filePrefix) &&
+            $0.pathExtension == BackupConstants.fileExtension
+        }
+        .sorted { $0.lastPathComponent > $1.lastPathComponent }
+    }
+
+    private func makeFixture() throws -> BackupTestFixture {
+        let folderURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: folderURL, withIntermediateDirectories: true, attributes: nil)
+
+        let suiteName = "BackupCoordinatorTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        let clock = TestClock(currentDate: Date(timeIntervalSince1970: 1_710_000_000))
+        let coordinator = BackupCoordinator(
+            defaults: defaults,
+            now: { clock.currentDate },
+            fileManager: .default
+        )
+
+        return BackupTestFixture(
+            folderURL: folderURL,
+            defaultsSuiteName: suiteName,
+            defaults: defaults,
+            clock: clock,
+            coordinator: coordinator
+        )
     }
 
     private func makeSnapshot() -> AppSnapshot {
@@ -196,5 +215,26 @@ final class BackupCoordinatorTests: XCTestCase {
             history: [session],
             profile: UserProfile(sex: "M", age: 29, weight: 88, height: 182, appLanguageCode: "en")
         )
+    }
+}
+
+private struct BackupTestFixture {
+    let folderURL: URL
+    let defaultsSuiteName: String
+    let defaults: UserDefaults
+    let clock: TestClock
+    let coordinator: BackupCoordinator
+
+    func cleanup() {
+        try? FileManager.default.removeItem(at: folderURL)
+        defaults.removePersistentDomain(forName: defaultsSuiteName)
+    }
+}
+
+private final class TestClock: @unchecked Sendable {
+    var currentDate: Date
+
+    init(currentDate: Date) {
+        self.currentDate = currentDate
     }
 }

@@ -1,13 +1,5 @@
-import CloudKit
 import CryptoKit
 import Foundation
-
-enum BackupTriggerReason: String, Codable, Sendable {
-    case launch
-    case sceneBackground
-    case backgroundTask
-    case manual
-}
 
 struct BackupEnvelope: Codable, Equatable, Sendable {
     let schemaVersion: Int
@@ -40,51 +32,36 @@ struct BackupMetadata: Equatable, Codable, Sendable {
     let schemaVersion: Int
     let appVersion: String
     let buildNumber: String
+    let fileName: String
 }
 
 struct BackupStatus: Equatable, Sendable {
     enum Availability: Equatable, Sendable {
-        case checking
-        case available
-        case iCloudAccountMissing
-        case restricted
-        case temporarilyUnavailable
+        case notConfigured
+        case ready
+        case accessLost
     }
 
-    var availability: Availability = .checking
-    var latestCloudBackup: BackupMetadata?
+    var availability: Availability = .notConfigured
+    var selectedFolderName: String?
+    var selectedFolderPath: String?
+    var latestBackup: BackupMetadata?
     var lastSuccessfulBackupAt: Date?
     var isBackupInProgress = false
     var isRestoreInProgress = false
     var lastErrorDescription: String?
 
+    var hasSelectedFolder: Bool {
+        selectedFolderName != nil || selectedFolderPath != nil
+    }
+
     var canBackupNow: Bool {
-        availability == .available && !isBackupInProgress && !isRestoreInProgress
+        availability == .ready && !isBackupInProgress && !isRestoreInProgress
     }
 
-    var canRestore: Bool {
-        availability == .available && !isBackupInProgress && !isRestoreInProgress
+    var canRestoreLatest: Bool {
+        availability == .ready && latestBackup != nil && !isBackupInProgress && !isRestoreInProgress
     }
-}
-
-struct BackupRestorePrompt: Identifiable, Equatable, Sendable {
-    enum Kind: String, Sendable {
-        case emptyLocal
-        case cloudNewerThanLocal
-        case manualRestore
-    }
-
-    let kind: Kind
-    let metadata: BackupMetadata
-
-    var id: String {
-        "\(kind.rawValue)-\(metadata.snapshotHash)"
-    }
-}
-
-struct BackupSyncResult: Sendable {
-    var status: BackupStatus
-    var restorePrompt: BackupRestorePrompt?
 }
 
 enum BackupHashing {
@@ -97,70 +74,11 @@ enum BackupHashing {
     }
 }
 
-enum BackupPolicy {
-    static let automaticUploadInterval: TimeInterval = 24 * 60 * 60
-
-    static func shouldUploadAutomatically(
-        localSnapshotExists: Bool,
-        snapshotHash: String,
-        latestCloudBackup: BackupMetadata?,
-        now: Date,
-        minimumInterval: TimeInterval = automaticUploadInterval
-    ) -> Bool {
-        guard localSnapshotExists else {
-            return false
-        }
-
-        if latestCloudBackup?.snapshotHash == snapshotHash {
-            return false
-        }
-
-        guard let latestCloudBackup else {
-            return true
-        }
-
-        return now.timeIntervalSince(latestCloudBackup.createdAt) >= minimumInterval
-    }
-
-    static func restorePrompt(
-        localSnapshotExists: Bool,
-        localSnapshotModifiedAt: Date?,
-        cloudBackup: BackupMetadata?,
-        dismissedSnapshotHash: String?
-    ) -> BackupRestorePrompt? {
-        guard let cloudBackup else {
-            return nil
-        }
-
-        guard dismissedSnapshotHash != cloudBackup.snapshotHash else {
-            return nil
-        }
-
-        if !localSnapshotExists {
-            return BackupRestorePrompt(kind: .emptyLocal, metadata: cloudBackup)
-        }
-
-        guard let localSnapshotModifiedAt, cloudBackup.createdAt > localSnapshotModifiedAt else {
-            return nil
-        }
-
-        return BackupRestorePrompt(kind: .cloudNewerThanLocal, metadata: cloudBackup)
-    }
-}
-
 enum BackupConstants {
     static let schemaVersion = 1
-    static let recordType = "WorkoutBackup"
-    static let recordName = "latestBackup"
-    static let payloadField = "payload"
-    static let createdAtField = "createdAt"
-    static let snapshotHashField = "snapshotHash"
-    static let schemaVersionField = "schemaVersion"
-    static let appVersionField = "appVersion"
-    static let buildNumberField = "buildNumber"
-    static var backgroundTaskIdentifier: String {
-        "\(Bundle.main.bundleIdentifier ?? "com.example.WorkoutApp").daily-backup"
-    }
+    static let filePrefix = "WorkoutApp-backup-"
+    static let fileExtension = "json"
+    static let maxBackupFiles = 3
 
     static var appVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
@@ -169,319 +87,286 @@ enum BackupConstants {
     static var buildNumber: String {
         Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
     }
-
 }
 
 actor BackupCoordinator {
-    static var isRuntimeAvailable: Bool {
-        (Bundle.main.object(forInfoDictionaryKey: "CloudBackupFeatureEnabled") as? Bool) == true
-    }
-
-    private let container: CKContainer
-    private let database: CKDatabase
     private let defaults: UserDefaults
     private let now: @Sendable () -> Date
     private let fileManager: FileManager
+    private let encoder: JSONEncoder
+    private let decoder: JSONDecoder
 
     init(
-        container: CKContainer? = nil,
         defaults: UserDefaults = .standard,
         now: @escaping @Sendable () -> Date = { Date() },
         fileManager: FileManager = .default
     ) {
-        if let container {
-            self.container = container
-        } else {
-            // Personal-team and sideload installs can rewrite the runtime bundle identifier.
-            // Using the default container avoids CloudKit init crashes from mismatched identifiers.
-            self.container = CKContainer.default()
-        }
-
-        self.database = self.container.privateCloudDatabase
         self.defaults = defaults
         self.now = now
         self.fileManager = fileManager
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        self.encoder = encoder
+        self.decoder = JSONDecoder()
     }
 
-    func refreshStatus(
-        localSnapshotExists: Bool,
-        localSnapshotModifiedAt: Date?
-    ) async -> BackupSyncResult {
-        let availability = await availabilityStatus()
-        var status = baseStatus(availability: availability)
-        guard availability == .available else {
-            return BackupSyncResult(status: status, restorePrompt: nil)
-        }
+    static func initialStatus(defaults: UserDefaults = .standard) -> BackupStatus {
+        let hasBookmark = defaults.data(forKey: PreferenceKey.folderBookmarkData) != nil
+        let accessLost = defaults.bool(forKey: PreferenceKey.folderAccessLost)
 
-        do {
-            let cloudMetadata = try await fetchLatestBackupMetadata()
-            status.latestCloudBackup = cloudMetadata
-            status.lastSuccessfulBackupAt = cloudMetadata?.createdAt ?? cachedLastSuccessfulBackupAt
-            let prompt = BackupPolicy.restorePrompt(
-                localSnapshotExists: localSnapshotExists,
-                localSnapshotModifiedAt: localSnapshotModifiedAt,
-                cloudBackup: cloudMetadata,
-                dismissedSnapshotHash: dismissedRestoreSnapshotHash
-            )
-            return BackupSyncResult(status: status, restorePrompt: prompt)
-        } catch {
-            status.lastErrorDescription = userFacingError(error)
-            return BackupSyncResult(status: status, restorePrompt: nil)
-        }
+        return BackupStatus(
+            availability: hasBookmark ? (accessLost ? .accessLost : .ready) : .notConfigured,
+            selectedFolderName: defaults.string(forKey: PreferenceKey.folderDisplayName),
+            selectedFolderPath: defaults.string(forKey: PreferenceKey.folderPath),
+            latestBackup: nil,
+            lastSuccessfulBackupAt: defaults.object(forKey: PreferenceKey.lastSuccessfulBackupAt) as? Date,
+            isBackupInProgress: false,
+            isRestoreInProgress: false,
+            lastErrorDescription: accessLost ? backupLocalizedString("backup.error.access_lost") : nil
+        )
     }
 
-    func syncIfNeeded(
-        snapshot: AppSnapshot,
-        localSnapshotExists: Bool,
-        localSnapshotModifiedAt: Date?,
-        reason: BackupTriggerReason
-    ) async -> BackupSyncResult {
-        let availability = await availabilityStatus()
-        var status = baseStatus(availability: availability)
-        guard availability == .available else {
-            return BackupSyncResult(status: status, restorePrompt: nil)
-        }
-
-        do {
-            let cloudMetadata = try await fetchLatestBackupMetadata()
-            status.latestCloudBackup = cloudMetadata
-            status.lastSuccessfulBackupAt = cloudMetadata?.createdAt ?? cachedLastSuccessfulBackupAt
-
-            let prompt = BackupPolicy.restorePrompt(
-                localSnapshotExists: localSnapshotExists,
-                localSnapshotModifiedAt: localSnapshotModifiedAt,
-                cloudBackup: cloudMetadata,
-                dismissedSnapshotHash: dismissedRestoreSnapshotHash
-            )
-
-            guard prompt == nil, reason != .manual else {
-                return BackupSyncResult(status: status, restorePrompt: prompt)
-            }
-
-            let snapshotHash = try BackupHashing.hash(for: snapshot)
-            let shouldUpload = BackupPolicy.shouldUploadAutomatically(
-                localSnapshotExists: localSnapshotExists,
-                snapshotHash: snapshotHash,
-                latestCloudBackup: cloudMetadata,
-                now: now()
-            )
-
-            guard shouldUpload else {
-                return BackupSyncResult(status: status, restorePrompt: nil)
-            }
-
-            let metadata = try await uploadSnapshot(snapshot)
-            status.latestCloudBackup = metadata
-            status.lastSuccessfulBackupAt = metadata.createdAt
+    func refreshStatus() async -> BackupStatus {
+        var status = Self.initialStatus(defaults: defaults)
+        guard status.hasSelectedFolder else {
             status.lastErrorDescription = nil
-            return BackupSyncResult(status: status, restorePrompt: nil)
-        } catch {
-            status.lastErrorDescription = userFacingError(error)
-            return BackupSyncResult(status: status, restorePrompt: nil)
+            return status
         }
+
+        do {
+            let folderURL = try resolveFolderURL()
+            let latestBackup = try latestBackupMetadata(in: folderURL)
+            status.availability = .ready
+            status.latestBackup = latestBackup
+            status.lastSuccessfulBackupAt = latestBackup?.createdAt ?? cachedLastSuccessfulBackupAt
+            status.lastErrorDescription = nil
+            cacheFolderInfo(for: folderURL)
+            defaults.set(false, forKey: PreferenceKey.folderAccessLost)
+            return status
+        } catch {
+            markFolderAccessLost()
+            status.availability = .accessLost
+            status.latestBackup = nil
+            status.lastErrorDescription = userFacingError(error)
+            return status
+        }
+    }
+
+    func selectBackupFolder(_ url: URL) async throws -> BackupStatus {
+        let accessStarted = url.startAccessingSecurityScopedResource()
+        defer {
+            if accessStarted {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
+
+        let values = try url.resourceValues(forKeys: [.isDirectoryKey, .nameKey])
+        guard values.isDirectory == true else {
+            throw BackupCoordinatorError.invalidFolder
+        }
+
+        let bookmarkData = try url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil)
+        defaults.set(bookmarkData, forKey: PreferenceKey.folderBookmarkData)
+        defaults.set(false, forKey: PreferenceKey.folderAccessLost)
+        defaults.removeObject(forKey: PreferenceKey.lastSuccessfulBackupAt)
+        defaults.removeObject(forKey: PreferenceKey.lastSuccessfulSnapshotHash)
+        cacheFolderInfo(for: url)
+        return await refreshStatus()
     }
 
     func backupNow(snapshot: AppSnapshot) async -> BackupStatus {
-        let availability = await availabilityStatus()
-        var status = baseStatus(availability: availability)
-        guard availability == .available else {
+        var status = await refreshStatus()
+        guard status.availability == .ready else {
+            if status.lastErrorDescription == nil {
+                status.lastErrorDescription = backupLocalizedString("backup.error.folder_not_selected")
+            }
             return status
         }
 
         do {
-            let metadata = try await uploadSnapshot(snapshot)
-            status.latestCloudBackup = metadata
+            let envelope = try BackupEnvelope.make(snapshot: snapshot, createdAt: now())
+            if envelope.snapshotHash == cachedLastSuccessfulSnapshotHash {
+                status.lastErrorDescription = nil
+                return status
+            }
+
+            let folderURL = try resolveFolderURL()
+            let fileURL = try writeBackup(envelope: envelope, to: folderURL)
+            try pruneOldBackups(in: folderURL, keepingNewest: BackupConstants.maxBackupFiles)
+
+            let metadata = BackupMetadata(envelope: envelope, fileName: fileURL.lastPathComponent)
+            cacheSuccessfulBackup(metadata: metadata)
+            defaults.set(false, forKey: PreferenceKey.folderAccessLost)
+
+            status.availability = .ready
+            status.latestBackup = metadata
             status.lastSuccessfulBackupAt = metadata.createdAt
             status.lastErrorDescription = nil
             return status
         } catch {
-            status.latestCloudBackup = try? await fetchLatestBackupMetadata()
-            status.lastSuccessfulBackupAt = status.latestCloudBackup?.createdAt ?? cachedLastSuccessfulBackupAt
+            markFolderAccessLostIfNeeded(error)
+            status = await refreshStatus()
             status.lastErrorDescription = userFacingError(error)
             return status
         }
     }
 
     func restoreLatestBackup() async throws -> BackupEnvelope {
-        guard await availabilityStatus() == .available else {
-            throw BackupCoordinatorError.iCloudUnavailable
-        }
-
-        guard let record = try await fetchLatestRecord() else {
-            throw BackupCoordinatorError.missingBackup
-        }
-
-        guard
-            let asset = record[BackupConstants.payloadField] as? CKAsset,
-            let fileURL = asset.fileURL
-        else {
-            throw BackupCoordinatorError.corruptedBackup
-        }
-
-        let data = try Data(contentsOf: fileURL)
-        let envelope = try JSONDecoder().decode(BackupEnvelope.self, from: data)
-        clearDismissedRestoreSnapshotHash()
+        let folderURL = try resolveFolderURL()
+        let fileURL = try latestBackupFileURL(in: folderURL)
+        let envelope = try readEnvelope(from: fileURL)
+        defaults.set(false, forKey: PreferenceKey.folderAccessLost)
         return envelope
     }
 
-    func dismissRestorePrompt(for metadata: BackupMetadata) {
-        defaults.set(metadata.snapshotHash, forKey: PreferenceKey.dismissedRestoreSnapshotHash)
+    func importBackup(from url: URL) async throws -> BackupEnvelope {
+        try readEnvelope(from: url)
     }
 
-    func clearDismissedRestorePrompt() {
-        clearDismissedRestoreSnapshotHash()
-    }
-
-    func manualRestorePrompt() async -> BackupSyncResult {
-        let availability = await availabilityStatus()
-        var status = baseStatus(availability: availability)
-        guard availability == .available else {
-            return BackupSyncResult(status: status, restorePrompt: nil)
+    private func resolveFolderURL() throws -> URL {
+        guard let bookmarkData = defaults.data(forKey: PreferenceKey.folderBookmarkData) else {
+            throw BackupCoordinatorError.folderNotSelected
         }
 
-        do {
-            let cloudMetadata = try await fetchLatestBackupMetadata()
-            status.latestCloudBackup = cloudMetadata
-            status.lastSuccessfulBackupAt = cloudMetadata?.createdAt ?? cachedLastSuccessfulBackupAt
-            guard let cloudMetadata else {
-                status.lastErrorDescription = BackupCoordinatorError.missingBackup.localizedDescription
-                return BackupSyncResult(status: status, restorePrompt: nil)
-            }
-
-            return BackupSyncResult(
-                status: status,
-                restorePrompt: BackupRestorePrompt(kind: .manualRestore, metadata: cloudMetadata)
-            )
-        } catch {
-            status.lastErrorDescription = userFacingError(error)
-            return BackupSyncResult(status: status, restorePrompt: nil)
-        }
-    }
-
-    private func uploadSnapshot(_ snapshot: AppSnapshot) async throws -> BackupMetadata {
-        let envelope = try BackupEnvelope.make(snapshot: snapshot, createdAt: now())
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let data = try encoder.encode(envelope)
-        let tempURL = try temporaryAssetURL()
-        try data.write(to: tempURL, options: .atomic)
-
-        defer {
-            try? fileManager.removeItem(at: tempURL)
-        }
-
-        let recordID = CKRecord.ID(recordName: BackupConstants.recordName)
-        let record = (try await fetchLatestRecord()) ?? CKRecord(recordType: BackupConstants.recordType, recordID: recordID)
-        record[BackupConstants.payloadField] = CKAsset(fileURL: tempURL)
-        record[BackupConstants.createdAtField] = envelope.createdAt as NSDate
-        record[BackupConstants.snapshotHashField] = envelope.snapshotHash as NSString
-        record[BackupConstants.schemaVersionField] = NSNumber(value: envelope.schemaVersion)
-        record[BackupConstants.appVersionField] = envelope.appVersion as NSString
-        record[BackupConstants.buildNumberField] = envelope.buildNumber as NSString
-
-        _ = try await save(record: record)
-        cacheSuccessfulBackup(metadata: BackupMetadata(envelope: envelope))
-        clearDismissedRestoreSnapshotHash()
-        return BackupMetadata(envelope: envelope)
-    }
-
-    private func availabilityStatus() async -> BackupStatus.Availability {
-        do {
-            return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<BackupStatus.Availability, Error>) in
-                container.accountStatus { accountStatus, error in
-                    if let error {
-                        continuation.resume(throwing: error)
-                        return
-                    }
-
-                    let availability: BackupStatus.Availability
-                    switch accountStatus {
-                    case .available:
-                        availability = .available
-                    case .noAccount:
-                        availability = .iCloudAccountMissing
-                    case .restricted:
-                        availability = .restricted
-                    case .couldNotDetermine, .temporarilyUnavailable:
-                        availability = .temporarilyUnavailable
-                    @unknown default:
-                        availability = .temporarilyUnavailable
-                    }
-                    continuation.resume(returning: availability)
-                }
-            }
-        } catch {
-            return .temporarilyUnavailable
-        }
-    }
-
-    private func fetchLatestBackupMetadata() async throws -> BackupMetadata? {
-        guard let record = try await fetchLatestRecord() else {
-            return nil
-        }
-
-        return BackupMetadata(record: record)
-    }
-
-    private func fetchLatestRecord() async throws -> CKRecord? {
-        let recordID = CKRecord.ID(recordName: BackupConstants.recordName)
-        do {
-            return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<CKRecord?, Error>) in
-                database.fetch(withRecordID: recordID) { record, error in
-                    if let ckError = error as? CKError, ckError.code == .unknownItem {
-                        continuation.resume(returning: nil)
-                        return
-                    }
-
-                    if let error {
-                        continuation.resume(throwing: error)
-                        return
-                    }
-
-                    continuation.resume(returning: record)
-                }
-            }
-        } catch let error as CKError where error.code == .unknownItem {
-            return nil
-        }
-    }
-
-    private func save(record: CKRecord) async throws -> CKRecord {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<CKRecord, Error>) in
-            database.save(record) { savedRecord, error in
-                if let error {
-                    continuation.resume(throwing: error)
-                    return
-                }
-
-                guard let savedRecord else {
-                    continuation.resume(throwing: BackupCoordinatorError.corruptedBackup)
-                    return
-                }
-
-                continuation.resume(returning: savedRecord)
-            }
-        }
-    }
-
-    private func temporaryAssetURL() throws -> URL {
-        let directory = fileManager.temporaryDirectory.appendingPathComponent("WorkoutAppBackup", isDirectory: true)
-        if !fileManager.fileExists(atPath: directory.path) {
-            try fileManager.createDirectory(at: directory, withIntermediateDirectories: true, attributes: nil)
-        }
-
-        return directory.appendingPathComponent(UUID().uuidString).appendingPathExtension("json")
-    }
-
-    private func baseStatus(availability: BackupStatus.Availability) -> BackupStatus {
-        BackupStatus(
-            availability: availability,
-            latestCloudBackup: nil,
-            lastSuccessfulBackupAt: cachedLastSuccessfulBackupAt,
-            isBackupInProgress: false,
-            isRestoreInProgress: false,
-            lastErrorDescription: nil
+        var isStale = false
+        let url = try URL(
+            resolvingBookmarkData: bookmarkData,
+            options: [],
+            relativeTo: nil,
+            bookmarkDataIsStale: &isStale
         )
+
+        if isStale {
+            defaults.set(try url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil), forKey: PreferenceKey.folderBookmarkData)
+        }
+
+        let accessStarted = url.startAccessingSecurityScopedResource()
+        defer {
+            if accessStarted {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
+
+        let values = try url.resourceValues(forKeys: [.isDirectoryKey, .nameKey])
+        guard values.isDirectory == true, fileManager.fileExists(atPath: url.path) else {
+            throw BackupCoordinatorError.folderAccessLost
+        }
+
+        return url
+    }
+
+    private func latestBackupMetadata(in folderURL: URL) throws -> BackupMetadata? {
+        guard let latestFileURL = try latestBackupFileURLIfPresent(in: folderURL) else {
+            return nil
+        }
+        let envelope = try readEnvelope(from: latestFileURL)
+        return BackupMetadata(envelope: envelope, fileName: latestFileURL.lastPathComponent)
+    }
+
+    private func latestBackupFileURL(in folderURL: URL) throws -> URL {
+        guard let latest = try latestBackupFileURLIfPresent(in: folderURL) else {
+            throw BackupCoordinatorError.missingBackup
+        }
+        return latest
+    }
+
+    private func latestBackupFileURLIfPresent(in folderURL: URL) throws -> URL? {
+        let candidates = try backupFileURLs(in: folderURL)
+        for fileURL in candidates {
+            if (try? readEnvelope(from: fileURL)) != nil {
+                return fileURL
+            }
+        }
+        return nil
+    }
+
+    private func backupFileURLs(in folderURL: URL) throws -> [URL] {
+        let accessStarted = folderURL.startAccessingSecurityScopedResource()
+        defer {
+            if accessStarted {
+                folderURL.stopAccessingSecurityScopedResource()
+            }
+        }
+
+        let urls = try fileManager.contentsOfDirectory(
+            at: folderURL,
+            includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        )
+
+        return urls
+            .filter { url in
+                url.lastPathComponent.hasPrefix(BackupConstants.filePrefix) &&
+                url.pathExtension.lowercased() == BackupConstants.fileExtension
+            }
+            .sorted { $0.lastPathComponent > $1.lastPathComponent }
+    }
+
+    private func writeBackup(envelope: BackupEnvelope, to folderURL: URL) throws -> URL {
+        let fileURL = folderURL.appendingPathComponent(fileName(for: envelope.createdAt))
+        let data = try encoder.encode(envelope)
+
+        let accessStarted = folderURL.startAccessingSecurityScopedResource()
+        defer {
+            if accessStarted {
+                folderURL.stopAccessingSecurityScopedResource()
+            }
+        }
+
+        try data.write(to: fileURL, options: .atomic)
+        return fileURL
+    }
+
+    private func pruneOldBackups(in folderURL: URL, keepingNewest count: Int) throws {
+        let files = try backupFileURLs(in: folderURL)
+        guard files.count > count else {
+            return
+        }
+
+        for fileURL in files.dropFirst(count) {
+            try? fileManager.removeItem(at: fileURL)
+        }
+    }
+
+    private func readEnvelope(from url: URL) throws -> BackupEnvelope {
+        let accessStarted = url.startAccessingSecurityScopedResource()
+        defer {
+            if accessStarted {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
+
+        let data: Data
+        do {
+            data = try Data(contentsOf: url)
+        } catch {
+            throw BackupCoordinatorError.corruptedBackup
+        }
+
+        do {
+            return try decoder.decode(BackupEnvelope.self, from: data)
+        } catch {
+            throw BackupCoordinatorError.corruptedBackup
+        }
+    }
+
+    private func fileName(for date: Date) -> String {
+        "\(BackupConstants.filePrefix)\(timestampFormatter.string(from: date)).\(BackupConstants.fileExtension)"
+    }
+
+    private var timestampFormatter: DateFormatter {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "yyyy-MM-dd-HH-mm-ss"
+        return formatter
+    }
+
+    private func cacheFolderInfo(for url: URL) {
+        defaults.set(url.lastPathComponent, forKey: PreferenceKey.folderDisplayName)
+        defaults.set(url.path, forKey: PreferenceKey.folderPath)
     }
 
     private func cacheSuccessfulBackup(metadata: BackupMetadata) {
@@ -489,16 +374,23 @@ actor BackupCoordinator {
         defaults.set(metadata.snapshotHash, forKey: PreferenceKey.lastSuccessfulSnapshotHash)
     }
 
-    private func clearDismissedRestoreSnapshotHash() {
-        defaults.removeObject(forKey: PreferenceKey.dismissedRestoreSnapshotHash)
-    }
-
     private var cachedLastSuccessfulBackupAt: Date? {
         defaults.object(forKey: PreferenceKey.lastSuccessfulBackupAt) as? Date
     }
 
-    private var dismissedRestoreSnapshotHash: String? {
-        defaults.string(forKey: PreferenceKey.dismissedRestoreSnapshotHash)
+    private var cachedLastSuccessfulSnapshotHash: String? {
+        defaults.string(forKey: PreferenceKey.lastSuccessfulSnapshotHash)
+    }
+
+    private func markFolderAccessLost() {
+        defaults.set(true, forKey: PreferenceKey.folderAccessLost)
+    }
+
+    private func markFolderAccessLostIfNeeded(_ error: Error) {
+        if let backupError = error as? BackupCoordinatorError,
+           backupError == .folderAccessLost || backupError == .invalidFolder {
+            markFolderAccessLost()
+        }
     }
 
     private func userFacingError(_ error: Error) -> String {
@@ -506,41 +398,34 @@ actor BackupCoordinator {
             return backupError.localizedDescription
         }
 
-        let nsError = error as NSError
-        if nsError.domain == CKError.errorDomain {
-            switch CKError.Code(rawValue: nsError.code) {
-            case .networkUnavailable, .networkFailure:
-                return backupLocalizedString("backup.error.network")
-            case .notAuthenticated:
-                return backupLocalizedString("backup.error.sign_in")
-            case .quotaExceeded:
-                return backupLocalizedString("backup.error.quota")
-            case .serviceUnavailable, .requestRateLimited, .zoneBusy:
-                return backupLocalizedString("backup.error.temporary")
-            default:
-                break
-            }
-        }
-
-        return nsError.localizedDescription
+        return (error as NSError).localizedDescription
     }
 
     private enum PreferenceKey {
+        static let folderBookmarkData = "backup.folderBookmarkData"
+        static let folderDisplayName = "backup.folderDisplayName"
+        static let folderPath = "backup.folderPath"
+        static let folderAccessLost = "backup.folderAccessLost"
         static let lastSuccessfulBackupAt = "backup.lastSuccessfulBackupAt"
         static let lastSuccessfulSnapshotHash = "backup.lastSuccessfulSnapshotHash"
-        static let dismissedRestoreSnapshotHash = "backup.dismissedRestoreSnapshotHash"
     }
 }
 
-enum BackupCoordinatorError: LocalizedError {
-    case iCloudUnavailable
+enum BackupCoordinatorError: LocalizedError, Equatable {
+    case folderNotSelected
+    case invalidFolder
+    case folderAccessLost
     case missingBackup
     case corruptedBackup
 
     var errorDescription: String? {
         switch self {
-        case .iCloudUnavailable:
-            return backupLocalizedString("backup.error.unavailable")
+        case .folderNotSelected:
+            return backupLocalizedString("backup.error.folder_not_selected")
+        case .invalidFolder:
+            return backupLocalizedString("backup.error.invalid_folder")
+        case .folderAccessLost:
+            return backupLocalizedString("backup.error.access_lost")
         case .missingBackup:
             return backupLocalizedString("backup.error.missing")
         case .corruptedBackup:
@@ -554,31 +439,14 @@ private func backupLocalizedString(_ key: String) -> String {
 }
 
 private extension BackupMetadata {
-    init(envelope: BackupEnvelope) {
+    init(envelope: BackupEnvelope, fileName: String) {
         self.init(
             createdAt: envelope.createdAt,
             snapshotHash: envelope.snapshotHash,
             schemaVersion: envelope.schemaVersion,
             appVersion: envelope.appVersion,
-            buildNumber: envelope.buildNumber
-        )
-    }
-
-    init?(record: CKRecord) {
-        guard
-            let createdAt = record[BackupConstants.createdAtField] as? Date ?? record.modificationDate,
-            let snapshotHash = record[BackupConstants.snapshotHashField] as? String,
-            let schemaVersionNumber = record[BackupConstants.schemaVersionField] as? NSNumber
-        else {
-            return nil
-        }
-
-        self.init(
-            createdAt: createdAt,
-            snapshotHash: snapshotHash,
-            schemaVersion: schemaVersionNumber.intValue,
-            appVersion: record[BackupConstants.appVersionField] as? String ?? BackupConstants.appVersion,
-            buildNumber: record[BackupConstants.buildNumberField] as? String ?? BackupConstants.buildNumber
+            buildNumber: envelope.buildNumber,
+            fileName: fileName
         )
     }
 }

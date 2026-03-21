@@ -1,4 +1,6 @@
 import SwiftUI
+import UniformTypeIdentifiers
+import UIKit
 
 struct ProfileView: View {
     @Environment(AppStore.self) private var store
@@ -51,8 +53,8 @@ struct ProfileView: View {
                             get: { store.selectedLanguageCode },
                             set: { store.updateLanguage($0) }
                         )) {
-                            Text("English").tag("en")
-                            Text("Русский").tag("ru")
+                            Text("profile.language.english").tag("en")
+                            Text("profile.language.russian").tag("ru")
                         }
                         .pickerStyle(.segmented)
                     }
@@ -100,16 +102,30 @@ struct ProfileView: View {
 
 private struct BackupControlsCard: View {
     @Environment(AppStore.self) private var store
+    @State private var pickerMode: BackupDocumentPickerMode?
+    @State private var pendingRestoreRequest: BackupRestoreRequest?
 
     var body: some View {
         AppCard {
             VStack(alignment: .leading, spacing: 16) {
                 AppSectionTitle(titleKey: "backup.section")
 
-                backupRow(titleKey: "backup.status", value: availabilityText)
+                backupRow(titleKey: "backup.status", value: statusText)
+                backupRow(
+                    titleKey: "backup.folder",
+                    value: store.backupStatus.selectedFolderName ?? localized("backup.value.none")
+                )
+
+                if let folderPath = store.backupStatus.selectedFolderPath, !folderPath.isEmpty {
+                    Text(folderPath)
+                        .font(.footnote)
+                        .foregroundStyle(AppTheme.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
                 backupRow(
                     titleKey: "backup.last_backup",
-                    value: formattedDate(store.backupStatus.latestCloudBackup?.createdAt ?? store.backupStatus.lastSuccessfulBackupAt)
+                    value: formattedDate(store.backupStatus.latestBackup?.createdAt ?? store.backupStatus.lastSuccessfulBackupAt)
                 )
                 backupRow(titleKey: "backup.local_state", value: formattedDate(store.localStateUpdatedAt))
 
@@ -126,43 +142,74 @@ private struct BackupControlsCard: View {
                     Text(errorDescription)
                         .font(.footnote.weight(.medium))
                         .foregroundStyle(AppTheme.neonOrange)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
                 VStack(spacing: 12) {
-                    Button("backup.action.push_local") {
+                    Button("backup.action.choose_folder") {
+                        pickerMode = .folder
+                    }
+                    .buttonStyle(AppSecondaryButtonStyle())
+
+                    Button("backup.action.backup_now") {
                         Task {
                             await store.backupNow()
                         }
                     }
                     .buttonStyle(AppPrimaryButtonStyle())
-                    .disabled(!store.canCreateCloudBackup)
-                    .opacity(store.canCreateCloudBackup ? 1 : 0.55)
+                    .disabled(!store.canBackupNow)
+                    .opacity(store.canBackupNow ? 1 : 0.55)
 
-                    Button("backup.action.apply_cloud") {
-                        Task {
-                            await store.prepareManualRestore()
-                        }
+                    Button("backup.action.restore_latest") {
+                        pendingRestoreRequest = .latest
                     }
                     .buttonStyle(AppSecondaryButtonStyle())
-                    .disabled(!store.backupStatus.canRestore)
-                    .opacity(store.backupStatus.canRestore ? 1 : 0.55)
+                    .disabled(!store.canRestoreLatestBackup)
+                    .opacity(store.canRestoreLatestBackup ? 1 : 0.55)
+
+                    Button("backup.action.import_file") {
+                        pickerMode = .backupFile
+                    }
+                    .buttonStyle(AppSecondaryButtonStyle())
                 }
             }
         }
+        .sheet(item: $pickerMode) { mode in
+            BackupDocumentPicker(mode: mode, onPick: { url in
+                handlePicked(url, for: mode)
+            }, onCancel: {
+                pickerMode = nil
+            })
+        }
+        .alert(item: $pendingRestoreRequest) { request in
+            Alert(
+                title: Text(request.titleKey),
+                message: Text(request.message(store: store)),
+                primaryButton: .destructive(Text("backup.action.restore")) {
+                    Task {
+                        await handleRestore(request)
+                    }
+                },
+                secondaryButton: .cancel(Text("action.cancel"))
+            )
+        }
     }
 
-    private var availabilityText: String {
+    private var statusText: String {
+        if store.backupStatus.isRestoreInProgress {
+            return localized("backup.state.restoring")
+        }
+        if store.backupStatus.isBackupInProgress {
+            return localized("backup.state.backing_up")
+        }
+
         switch store.backupStatus.availability {
-        case .checking:
-            return localized("backup.state.checking")
-        case .available:
-            return localized("backup.state.available")
-        case .iCloudAccountMissing:
-            return localized("backup.state.account_missing")
-        case .restricted:
-            return localized("backup.state.restricted")
-        case .temporarilyUnavailable:
-            return localized("backup.state.unavailable")
+        case .notConfigured:
+            return localized("backup.state.not_configured")
+        case .ready:
+            return localized("backup.state.ready")
+        case .accessLost:
+            return localized("backup.state.access_lost")
         }
     }
 
@@ -200,6 +247,27 @@ private struct BackupControlsCard: View {
 
     private func localized(_ key: String) -> String {
         Bundle.main.localizedString(forKey: key, value: nil, table: nil)
+    }
+
+    private func handlePicked(_ url: URL, for mode: BackupDocumentPickerMode) {
+        pickerMode = nil
+        switch mode {
+        case .folder:
+            Task {
+                await store.chooseBackupFolder(url)
+            }
+        case .backupFile:
+            pendingRestoreRequest = .importFile(url)
+        }
+    }
+
+    private func handleRestore(_ request: BackupRestoreRequest) async {
+        switch request {
+        case .latest:
+            await store.restoreLatestBackup()
+        case .importFile(let url):
+            await store.importBackup(from: url)
+        }
     }
 }
 
@@ -324,6 +392,104 @@ private struct ProfilePickerSheet: View {
             return "profile.weight"
         case .height:
             return "profile.height"
+        }
+    }
+}
+
+private enum BackupDocumentPickerMode: String, Identifiable {
+    case folder
+    case backupFile
+
+    var id: String { rawValue }
+}
+
+private enum BackupRestoreRequest: Identifiable {
+    case latest
+    case importFile(URL)
+
+    var id: String {
+        switch self {
+        case .latest:
+            return "latest"
+        case .importFile(let url):
+            return "import-\(url.absoluteString)"
+        }
+    }
+
+    var titleKey: LocalizedStringKey {
+        switch self {
+        case .latest:
+            return "backup.restore.latest_title"
+        case .importFile:
+            return "backup.restore.import_title"
+        }
+    }
+
+    func message(store: AppStore) -> String {
+        switch self {
+        case .latest:
+            let format = Bundle.main.localizedString(forKey: "backup.restore.latest_message", value: nil, table: nil)
+            let dateString = store.backupStatus.latestBackup?.createdAt.formatted(
+                .dateTime
+                    .year()
+                    .month(.abbreviated)
+                    .day()
+                    .hour()
+                    .minute()
+                    .locale(store.locale)
+            ) ?? Bundle.main.localizedString(forKey: "backup.value.none", value: nil, table: nil)
+            return String(format: format, dateString)
+        case .importFile(let url):
+            let format = Bundle.main.localizedString(forKey: "backup.restore.import_message", value: nil, table: nil)
+            return String(format: format, url.lastPathComponent)
+        }
+    }
+}
+
+private struct BackupDocumentPicker: UIViewControllerRepresentable {
+    let mode: BackupDocumentPickerMode
+    let onPick: (URL) -> Void
+    let onCancel: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onPick: onPick, onCancel: onCancel)
+    }
+
+    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
+        let picker: UIDocumentPickerViewController
+        switch mode {
+        case .folder:
+            picker = UIDocumentPickerViewController(forOpeningContentTypes: [.folder], asCopy: false)
+        case .backupFile:
+            picker = UIDocumentPickerViewController(forOpeningContentTypes: [.json], asCopy: true)
+        }
+
+        picker.allowsMultipleSelection = false
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: UIDocumentPickerViewController, context: Context) {}
+
+    final class Coordinator: NSObject, UIDocumentPickerDelegate {
+        let onPick: (URL) -> Void
+        let onCancel: () -> Void
+
+        init(onPick: @escaping (URL) -> Void, onCancel: @escaping () -> Void) {
+            self.onPick = onPick
+            self.onCancel = onCancel
+        }
+
+        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+            guard let url = urls.first else {
+                return
+            }
+
+            onPick(url)
+        }
+
+        func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+            onCancel()
         }
     }
 }
