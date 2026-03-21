@@ -6,6 +6,7 @@ struct ActiveWorkoutView: View {
     @State private var now = Date()
     @State private var scrollOffset: CGFloat = 0
     @State private var presentedSummary: PresentedWorkoutSummary?
+    @State private var pendingAutoScrollTarget: CurrentWorkoutSetPosition?
 
     private let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
@@ -51,7 +52,13 @@ struct ActiveWorkoutView: View {
                                                         exerciseIndex: exerciseIndex,
                                                         setIndex: setIndex,
                                                         set: set,
-                                                        isCurrent: currentSetPosition?.exerciseIndex == exerciseIndex && currentSetPosition?.setIndex == setIndex
+                                                        isCurrent: currentSetPosition?.exerciseIndex == exerciseIndex && currentSetPosition?.setIndex == setIndex,
+                                                        onMarkedDone: {
+                                                            DispatchQueue.main.async {
+                                                                guard let updatedSession = store.activeSession else { return }
+                                                                pendingAutoScrollTarget = currentSetPosition(in: updatedSession)
+                                                            }
+                                                        }
                                                     )
                                                     .id(CurrentWorkoutSetPosition(exerciseIndex: exerciseIndex, setIndex: setIndex))
                                                 }
@@ -94,11 +101,16 @@ struct ActiveWorkoutView: View {
                                 .transition(.move(edge: .top).combined(with: .opacity))
                         }
                     }
-                    .onChange(of: currentSetPosition) { _, newValue in
+                    .onChange(of: pendingAutoScrollTarget) { _, newValue in
                         guard let newValue else { return }
                         DispatchQueue.main.async {
                             withAnimation(.easeInOut(duration: 0.32)) {
                                 proxy.scrollTo(newValue, anchor: .center)
+                            }
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                                if pendingAutoScrollTarget == newValue {
+                                    pendingAutoScrollTarget = nil
+                                }
                             }
                         }
                     }
@@ -356,6 +368,7 @@ struct WorkoutSetRow: View {
     let setIndex: Int
     let set: WorkoutSetLog
     let isCurrent: Bool
+    var onMarkedDone: () -> Void = {}
 
     private var isCompleted: Bool {
         return set.completedAt != nil
@@ -404,8 +417,12 @@ struct WorkoutSetRow: View {
 
             HStack(spacing: 10) {
                 Button {
+                    let shouldMarkDone = !isCompleted
                     updateSet { current in
                         current.completedAt = current.completedAt == nil ? .now : nil
+                    }
+                    if shouldMarkDone {
+                        onMarkedDone()
                     }
                 } label: {
                     WorkoutSetPrimaryActionLabel(
@@ -564,13 +581,14 @@ private struct WorkoutSetPrimaryActionLabel: View {
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: systemImage)
-                .font(.system(size: 16, weight: .semibold))
+                .font(.system(size: 15, weight: .semibold))
             Text(titleKey)
                 .multilineTextAlignment(.center)
-                .lineLimit(2)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .frame(maxWidth: .infinity, minHeight: 46)
+        .frame(maxWidth: .infinity, minHeight: 42)
         .contentShape(Capsule())
     }
 }
@@ -580,10 +598,10 @@ private struct WorkoutSetActionButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 13, weight: .semibold, design: .rounded))
+            .font(.system(size: 12, weight: .semibold, design: .rounded))
             .foregroundStyle(AppTheme.primaryText)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
             .background(background(configuration: configuration), in: Capsule())
             .overlay(
                 Capsule()
@@ -620,6 +638,7 @@ private struct WorkoutSetIconButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .foregroundStyle(AppTheme.primaryText)
+            .frame(width: 44, height: 44)
             .background(
                 LinearGradient(
                     colors: [
