@@ -156,7 +156,7 @@ struct WorkoutTemplateDetailView: View {
                                             id: item.id,
                                             exerciseName: exercise.localizedName,
                                             setsCount: item.sets.count,
-                                            reps: item.sets.first?.reps ?? 10,
+                                            reps: item.sets.first?.reps ?? 12,
                                             suggestedWeight: item.sets.first?.suggestedWeight ?? 0
                                         )
                                     } label: {
@@ -386,8 +386,8 @@ struct AddExerciseToWorkoutView: View {
             .sheet(item: $pendingConfiguration) { configuration in
                 TemplateExerciseConfigSheet(
                     title: configuration.title,
-                    setsCount: 3,
-                    reps: 10,
+                    setsCount: 4,
+                    reps: 12,
                     suggestedWeight: 0,
                     onCancel: {
                         pendingConfiguration = nil
