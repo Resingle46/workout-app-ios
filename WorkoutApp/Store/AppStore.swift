@@ -2,6 +2,7 @@ import Foundation
 import Observation
 import ObjectiveC
 
+@MainActor
 @Observable
 final class AppStore {
     var categories: [ExerciseCategory]
@@ -12,12 +13,26 @@ final class AppStore {
     var lastFinishedSession: WorkoutSession?
     var profile: UserProfile
     var selectedTab: RootTab = .programs
+    var backupStatus = BackupStatus()
+    var pendingRestorePrompt: BackupRestorePrompt?
+
+    var canCreateCloudBackup: Bool {
+        hasPersistedSnapshot && backupStatus.canBackupNow
+    }
+
+    var localStateUpdatedAt: Date? {
+        localSnapshotModifiedAt
+    }
 
     private let persistence = PersistenceController()
+    private let backupCoordinator = BackupCoordinator()
+    private var hasPersistedSnapshot: Bool
+    private var localSnapshotModifiedAt: Date?
 
     init() {
         let seed = SeedData.make()
-        let snapshot = persistence.load() ?? AppSnapshot(
+        let storedSnapshot = persistence.loadStoredSnapshot()
+        let snapshot = storedSnapshot?.snapshot ?? AppSnapshot(
             programs: seed.programs,
             exercises: seed.exercises,
             history: [],
@@ -31,13 +46,121 @@ final class AppStore {
         self.history = snapshot.history.sorted { $0.startedAt > $1.startedAt }
         self.lastFinishedSession = snapshot.history.sorted { $0.startedAt > $1.startedAt }.first(where: { $0.isFinished })
         self.profile = AppStore.normalizedProfile(snapshot.profile)
+        self.hasPersistedSnapshot = storedSnapshot != nil
+        self.localSnapshotModifiedAt = storedSnapshot?.modifiedAt
         Bundle.overrideLocalization(languageCode: selectedLanguageCode)
     }
 
-    func save() {
-        profile = Self.normalizedProfile(profile)
+    func currentSnapshot() -> AppSnapshot {
+        AppSnapshot(
+            programs: programs,
+            exercises: exercises,
+            history: history,
+            profile: Self.normalizedProfile(profile)
+        )
+    }
+
+    func apply(snapshot: AppSnapshot) {
+        let normalizedSnapshot = normalizedSnapshot(from: snapshot)
+        programs = normalizedSnapshot.programs
+        exercises = normalizedSnapshot.exercises
+        history = normalizedSnapshot.history.sorted { $0.startedAt > $1.startedAt }
+        lastFinishedSession = history.first(where: { $0.isFinished })
+        activeSession = nil
+        profile = normalizedSnapshot.profile
         Bundle.overrideLocalization(languageCode: selectedLanguageCode)
-        persistence.save(snapshot: AppSnapshot(programs: programs, exercises: exercises, history: history, profile: profile))
+        localSnapshotModifiedAt = persistence.save(snapshot: normalizedSnapshot)
+        hasPersistedSnapshot = true
+    }
+
+    func save() {
+        let snapshot = currentSnapshot()
+        profile = snapshot.profile
+        Bundle.overrideLocalization(languageCode: selectedLanguageCode)
+        localSnapshotModifiedAt = persistence.save(snapshot: snapshot)
+        hasPersistedSnapshot = true
+    }
+
+    func handleAppLaunch() async {
+        await runBackupSync(reason: .launch, allowRestorePrompt: true)
+    }
+
+    func handleSceneDidEnterBackground() async {
+        await runBackupSync(reason: .sceneBackground, allowRestorePrompt: false)
+    }
+
+    func handleBackgroundBackupTask() async -> Bool {
+        await runBackupSync(reason: .backgroundTask, allowRestorePrompt: false)
+        return backupStatus.lastErrorDescription == nil
+    }
+
+    func refreshBackupStatus() async {
+        let result = await backupCoordinator.refreshStatus(
+            localSnapshotExists: hasPersistedSnapshot,
+            localSnapshotModifiedAt: localSnapshotModifiedAt
+        )
+        applyBackupSyncResult(result, allowRestorePrompt: true)
+    }
+
+    func backupNow() async {
+        guard hasPersistedSnapshot else {
+            backupStatus.lastErrorDescription = Bundle.main.localizedString(forKey: "backup.error.no_local_data", value: nil, table: nil)
+            return
+        }
+
+        backupStatus.isBackupInProgress = true
+        backupStatus.lastErrorDescription = nil
+        let status = await backupCoordinator.backupNow(snapshot: currentSnapshot())
+        backupStatus = status
+    }
+
+    func prepareManualRestore() async {
+        backupStatus.lastErrorDescription = nil
+        let result = await backupCoordinator.manualRestorePrompt()
+        applyBackupSyncResult(result, allowRestorePrompt: true)
+    }
+
+    func confirmPendingRestore() async {
+        guard pendingRestorePrompt != nil else {
+            return
+        }
+
+        backupStatus.isRestoreInProgress = true
+        backupStatus.lastErrorDescription = nil
+
+        do {
+            let envelope = try await backupCoordinator.restoreLatestBackup()
+            pendingRestorePrompt = nil
+            apply(snapshot: envelope.snapshot)
+            let refresh = await backupCoordinator.refreshStatus(
+                localSnapshotExists: hasPersistedSnapshot,
+                localSnapshotModifiedAt: localSnapshotModifiedAt
+            )
+            backupStatus = refresh.status
+        } catch {
+            backupStatus.lastErrorDescription = (error as? LocalizedError)?.errorDescription ?? (error as NSError).localizedDescription
+        }
+
+        backupStatus.isRestoreInProgress = false
+    }
+
+    func dismissPendingRestorePrompt() async {
+        guard let prompt = pendingRestorePrompt else {
+            return
+        }
+
+        if prompt.kind == .manualRestore {
+            pendingRestorePrompt = nil
+            return
+        }
+
+        await backupCoordinator.dismissRestorePrompt(for: prompt.metadata)
+        pendingRestorePrompt = nil
+        let refresh = await backupCoordinator.refreshStatus(
+            localSnapshotExists: hasPersistedSnapshot,
+            localSnapshotModifiedAt: localSnapshotModifiedAt
+        )
+        backupStatus = refresh.status
     }
 
     func updateProfile(_ updater: (inout UserProfile) -> Void) {
@@ -280,6 +403,32 @@ final class AppStore {
         return nil
     }
 
+    private func runBackupSync(reason: BackupTriggerReason, allowRestorePrompt: Bool) async {
+        let result = await backupCoordinator.syncIfNeeded(
+            snapshot: currentSnapshot(),
+            localSnapshotExists: hasPersistedSnapshot,
+            localSnapshotModifiedAt: localSnapshotModifiedAt,
+            reason: reason
+        )
+        applyBackupSyncResult(result, allowRestorePrompt: allowRestorePrompt)
+    }
+
+    private func applyBackupSyncResult(_ result: BackupSyncResult, allowRestorePrompt: Bool) {
+        backupStatus = result.status
+        if allowRestorePrompt {
+            pendingRestorePrompt = result.restorePrompt
+        }
+    }
+
+    private func normalizedSnapshot(from snapshot: AppSnapshot) -> AppSnapshot {
+        AppSnapshot(
+            programs: snapshot.programs,
+            exercises: snapshot.exercises,
+            history: snapshot.history.sorted { $0.startedAt > $1.startedAt },
+            profile: Self.normalizedProfile(snapshot.profile)
+        )
+    }
+
     private func templateExerciseLocation(
         programID: UUID,
         workoutID: UUID,
@@ -327,11 +476,16 @@ final class AppStore {
     }
 }
 
-struct AppSnapshot: Codable {
+struct AppSnapshot: Codable, Equatable, Sendable {
     var programs: [WorkoutProgram]
     var exercises: [Exercise]
     var history: [WorkoutSession]
     var profile: UserProfile
+}
+
+struct StoredSnapshot: Sendable {
+    var snapshot: AppSnapshot
+    var modifiedAt: Date?
 }
 
 struct PersistenceController {
@@ -340,16 +494,29 @@ struct PersistenceController {
         return base.appendingPathComponent("workout-app-snapshot.json")
     }
 
-    func load() -> AppSnapshot? {
-        guard let data = try? Data(contentsOf: fileURL) else { return nil }
-        return try? JSONDecoder().decode(AppSnapshot.self, from: data)
+    func loadStoredSnapshot() -> StoredSnapshot? {
+        guard let data = try? Data(contentsOf: fileURL),
+              let snapshot = try? JSONDecoder().decode(AppSnapshot.self, from: data) else {
+            return nil
+        }
+
+        return StoredSnapshot(snapshot: snapshot, modifiedAt: snapshotModifiedAt())
     }
 
-    func save(snapshot: AppSnapshot) {
+    @discardableResult
+    func save(snapshot: AppSnapshot) -> Date? {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        guard let data = try? encoder.encode(snapshot) else { return }
+        guard let data = try? encoder.encode(snapshot) else { return snapshotModifiedAt() }
         try? data.write(to: fileURL, options: .atomic)
+        return snapshotModifiedAt()
+    }
+
+    func snapshotModifiedAt() -> Date? {
+        guard let values = try? fileURL.resourceValues(forKeys: [.contentModificationDateKey]) else {
+            return nil
+        }
+        return values.contentModificationDate
     }
 }
 

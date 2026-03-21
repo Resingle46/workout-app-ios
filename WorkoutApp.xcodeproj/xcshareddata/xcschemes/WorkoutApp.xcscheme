@@ -20,6 +20,20 @@
                ReferencedContainer = "container:WorkoutApp.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "NO"
+            buildForProfiling = "NO"
+            buildForArchiving = "NO"
+            buildForAnalyzing = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "4C1E0E7F8A1B4C5D9E0F1017"
+               BuildableName = "WorkoutAppTests.xctest"
+               BlueprintName = "WorkoutAppTests"
+               ReferencedContainer = "container:WorkoutApp.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
       </BuildActionEntries>
    </BuildAction>
    <TestAction
@@ -28,6 +42,16 @@
       selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
       shouldUseLaunchSchemeArgsEnv = "YES">
       <Testables>
+         <TestableReference
+            skipped = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "4C1E0E7F8A1B4C5D9E0F1017"
+               BuildableName = "WorkoutAppTests.xctest"
+               BlueprintName = "WorkoutAppTests"
+               ReferencedContainer = "container:WorkoutApp.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
       </Testables>
    </TestAction>
    <LaunchAction

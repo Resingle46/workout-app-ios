@@ -1,13 +1,13 @@
 import Foundation
 
-enum RootTab: Hashable {
+enum RootTab: Hashable, Sendable {
     case programs
     case workout
     case statistics
     case profile
 }
 
-struct ExerciseCategory: Identifiable, Codable, Hashable {
+struct ExerciseCategory: Identifiable, Codable, Hashable, Sendable {
     let id: UUID
     var nameKey: String
     var symbol: String
@@ -19,7 +19,7 @@ struct ExerciseCategory: Identifiable, Codable, Hashable {
     }
 }
 
-struct Exercise: Identifiable, Codable, Hashable {
+struct Exercise: Identifiable, Codable, Hashable, Sendable {
     let id: UUID
     var name: String
     var categoryID: UUID
@@ -35,7 +35,7 @@ struct Exercise: Identifiable, Codable, Hashable {
     }
 }
 
-struct WorkoutSetTemplate: Identifiable, Codable, Hashable {
+struct WorkoutSetTemplate: Identifiable, Codable, Hashable, Sendable {
     let id: UUID
     var reps: Int
     var suggestedWeight: Double
@@ -47,8 +47,8 @@ struct WorkoutSetTemplate: Identifiable, Codable, Hashable {
     }
 }
 
-struct WorkoutExerciseTemplate: Identifiable, Codable, Hashable {
-    enum GroupKind: String, Codable, CaseIterable, Hashable {
+struct WorkoutExerciseTemplate: Identifiable, Codable, Hashable, Sendable {
+    enum GroupKind: String, Codable, CaseIterable, Hashable, Sendable {
         case regular
         case superset
     }
@@ -68,7 +68,7 @@ struct WorkoutExerciseTemplate: Identifiable, Codable, Hashable {
     }
 }
 
-struct WorkoutTemplate: Identifiable, Codable, Hashable {
+struct WorkoutTemplate: Identifiable, Codable, Hashable, Sendable {
     let id: UUID
     var title: String
     var focus: String
@@ -82,7 +82,7 @@ struct WorkoutTemplate: Identifiable, Codable, Hashable {
     }
 }
 
-struct WorkoutProgram: Identifiable, Codable, Hashable {
+struct WorkoutProgram: Identifiable, Codable, Hashable, Sendable {
     let id: UUID
     var title: String
     var workouts: [WorkoutTemplate]
@@ -94,7 +94,7 @@ struct WorkoutProgram: Identifiable, Codable, Hashable {
     }
 }
 
-struct WorkoutSetLog: Identifiable, Codable, Hashable {
+struct WorkoutSetLog: Identifiable, Codable, Hashable, Sendable {
     let id: UUID
     var reps: Int
     var weight: Double
@@ -108,7 +108,7 @@ struct WorkoutSetLog: Identifiable, Codable, Hashable {
     }
 }
 
-struct WorkoutExerciseLog: Identifiable, Codable, Hashable {
+struct WorkoutExerciseLog: Identifiable, Codable, Hashable, Sendable {
     let id: UUID
     var templateExerciseID: UUID
     var exerciseID: UUID
@@ -126,7 +126,7 @@ struct WorkoutExerciseLog: Identifiable, Codable, Hashable {
     }
 }
 
-struct WorkoutSession: Identifiable, Codable, Hashable {
+struct WorkoutSession: Identifiable, Codable, Hashable, Sendable {
     let id: UUID
     var workoutTemplateID: UUID
     var title: String
@@ -146,7 +146,7 @@ struct WorkoutSession: Identifiable, Codable, Hashable {
     var isFinished: Bool { endedAt != nil }
 }
 
-struct RecentWorkoutExerciseSummary: Identifiable, Hashable {
+struct RecentWorkoutExerciseSummary: Identifiable, Hashable, Sendable {
     let id: UUID
     var exerciseID: UUID
     var exerciseName: String
@@ -154,7 +154,7 @@ struct RecentWorkoutExerciseSummary: Identifiable, Hashable {
     var sets: [WorkoutSetLog]
 }
 
-struct UserProfile: Codable, Hashable {
+struct UserProfile: Codable, Hashable, Sendable {
     var sex: String
     var age: Int
     var weight: Double

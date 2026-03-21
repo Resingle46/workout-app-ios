@@ -57,6 +57,8 @@ struct ProfileView: View {
                         .pickerStyle(.segmented)
                     }
                 }
+
+                BackupControlsCard()
             }
             .padding(20)
         }
@@ -93,6 +95,111 @@ struct ProfileView: View {
             .padding(.vertical, 10)
         }
         .buttonStyle(.plain)
+    }
+}
+
+private struct BackupControlsCard: View {
+    @Environment(AppStore.self) private var store
+
+    var body: some View {
+        AppCard {
+            VStack(alignment: .leading, spacing: 16) {
+                AppSectionTitle(titleKey: "backup.section")
+
+                backupRow(titleKey: "backup.status", value: availabilityText)
+                backupRow(
+                    titleKey: "backup.last_backup",
+                    value: formattedDate(store.backupStatus.latestCloudBackup?.createdAt ?? store.backupStatus.lastSuccessfulBackupAt)
+                )
+                backupRow(titleKey: "backup.local_state", value: formattedDate(store.localStateUpdatedAt))
+
+                if store.backupStatus.isBackupInProgress || store.backupStatus.isRestoreInProgress {
+                    HStack(spacing: 12) {
+                        ProgressView()
+                            .tint(AppTheme.accent)
+                        Text(progressTextKey)
+                            .foregroundStyle(AppTheme.secondaryText)
+                    }
+                }
+
+                if let errorDescription = store.backupStatus.lastErrorDescription, !errorDescription.isEmpty {
+                    Text(errorDescription)
+                        .font(.footnote.weight(.medium))
+                        .foregroundStyle(AppTheme.neonOrange)
+                }
+
+                VStack(spacing: 12) {
+                    Button("backup.action.push_local") {
+                        Task {
+                            await store.backupNow()
+                        }
+                    }
+                    .buttonStyle(AppPrimaryButtonStyle())
+                    .disabled(!store.canCreateCloudBackup)
+                    .opacity(store.canCreateCloudBackup ? 1 : 0.55)
+
+                    Button("backup.action.apply_cloud") {
+                        Task {
+                            await store.prepareManualRestore()
+                        }
+                    }
+                    .buttonStyle(AppSecondaryButtonStyle())
+                    .disabled(!store.backupStatus.canRestore)
+                    .opacity(store.backupStatus.canRestore ? 1 : 0.55)
+                }
+            }
+        }
+    }
+
+    private var availabilityText: String {
+        switch store.backupStatus.availability {
+        case .checking:
+            return localized("backup.state.checking")
+        case .available:
+            return localized("backup.state.available")
+        case .iCloudAccountMissing:
+            return localized("backup.state.account_missing")
+        case .restricted:
+            return localized("backup.state.restricted")
+        case .temporarilyUnavailable:
+            return localized("backup.state.unavailable")
+        }
+    }
+
+    private var progressTextKey: LocalizedStringKey {
+        store.backupStatus.isRestoreInProgress ? "backup.progress.restore" : "backup.progress.backup"
+    }
+
+    private func backupRow(titleKey: LocalizedStringKey, value: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Text(titleKey)
+                .foregroundStyle(AppTheme.primaryText)
+            Spacer(minLength: 20)
+            Text(value)
+                .multilineTextAlignment(.trailing)
+                .foregroundStyle(AppTheme.secondaryText)
+        }
+        .font(.subheadline)
+    }
+
+    private func formattedDate(_ date: Date?) -> String {
+        guard let date else {
+            return localized("backup.value.none")
+        }
+
+        return date.formatted(
+            .dateTime
+                .year()
+                .month(.abbreviated)
+                .day()
+                .hour()
+                .minute()
+                .locale(store.locale)
+        )
+    }
+
+    private func localized(_ key: String) -> String {
+        Bundle.main.localizedString(forKey: key, value: nil, table: nil)
     }
 }
 

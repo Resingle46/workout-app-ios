@@ -44,6 +44,57 @@ struct RootTabView: View {
         .toolbarColorScheme(.dark, for: .tabBar)
         .toolbarBackground(.visible, for: .tabBar)
         .toolbarBackground(AppTheme.surface, for: .tabBar)
+        .alert(item: $store.pendingRestorePrompt) { prompt in
+            Alert(
+                title: Text(restorePromptTitle(for: prompt)),
+                message: Text(restorePromptMessage(for: prompt, locale: store.locale)),
+                primaryButton: .default(Text("backup.action.restore")) {
+                    Task {
+                        await store.confirmPendingRestore()
+                    }
+                },
+                secondaryButton: .cancel(Text("action.cancel")) {
+                    Task {
+                        await store.dismissPendingRestorePrompt()
+                    }
+                }
+            )
+        }
+    }
+
+    private func restorePromptTitle(for prompt: BackupRestorePrompt) -> LocalizedStringKey {
+        switch prompt.kind {
+        case .emptyLocal:
+            return "backup.restore.empty_title"
+        case .cloudNewerThanLocal:
+            return "backup.restore.newer_title"
+        case .manualRestore:
+            return "backup.restore.manual_title"
+        }
+    }
+
+    private func restorePromptMessage(for prompt: BackupRestorePrompt, locale: Locale) -> String {
+        let formatKey: String
+        switch prompt.kind {
+        case .emptyLocal:
+            formatKey = "backup.restore.empty_message"
+        case .cloudNewerThanLocal:
+            formatKey = "backup.restore.newer_message"
+        case .manualRestore:
+            formatKey = "backup.restore.manual_message"
+        }
+
+        let formattedDate = prompt.metadata.createdAt.formatted(
+            .dateTime
+                .year()
+                .month(.abbreviated)
+                .day()
+                .hour()
+                .minute()
+                .locale(locale)
+        )
+        let format = Bundle.main.localizedString(forKey: formatKey, value: nil, table: nil)
+        return String(format: format, formattedDate)
     }
 }
 
