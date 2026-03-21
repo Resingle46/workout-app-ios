@@ -7,6 +7,7 @@ struct ActiveWorkoutView: View {
     @State private var scrollOffset: CGFloat = 0
     @State private var presentedSummary: PresentedWorkoutSummary?
     @State private var pendingAutoScrollTarget: CurrentWorkoutSetPosition?
+    @FocusState private var focusedField: WorkoutSetField?
 
     private let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
@@ -53,6 +54,7 @@ struct ActiveWorkoutView: View {
                                                         setIndex: setIndex,
                                                         set: set,
                                                         isCurrent: currentSetPosition?.exerciseIndex == exerciseIndex && currentSetPosition?.setIndex == setIndex,
+                                                        focusedField: $focusedField,
                                                         onMarkedDone: {
                                                             DispatchQueue.main.async {
                                                                 guard let updatedSession = store.activeSession else { return }
@@ -139,6 +141,14 @@ struct ActiveWorkoutView: View {
             }
         }
         .toolbar(.hidden, for: .navigationBar)
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("action.done") {
+                    focusedField = nil
+                }
+            }
+        }
         .onAppear {
             if store.activeSession == nil {
                 presentedSummary = nil
@@ -362,12 +372,12 @@ private struct WorkoutExerciseInfoRow: View {
 
 struct WorkoutSetRow: View {
     @Environment(AppStore.self) private var store
-    @FocusState private var focusedField: WorkoutSetField?
 
     let exerciseIndex: Int
     let setIndex: Int
     let set: WorkoutSetLog
     let isCurrent: Bool
+    let focusedField: FocusState<WorkoutSetField?>.Binding
     var onMarkedDone: () -> Void = {}
 
     private var isCompleted: Bool {
@@ -454,22 +464,12 @@ struct WorkoutSetRow: View {
                 WorkoutCurrentSetHighlight()
             }
         }
-        .toolbar {
-            ToolbarItemGroup(placement: .keyboard) {
-                Spacer()
-                Button("action.done") {
-                    focusedField = nil
-                }
-            }
-        }
     }
 
     private var repsControl: some View {
         HStack(spacing: 0) {
             Button {
-                updateSet { current in
-                    current.reps = max(1, current.reps - 1)
-                }
+                updateReps(max(1, set.reps - 1))
             } label: {
                 Image(systemName: "minus")
                     .font(.system(size: 16, weight: .bold))
@@ -487,9 +487,7 @@ struct WorkoutSetRow: View {
             TextField("0", value: Binding(
                 get: { set.reps },
                 set: { newValue in
-                    updateSet { current in
-                        current.reps = min(max(newValue, 1), 50)
-                    }
+                    updateReps(min(max(newValue, 1), 50))
                 }
             ), format: .number)
             .textFieldStyle(.plain)
@@ -503,9 +501,7 @@ struct WorkoutSetRow: View {
                 .frame(width: 1, height: 26)
 
             Button {
-                updateSet { current in
-                    current.reps = min(50, current.reps + 1)
-                }
+                updateReps(min(50, set.reps + 1))
             } label: {
                 Image(systemName: "plus")
                     .font(.system(size: 16, weight: .bold))
@@ -564,6 +560,15 @@ struct WorkoutSetRow: View {
             guard exerciseIndex < session.exercises.count else { return }
             for index in setIndex..<session.exercises[exerciseIndex].sets.count {
                 session.exercises[exerciseIndex].sets[index].weight = newWeight
+            }
+        }
+    }
+
+    private func updateReps(_ newReps: Int) {
+        store.updateActiveSession { session in
+            guard exerciseIndex < session.exercises.count else { return }
+            for index in setIndex..<session.exercises[exerciseIndex].sets.count {
+                session.exercises[exerciseIndex].sets[index].reps = newReps
             }
         }
     }
