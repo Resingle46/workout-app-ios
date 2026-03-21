@@ -158,7 +158,9 @@ enum BackupConstants {
     static let schemaVersionField = "schemaVersion"
     static let appVersionField = "appVersion"
     static let buildNumberField = "buildNumber"
-    static let backgroundTaskIdentifier = "com.example.WorkoutApp.daily-backup"
+    static var backgroundTaskIdentifier: String {
+        "\(Bundle.main.bundleIdentifier ?? "com.example.WorkoutApp").daily-backup"
+    }
 
     static var appVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
