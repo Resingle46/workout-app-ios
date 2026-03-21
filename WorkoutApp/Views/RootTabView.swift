@@ -176,17 +176,109 @@ extension View {
 private struct AppScreenBackgroundModifier: ViewModifier {
     func body(content: Content) -> some View {
         content
-            .background(
+            .background(AppAmbientBackground())
+            .foregroundStyle(AppTheme.primaryText)
+            .toolbarColorScheme(.dark, for: .navigationBar)
+    }
+}
+
+private struct AppAmbientBackground: View {
+    var body: some View {
+        GeometryReader { proxy in
+            let width = proxy.size.width
+            let height = proxy.size.height
+
+            ZStack {
                 LinearGradient(
-                    colors: [Color.black, AppTheme.background],
+                    colors: [
+                        Color.black,
+                        AppTheme.background,
+                        Color(red: 0.02, green: 0.02, blue: 0.04)
+                    ],
                     startPoint: .top,
                     endPoint: .bottom
                 )
-                .ignoresSafeArea()
-            )
-            .foregroundStyle(AppTheme.primaryText)
-            .toolbarColorScheme(.dark, for: .navigationBar)
+
+                ambientBlob(
+                    colors: [
+                        AppTheme.neonOrange.opacity(0.2),
+                        AppTheme.neonViolet.opacity(0.12),
+                        Color.clear
+                    ],
+                    size: CGSize(width: width * 0.92, height: height * 0.42),
+                    offset: CGSize(width: -width * 0.28, height: -height * 0.2),
+                    blur: 120
+                )
+
+                ambientBlob(
+                    colors: [
+                        AppTheme.neonBlue.opacity(0.18),
+                        AppTheme.neonCyan.opacity(0.12),
+                        Color.clear
+                    ],
+                    size: CGSize(width: width * 0.78, height: height * 0.34),
+                    offset: CGSize(width: width * 0.34, height: -height * 0.1),
+                    blur: 112
+                )
+
+                ambientBlob(
+                    colors: [
+                        AppTheme.neonViolet.opacity(0.16),
+                        AppTheme.neonBlue.opacity(0.1),
+                        Color.clear
+                    ],
+                    size: CGSize(width: width * 1.05, height: height * 0.38),
+                    offset: CGSize(width: -width * 0.08, height: height * 0.36),
+                    blur: 132
+                )
+
+                ambientBlob(
+                    colors: [
+                        AppTheme.neonLime.opacity(0.08),
+                        AppTheme.neonCyan.opacity(0.06),
+                        Color.clear
+                    ],
+                    size: CGSize(width: width * 0.62, height: height * 0.24),
+                    offset: CGSize(width: width * 0.2, height: height * 0.24),
+                    blur: 96
+                )
+
+                LinearGradient(
+                    colors: [
+                        Color.black.opacity(0.18),
+                        AppTheme.background.opacity(0.56),
+                        Color.black.opacity(0.34)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+
+                Color.black.opacity(0.14)
+            }
+            .ignoresSafeArea()
         }
+        .allowsHitTesting(false)
+    }
+
+    private func ambientBlob(
+        colors: [Color],
+        size: CGSize,
+        offset: CGSize,
+        blur: CGFloat
+    ) -> some View {
+        Ellipse()
+            .fill(
+                RadialGradient(
+                    colors: colors,
+                    center: .center,
+                    startRadius: 12,
+                    endRadius: max(size.width, size.height) * 0.52
+                )
+            )
+            .frame(width: size.width, height: size.height)
+            .offset(offset)
+            .blur(radius: blur)
+    }
 }
 
 extension Double {
