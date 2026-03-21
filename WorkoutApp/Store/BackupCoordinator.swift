@@ -170,13 +170,6 @@ enum BackupConstants {
         Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
     }
 
-    static var containerIdentifier: String? {
-        guard let bundleIdentifier = Bundle.main.bundleIdentifier, !bundleIdentifier.isEmpty else {
-            return nil
-        }
-
-        return "iCloud.\(bundleIdentifier)"
-    }
 }
 
 actor BackupCoordinator {
@@ -194,9 +187,9 @@ actor BackupCoordinator {
     ) {
         if let container {
             self.container = container
-        } else if let identifier = BackupConstants.containerIdentifier {
-            self.container = CKContainer(identifier: identifier)
         } else {
+            // Personal-team and sideload installs can rewrite the runtime bundle identifier.
+            // Using the default container avoids CloudKit init crashes from mismatched identifiers.
             self.container = CKContainer.default()
         }
 
