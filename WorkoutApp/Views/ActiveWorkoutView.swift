@@ -14,130 +14,9 @@ struct ActiveWorkoutView: View {
     var body: some View {
         Group {
             if let session = store.activeSession {
-                let currentSetPosition = currentSetPosition(in: session)
-
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 18) {
-                            scrollOffsetReader
-                            expandedHeader(for: session)
-
-                            LazyVStack(spacing: 16) {
-                                ForEach(Array(session.exercises.enumerated()), id: \.element.id) { exerciseIndex, item in
-                                    if let exercise = store.exercise(for: item.exerciseID) {
-                                        AppCard {
-                                            VStack(alignment: .leading, spacing: 16) {
-                                                HStack(alignment: .top, spacing: 12) {
-                                                    VStack(alignment: .leading, spacing: 8) {
-                                                        Text(exercise.localizedName)
-                                                            .font(.title3.weight(.heavy))
-
-                                                        WorkoutExerciseInfoRow(
-                                                            targetWeightText: targetWeightText(for: item, session: session),
-                                                            previousWeightText: previousWeightText(for: item)
-                                                        )
-
-                                                        if item.groupKind == .superset {
-                                                            Label("label.superset", systemImage: "bolt.fill")
-                                                                .font(.caption.weight(.semibold))
-                                                                .padding(.horizontal, 10)
-                                                                .padding(.vertical, 6)
-                                                                .background(AppTheme.accentMuted, in: Capsule())
-                                                        }
-                                                    }
-                                                    Spacer()
-                                                }
-
-                                                ForEach(Array(item.sets.enumerated()), id: \.element.id) { setIndex, set in
-                                                    WorkoutSetRow(
-                                                        exerciseIndex: exerciseIndex,
-                                                        setIndex: setIndex,
-                                                        set: set,
-                                                        isCurrent: currentSetPosition?.exerciseIndex == exerciseIndex && currentSetPosition?.setIndex == setIndex,
-                                                        focusedField: $focusedField,
-                                                        onMarkedDone: {
-                                                            DispatchQueue.main.async {
-                                                                guard let updatedSession = store.activeSession else { return }
-                                                                pendingAutoScrollTarget = currentSetPosition(in: updatedSession)
-                                                            }
-                                                        }
-                                                    )
-                                                    .id(CurrentWorkoutSetPosition(exerciseIndex: exerciseIndex, setIndex: setIndex))
-                                                }
-
-                                                Button {
-                                                    store.updateActiveSession { current in
-                                                        current.exercises[exerciseIndex].sets.append(WorkoutSetLog(reps: 10, weight: 0))
-                                                    }
-                                                } label: {
-                                                    Label("action.add_set", systemImage: "plus")
-                                                }
-                                                .buttonStyle(AppSecondaryButtonStyle())
-
-                                                VStack(alignment: .leading, spacing: 6) {
-                                                    Text(restSummary(for: item))
-                                                    if let previousSetRest = previousSetRest(for: item) {
-                                                        Text(String(format: NSLocalizedString("workout.previous_rest", comment: ""), previousSetRest))
-                                                    }
-                                                }
-                                                .font(.caption)
-                                                .foregroundStyle(AppTheme.secondaryText)
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            finishWorkoutCTA
-                        }
-                        .padding(.horizontal, 20)
-                        .padding(.top, 12)
-                        .padding(.bottom, 32)
-                    }
-                    .coordinateSpace(name: "workout-scroll")
-                    .overlay(alignment: .top) {
-                        if scrollOffset < -70 {
-                            collapsedHeader(for: session)
-                                .padding(.horizontal, 20)
-                                .padding(.top, 8)
-                                .transition(.move(edge: .top).combined(with: .opacity))
-                        }
-                    }
-                    .onChange(of: pendingAutoScrollTarget) { _, newValue in
-                        guard let newValue else { return }
-                        DispatchQueue.main.async {
-                            withAnimation(.easeInOut(duration: 0.32)) {
-                                proxy.scrollTo(newValue, anchor: .center)
-                            }
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                                if pendingAutoScrollTarget == newValue {
-                                    pendingAutoScrollTarget = nil
-                                }
-                            }
-                        }
-                    }
-                    .onPreferenceChange(WorkoutScrollOffsetPreferenceKey.self) { scrollOffset = $0 }
-                    .onReceive(timer) { now = $0 }
-                    .appScreenBackground()
-                }
+                activeSessionContent(for: session)
             } else {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 18) {
-                        Text("tab.workout")
-                            .font(.system(size: 38, weight: .black, design: .rounded))
-
-                        AppCard {
-                            VStack(alignment: .leading, spacing: 12) {
-                                Text("workout.empty_title")
-                                    .font(.title2.weight(.heavy))
-                                Text("workout.empty_description")
-                                    .foregroundStyle(AppTheme.secondaryText)
-                            }
-                        }
-                    }
-                    .padding(20)
-                }
-                .appScreenBackground()
+                emptyStateContent
             }
         }
         .toolbar(.hidden, for: .navigationBar)
@@ -177,6 +56,178 @@ struct ActiveWorkoutView: View {
                 )
             }
             .interactiveDismissDisabled()
+        }
+    }
+
+    private var emptyStateContent: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                Text("tab.workout")
+                    .font(.system(size: 38, weight: .black, design: .rounded))
+
+                AppCard {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("workout.empty_title")
+                            .font(.title2.weight(.heavy))
+                        Text("workout.empty_description")
+                            .foregroundStyle(AppTheme.secondaryText)
+                    }
+                }
+            }
+            .padding(20)
+        }
+        .appScreenBackground()
+    }
+
+    private func activeSessionContent(for session: WorkoutSession) -> some View {
+        let currentSetPosition = currentSetPosition(in: session)
+
+        return ScrollViewReader { proxy in
+            ScrollView {
+                activeSessionScrollContent(
+                    for: session,
+                    currentSetPosition: currentSetPosition
+                )
+            }
+            .coordinateSpace(name: "workout-scroll")
+            .overlay(alignment: .top) {
+                if scrollOffset < -70 {
+                    collapsedHeader(for: session)
+                        .padding(.horizontal, 20)
+                        .padding(.top, 8)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
+            }
+            .onChange(of: pendingAutoScrollTarget) { _, newValue in
+                guard let newValue else { return }
+                DispatchQueue.main.async {
+                    withAnimation(.easeInOut(duration: 0.32)) {
+                        proxy.scrollTo(newValue, anchor: .center)
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                        if pendingAutoScrollTarget == newValue {
+                            pendingAutoScrollTarget = nil
+                        }
+                    }
+                }
+            }
+            .onPreferenceChange(WorkoutScrollOffsetPreferenceKey.self) { scrollOffset = $0 }
+            .onReceive(timer) { now = $0 }
+            .appScreenBackground()
+        }
+    }
+
+    private func activeSessionScrollContent(
+        for session: WorkoutSession,
+        currentSetPosition: CurrentWorkoutSetPosition?
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 18) {
+            scrollOffsetReader
+            expandedHeader(for: session)
+            exerciseList(for: session, currentSetPosition: currentSetPosition)
+            finishWorkoutCTA
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 12)
+        .padding(.bottom, 32)
+    }
+
+    private func exerciseList(
+        for session: WorkoutSession,
+        currentSetPosition: CurrentWorkoutSetPosition?
+    ) -> some View {
+        LazyVStack(spacing: 16) {
+            ForEach(Array(session.exercises.enumerated()), id: \.element.id) { exerciseIndex, item in
+                if let exercise = store.exercise(for: item.exerciseID) {
+                    exerciseCard(
+                        for: exercise,
+                        item: item,
+                        session: session,
+                        exerciseIndex: exerciseIndex,
+                        currentSetPosition: currentSetPosition
+                    )
+                }
+            }
+        }
+    }
+
+    private func exerciseCard(
+        for exercise: Exercise,
+        item: WorkoutExerciseLog,
+        session: WorkoutSession,
+        exerciseIndex: Int,
+        currentSetPosition: CurrentWorkoutSetPosition?
+    ) -> some View {
+        AppCard {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack(alignment: .top, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(exercise.localizedName)
+                            .font(.title3.weight(.heavy))
+
+                        WorkoutExerciseInfoRow(
+                            targetWeightText: targetWeightText(for: item, session: session),
+                            previousWeightText: previousWeightText(for: item)
+                        )
+
+                        if item.groupKind == .superset {
+                            Label("label.superset", systemImage: "bolt.fill")
+                                .font(.caption.weight(.semibold))
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(AppTheme.accentMuted, in: Capsule())
+                        }
+                    }
+
+                    Spacer()
+                }
+
+                setRows(
+                    for: item,
+                    exerciseIndex: exerciseIndex,
+                    currentSetPosition: currentSetPosition
+                )
+
+                Button {
+                    store.updateActiveSession { current in
+                        current.exercises[exerciseIndex].sets.append(WorkoutSetLog(reps: 10, weight: 0))
+                    }
+                } label: {
+                    Label("action.add_set", systemImage: "plus")
+                }
+                .buttonStyle(AppSecondaryButtonStyle())
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(restSummary(for: item))
+                    if let previousSetRest = previousSetRest(for: item) {
+                        Text(String(format: NSLocalizedString("workout.previous_rest", comment: ""), previousSetRest))
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(AppTheme.secondaryText)
+            }
+        }
+    }
+
+    private func setRows(
+        for item: WorkoutExerciseLog,
+        exerciseIndex: Int,
+        currentSetPosition: CurrentWorkoutSetPosition?
+    ) -> some View {
+        ForEach(Array(item.sets.enumerated()), id: \.element.id) { setIndex, set in
+            WorkoutSetRow(
+                exerciseIndex: exerciseIndex,
+                setIndex: setIndex,
+                set: set,
+                isCurrent: isCurrentSet(
+                    currentSetPosition,
+                    exerciseIndex: exerciseIndex,
+                    setIndex: setIndex
+                ),
+                focusedField: $focusedField,
+                onMarkedDone: queueAutoScrollUpdate
+            )
+            .id(CurrentWorkoutSetPosition(exerciseIndex: exerciseIndex, setIndex: setIndex))
         }
     }
 
@@ -314,6 +365,21 @@ struct ActiveWorkoutView: View {
             return NSLocalizedString("common.no_data", comment: "")
         }
         return String(format: NSLocalizedString("stats.weight_value", comment: ""), weight)
+    }
+
+    private func isCurrentSet(
+        _ currentSetPosition: CurrentWorkoutSetPosition?,
+        exerciseIndex: Int,
+        setIndex: Int
+    ) -> Bool {
+        currentSetPosition?.exerciseIndex == exerciseIndex && currentSetPosition?.setIndex == setIndex
+    }
+
+    private func queueAutoScrollUpdate() {
+        DispatchQueue.main.async {
+            guard let updatedSession = store.activeSession else { return }
+            pendingAutoScrollTarget = currentSetPosition(in: updatedSession)
+        }
     }
 
     private func currentSetPosition(in session: WorkoutSession) -> CurrentWorkoutSetPosition? {
