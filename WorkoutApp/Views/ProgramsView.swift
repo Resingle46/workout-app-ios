@@ -84,13 +84,7 @@ struct ProgramsView: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("programs.title")
-                .font(.system(size: 38, weight: .black, design: .rounded))
-            Text("programs.subtitle")
-                .font(.subheadline.weight(.medium))
-                .foregroundStyle(AppTheme.secondaryText)
-        }
+        AppPageHeaderModule(titleKey: "programs.title", subtitleKey: "programs.subtitle")
     }
 
     private var emptyState: some View {

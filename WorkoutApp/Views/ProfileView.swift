@@ -12,8 +12,7 @@ struct ProfileView: View {
 
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                Text("tab.profile")
-                    .font(.system(size: 38, weight: .black, design: .rounded))
+                AppPageHeaderModule(titleKey: "tab.profile")
 
                 AppCard {
                     VStack(alignment: .leading, spacing: 16) {

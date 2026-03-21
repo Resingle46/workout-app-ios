@@ -12,8 +12,7 @@ struct StatisticsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                Text("tab.statistics")
-                    .font(.system(size: 38, weight: .black, design: .rounded))
+                AppPageHeaderModule(titleKey: "tab.statistics")
 
                 if !recentExercises.isEmpty {
                     AppCard {

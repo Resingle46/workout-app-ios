@@ -58,8 +58,7 @@ struct ActiveWorkoutView: View {
     private var emptyStateContent: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                Text("tab.workout")
-                    .font(.system(size: 38, weight: .black, design: .rounded))
+                AppPageHeaderModule(titleKey: "tab.workout")
 
                 AppCard {
                     VStack(alignment: .leading, spacing: 12) {
@@ -107,6 +106,7 @@ struct ActiveWorkoutView: View {
     ) -> some View {
         VStack(alignment: .leading, spacing: 18) {
             scrollOffsetReader
+            AppPageHeaderModule(titleKey: "tab.workout")
             expandedHeader(for: session)
             exerciseList(for: session, currentSetPosition: currentSetPosition, onMarkedDone: onMarkedDone)
             finishWorkoutCTA
