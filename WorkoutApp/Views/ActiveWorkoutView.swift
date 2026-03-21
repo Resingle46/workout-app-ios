@@ -14,87 +14,98 @@ struct ActiveWorkoutView: View {
             if let session = store.activeSession {
                 let currentSetPosition = currentSetPosition(in: session)
 
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 18) {
-                        scrollOffsetReader
-                        expandedHeader(for: session)
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 18) {
+                            scrollOffsetReader
+                            expandedHeader(for: session)
 
-                        LazyVStack(spacing: 16) {
-                            ForEach(Array(session.exercises.enumerated()), id: \.element.id) { exerciseIndex, item in
-                                if let exercise = store.exercise(for: item.exerciseID) {
-                                    AppCard {
-                                        VStack(alignment: .leading, spacing: 16) {
-                                            HStack(alignment: .top, spacing: 12) {
-                                                VStack(alignment: .leading, spacing: 8) {
-                                                    Text(exercise.localizedName)
-                                                        .font(.title3.weight(.heavy))
+                            LazyVStack(spacing: 16) {
+                                ForEach(Array(session.exercises.enumerated()), id: \.element.id) { exerciseIndex, item in
+                                    if let exercise = store.exercise(for: item.exerciseID) {
+                                        AppCard {
+                                            VStack(alignment: .leading, spacing: 16) {
+                                                HStack(alignment: .top, spacing: 12) {
+                                                    VStack(alignment: .leading, spacing: 8) {
+                                                        Text(exercise.localizedName)
+                                                            .font(.title3.weight(.heavy))
 
-                                                    WorkoutExerciseInfoRow(
-                                                        targetWeightText: targetWeightText(for: item, session: session),
-                                                        previousWeightText: previousWeightText(for: item)
+                                                        WorkoutExerciseInfoRow(
+                                                            targetWeightText: targetWeightText(for: item, session: session),
+                                                            previousWeightText: previousWeightText(for: item)
+                                                        )
+
+                                                        if item.groupKind == .superset {
+                                                            Label("label.superset", systemImage: "bolt.fill")
+                                                                .font(.caption.weight(.semibold))
+                                                                .padding(.horizontal, 10)
+                                                                .padding(.vertical, 6)
+                                                                .background(AppTheme.accentMuted, in: Capsule())
+                                                        }
+                                                    }
+                                                    Spacer()
+                                                }
+
+                                                ForEach(Array(item.sets.enumerated()), id: \.element.id) { setIndex, set in
+                                                    WorkoutSetRow(
+                                                        exerciseIndex: exerciseIndex,
+                                                        setIndex: setIndex,
+                                                        set: set,
+                                                        isCurrent: currentSetPosition?.exerciseIndex == exerciseIndex && currentSetPosition?.setIndex == setIndex
                                                     )
+                                                    .id(CurrentWorkoutSetPosition(exerciseIndex: exerciseIndex, setIndex: setIndex))
+                                                }
 
-                                                    if item.groupKind == .superset {
-                                                        Label("label.superset", systemImage: "bolt.fill")
-                                                            .font(.caption.weight(.semibold))
-                                                            .padding(.horizontal, 10)
-                                                            .padding(.vertical, 6)
-                                                            .background(AppTheme.accentMuted, in: Capsule())
+                                                Button {
+                                                    store.updateActiveSession { current in
+                                                        current.exercises[exerciseIndex].sets.append(WorkoutSetLog(reps: 10, weight: 0))
+                                                    }
+                                                } label: {
+                                                    Label("action.add_set", systemImage: "plus")
+                                                }
+                                                .buttonStyle(AppSecondaryButtonStyle())
+
+                                                VStack(alignment: .leading, spacing: 6) {
+                                                    Text(restSummary(for: item))
+                                                    if let previousSetRest = previousSetRest(for: item) {
+                                                        Text(String(format: NSLocalizedString("workout.previous_rest", comment: ""), previousSetRest))
                                                     }
                                                 }
-                                                Spacer()
+                                                .font(.caption)
+                                                .foregroundStyle(AppTheme.secondaryText)
                                             }
-
-                                            ForEach(Array(item.sets.enumerated()), id: \.element.id) { setIndex, set in
-                                                WorkoutSetRow(
-                                                    exerciseIndex: exerciseIndex,
-                                                    setIndex: setIndex,
-                                                    set: set,
-                                                    isCurrent: currentSetPosition?.exerciseIndex == exerciseIndex && currentSetPosition?.setIndex == setIndex
-                                                )
-                                            }
-
-                                            Button {
-                                                store.updateActiveSession { current in
-                                                    current.exercises[exerciseIndex].sets.append(WorkoutSetLog(reps: 10, weight: 0))
-                                                }
-                                            } label: {
-                                                Label("action.add_set", systemImage: "plus")
-                                            }
-                                            .buttonStyle(AppSecondaryButtonStyle())
-
-                                            VStack(alignment: .leading, spacing: 6) {
-                                                Text(restSummary(for: item))
-                                                if let previousSetRest = previousSetRest(for: item) {
-                                                    Text(String(format: NSLocalizedString("workout.previous_rest", comment: ""), previousSetRest))
-                                                }
-                                            }
-                                            .font(.caption)
-                                            .foregroundStyle(AppTheme.secondaryText)
                                         }
                                     }
                                 }
                             }
-                        }
 
-                        finishWorkoutCTA
+                            finishWorkoutCTA
+                        }
+                        .padding(.horizontal, 20)
+                        .padding(.top, 12)
+                        .padding(.bottom, 32)
                     }
-                    .padding(.horizontal, 20)
-                    .padding(.top, 12)
-                    .padding(.bottom, 32)
-                }
-                .coordinateSpace(name: "workout-scroll")
-                .overlay(alignment: .top) {
-                    if scrollOffset < -70 {
-                        collapsedHeader(for: session)
-                            .padding(.horizontal, 20)
-                            .padding(.top, 8)
-                            .transition(.move(edge: .top).combined(with: .opacity))
+                    .coordinateSpace(name: "workout-scroll")
+                    .overlay(alignment: .top) {
+                        if scrollOffset < -70 {
+                            collapsedHeader(for: session)
+                                .padding(.horizontal, 20)
+                                .padding(.top, 8)
+                                .transition(.move(edge: .top).combined(with: .opacity))
+                        }
                     }
+                    .onChange(of: currentSetPosition) { _, newValue in
+                        guard let newValue else { return }
+                        DispatchQueue.main.async {
+                            withAnimation(.easeInOut(duration: 0.32)) {
+                                proxy.scrollTo(newValue, anchor: .center)
+                            }
+                        }
+                    }
+                    .onPreferenceChange(WorkoutScrollOffsetPreferenceKey.self) { scrollOffset = $0 }
+                    .onReceive(timer) { now = $0 }
+                    .appScreenBackground()
                 }
-                .onPreferenceChange(WorkoutScrollOffsetPreferenceKey.self) { scrollOffset = $0 }
-                .onReceive(timer) { now = $0 }
-                .appScreenBackground()
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
@@ -294,7 +305,7 @@ struct ActiveWorkoutView: View {
     }
 }
 
-private struct CurrentWorkoutSetPosition {
+private struct CurrentWorkoutSetPosition: Hashable {
     let exerciseIndex: Int
     let setIndex: Int
 }
@@ -376,7 +387,7 @@ struct WorkoutSetRow: View {
                 Spacer()
                 TextField("0", value: Binding(
                     get: { set.weight },
-                    set: { newValue in updateSet { $0.weight = newValue } }
+                    set: { newValue in updateWeight(newValue) }
                 ), format: .number)
                 .multilineTextAlignment(.trailing)
                 .keyboardType(.decimalPad)
@@ -409,8 +420,8 @@ struct WorkoutSetRow: View {
                     store.removeSetFromActiveWorkout(exerciseIndex: exerciseIndex, setIndex: setIndex)
                 } label: {
                     Image(systemName: "trash")
-                        .font(.system(size: 22, weight: .semibold))
-                        .frame(width: 54, height: 50)
+                        .font(.system(size: 20, weight: .semibold))
+                        .frame(width: 48, height: 46)
                 }
                 .buttonStyle(WorkoutSetIconButtonStyle())
             }
@@ -445,8 +456,11 @@ struct WorkoutSetRow: View {
             } label: {
                 Image(systemName: "minus")
                     .font(.system(size: 16, weight: .bold))
-                    .frame(width: 42, height: 42)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .contentShape(Rectangle())
             }
+            .frame(width: 42, height: 42)
+            .contentShape(Rectangle())
             .buttonStyle(.plain)
 
             Rectangle()
@@ -478,8 +492,11 @@ struct WorkoutSetRow: View {
             } label: {
                 Image(systemName: "plus")
                     .font(.system(size: 16, weight: .bold))
-                    .frame(width: 42, height: 42)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .contentShape(Rectangle())
             }
+            .frame(width: 42, height: 42)
+            .contentShape(Rectangle())
             .buttonStyle(.plain)
         }
         .font(.system(size: 18, weight: .semibold, design: .rounded))
@@ -524,6 +541,15 @@ struct WorkoutSetRow: View {
             change(&session.exercises[exerciseIndex].sets[setIndex])
         }
     }
+
+    private func updateWeight(_ newWeight: Double) {
+        store.updateActiveSession { session in
+            guard exerciseIndex < session.exercises.count else { return }
+            for index in setIndex..<session.exercises[exerciseIndex].sets.count {
+                session.exercises[exerciseIndex].sets[index].weight = newWeight
+            }
+        }
+    }
 }
 
 private enum WorkoutSetField: Hashable {
@@ -538,13 +564,13 @@ private struct WorkoutSetPrimaryActionLabel: View {
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: systemImage)
-                .font(.system(size: 18, weight: .semibold))
+                .font(.system(size: 16, weight: .semibold))
             Text(titleKey)
                 .multilineTextAlignment(.center)
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .frame(maxWidth: .infinity, minHeight: 50)
+        .frame(maxWidth: .infinity, minHeight: 46)
         .contentShape(Capsule())
     }
 }
@@ -554,10 +580,10 @@ private struct WorkoutSetActionButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 14, weight: .semibold, design: .rounded))
+            .font(.system(size: 13, weight: .semibold, design: .rounded))
             .foregroundStyle(AppTheme.primaryText)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 8)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
             .background(background(configuration: configuration), in: Capsule())
             .overlay(
                 Capsule()
