@@ -221,6 +221,8 @@ struct ActiveWorkoutView: View {
     }
 
     private func expandedHeader(for session: WorkoutSession) -> some View {
+        let lastCompletedSetDate = lastCompletedSetDate(in: session)
+
         WorkoutHeroCard {
             VStack(alignment: .leading, spacing: 18) {
                 Text(session.title)
@@ -238,7 +240,7 @@ struct ActiveWorkoutView: View {
                     WorkoutMetricPanel(
                         title: NSLocalizedString("workout.rest_live", comment: "")
                     ) {
-                        WorkoutLiveRestText(session: session)
+                        WorkoutLiveRestText(lastCompletedSetDate: lastCompletedSetDate)
                     }
                 }
             }
@@ -259,6 +261,13 @@ struct ActiveWorkoutView: View {
               let last = completed.last,
               let previous = completed.dropLast().last else { return nil }
         return DateComponentsFormatter.workoutRest.string(from: previous, to: last)
+    }
+
+    private func lastCompletedSetDate(in session: WorkoutSession) -> Date? {
+        session.exercises
+            .flatMap(\.sets)
+            .compactMap(\.completedAt)
+            .max()
     }
 
     private func workoutProgress(for session: WorkoutSession) -> WorkoutExerciseProgress {
@@ -342,40 +351,30 @@ private struct WorkoutDurationText: View {
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
-            Text(formattedDuration(at: context.date))
+            Text(WorkoutTimeTextFormatter.durationString(from: startedAt, to: context.date))
                 .monospacedDigit()
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
         }
-    }
-
-    private func formattedDuration(at now: Date) -> String {
-        let interval = now.timeIntervalSince(startedAt)
-        if interval >= 3600 {
-            return DateComponentsFormatter.workoutDurationLong.string(from: startedAt, to: now) ?? "00:00"
-        }
-        return DateComponentsFormatter.workoutDurationShort.string(from: startedAt, to: now) ?? "00:00"
     }
 }
 
 private struct WorkoutLiveRestText: View {
-    let session: WorkoutSession
+    let lastCompletedSetDate: Date?
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
-            Text(formattedLiveRest(at: context.date))
+            Text(
+                WorkoutTimeTextFormatter.liveRestString(
+                    lastCompletedSetDate: lastCompletedSetDate,
+                    now: context.date,
+                    fallback: NSLocalizedString("common.no_data", comment: "")
+                )
+            )
                 .monospacedDigit()
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
         }
-    }
-
-    private func formattedLiveRest(at now: Date) -> String {
-        let lastDate = session.exercises.flatMap(\.sets).compactMap(\.completedAt).max()
-        guard let lastDate else {
-            return NSLocalizedString("common.no_data", comment: "")
-        }
-        return DateComponentsFormatter.workoutRest.string(from: lastDate, to: now) ?? "00:00"
     }
 }
 
@@ -424,6 +423,7 @@ private struct WorkoutExerciseInfoRow: View {
 
 private struct WorkoutSetRow: View {
     @Environment(AppStore.self) private var store
+    @State private var currentPulseProgress: CGFloat = 0
 
     let exerciseIndex: Int
     let setIndex: Int
@@ -514,7 +514,7 @@ private struct WorkoutSetRow: View {
         .padding(16)
         .background(alignment: .bottom) {
             if isCurrent {
-                WorkoutCurrentSetBottomGlow()
+                WorkoutCurrentSetBottomGlow(pulseProgress: currentPulseProgress)
                     .offset(y: 18)
             }
         }
@@ -525,10 +525,23 @@ private struct WorkoutSetRow: View {
         )
         .overlay {
             if isCurrent {
-                WorkoutCurrentSetHighlight()
+                WorkoutCurrentSetHighlight(pulseProgress: currentPulseProgress)
             }
         }
         .shadow(color: activeCardShadowColor, radius: 16, y: 8)
+        .animation(.easeOut(duration: 0.2), value: isCurrent)
+        .animation(.easeOut(duration: 0.2), value: isCompleted)
+        .onAppear {
+            guard isCurrent else { return }
+            triggerCurrentPulse()
+        }
+        .onChange(of: isCurrent) { newValue in
+            guard newValue else {
+                currentPulseProgress = 0
+                return
+            }
+            triggerCurrentPulse()
+        }
     }
 
     private var repsControl: some View {
@@ -587,6 +600,8 @@ private struct WorkoutSetRow: View {
     }
 
     private var cardBackground: LinearGradient {
+        let pulse = Double(currentPulseProgress)
+
         if isCompleted {
             return LinearGradient(
                 colors: [
@@ -602,9 +617,21 @@ private struct WorkoutSetRow: View {
         if isCurrent {
             return LinearGradient(
                 colors: [
-                    Color(red: 0.14, green: 0.15, blue: 0.2),
-                    Color(red: 0.11, green: 0.15, blue: 0.24),
-                    Color(red: 0.1, green: 0.11, blue: 0.16)
+                    Color(
+                        red: 0.14 + (0.025 * pulse),
+                        green: 0.15 + (0.02 * pulse),
+                        blue: 0.2 + (0.03 * pulse)
+                    ),
+                    Color(
+                        red: 0.11 + (0.02 * pulse),
+                        green: 0.15 + (0.03 * pulse),
+                        blue: 0.24 + (0.035 * pulse)
+                    ),
+                    Color(
+                        red: 0.1 + (0.012 * pulse),
+                        green: 0.11 + (0.015 * pulse),
+                        blue: 0.16 + (0.022 * pulse)
+                    )
                 ],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
@@ -626,7 +653,9 @@ private struct WorkoutSetRow: View {
             return Color(red: 0.22, green: 0.42, blue: 0.33).opacity(0.55)
         }
 
-        return isCurrent ? Color.white.opacity(0.14) : Color.white.opacity(0.05)
+        return isCurrent
+            ? Color.white.opacity(0.14 + (0.1 * Double(currentPulseProgress)))
+            : Color.white.opacity(0.05)
     }
 
     private var contentOpacity: Double {
@@ -638,7 +667,17 @@ private struct WorkoutSetRow: View {
     }
 
     private var activeCardShadowColor: Color {
-        isCurrent ? AppTheme.neonCyan.opacity(0.08) : .clear
+        isCurrent ? AppTheme.neonCyan.opacity(0.08 + (0.08 * Double(currentPulseProgress))) : .clear
+    }
+
+    private func triggerCurrentPulse() {
+        currentPulseProgress = 1
+
+        DispatchQueue.main.async {
+            withAnimation(.easeOut(duration: 0.42)) {
+                currentPulseProgress = 0
+            }
+        }
     }
 
     private func updateSet(_ change: (inout WorkoutSetLog) -> Void) {
@@ -862,20 +901,20 @@ private struct WorkoutExerciseProgressCard: View {
                 let trackHeight: CGFloat = 18
                 let edgeInset = bubbleSize / 2
                 let usableWidth = max(proxy.size.width - bubbleSize, 1)
-                let bubbleOffset = usableWidth * normalizedProgress
+                let bubbleOffset = progress.total > 1 ? usableWidth * normalizedProgress : usableWidth / 2
 
                 ZStack(alignment: .leading) {
                     Capsule()
                         .fill(progressGradient)
                         .frame(height: trackHeight)
-                        .blur(radius: 10)
-                        .opacity(0.34)
+                        .blur(radius: 5)
+                        .opacity(0.18)
 
                     Capsule()
                         .fill(progressGradient)
                         .frame(height: trackHeight)
                         .overlay {
-                            markerRow(width: proxy.size.width, edgeInset: edgeInset)
+                            markerRow(edgeInset: edgeInset)
                         }
                         .overlay(
                             Capsule()
@@ -886,6 +925,7 @@ private struct WorkoutExerciseProgressCard: View {
                         .frame(width: bubbleSize, height: bubbleSize)
                         .offset(x: bubbleOffset)
                 }
+                .animation(.spring(response: 0.28, dampingFraction: 0.84), value: progress.currentStep)
             }
             .frame(height: 56)
         }
@@ -920,17 +960,22 @@ private struct WorkoutExerciseProgressCard: View {
     private var progressBubble: some View {
         ZStack {
             Circle()
-                .fill(.ultraThinMaterial)
-                .background(
-                    Circle()
-                        .fill(Color.white.opacity(0.08))
-                        .blur(radius: 10)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color.white.opacity(0.18),
+                            AppTheme.neonCyan.opacity(0.22),
+                            Color(red: 0.14, green: 0.17, blue: 0.24)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
                 )
                 .overlay(
                     Circle()
                         .fill(
                             RadialGradient(
-                                colors: [Color.white.opacity(0.22), AppTheme.neonCyan.opacity(0.12), Color.clear],
+                                colors: [Color.white.opacity(0.18), AppTheme.neonBlue.opacity(0.14), Color.clear],
                                 center: .topLeading,
                                 startRadius: 4,
                                 endRadius: 38
@@ -941,7 +986,8 @@ private struct WorkoutExerciseProgressCard: View {
                     Circle()
                         .stroke(Color.white.opacity(0.24), lineWidth: 1)
                 )
-                .shadow(color: Color.black.opacity(0.22), radius: 12, y: 6)
+                .shadow(color: AppTheme.neonBlue.opacity(0.18), radius: 8, y: 4)
+                .shadow(color: Color.black.opacity(0.18), radius: 10, y: 6)
 
             Text("\(progress.currentStep)")
                 .font(AppTypography.metric(size: 28))
@@ -950,57 +996,76 @@ private struct WorkoutExerciseProgressCard: View {
     }
 
     @ViewBuilder
-    private func markerRow(width: CGFloat, edgeInset: CGFloat) -> some View {
-        ForEach(0..<progress.total, id: \.self) { index in
+    private func markerRow(edgeInset: CGFloat) -> some View {
+        if progress.total <= 1 {
             Circle()
                 .fill(Color.black.opacity(0.22))
                 .frame(width: 11, height: 11)
-                .position(
-                    x: markerPosition(for: index, width: width, edgeInset: edgeInset),
-                    y: 9
-                )
-        }
-    }
+        } else {
+            HStack(spacing: 0) {
+                ForEach(0..<progress.total, id: \.self) { index in
+                    Circle()
+                        .fill(Color.black.opacity(0.22))
+                        .frame(width: 11, height: 11)
 
-    private func markerPosition(for index: Int, width: CGFloat, edgeInset: CGFloat) -> CGFloat {
-        guard progress.total > 1 else { return width / 2 }
-        let usableWidth = max(width - edgeInset * 2, 1)
-        let progressIndex = CGFloat(index) / CGFloat(progress.total - 1)
-        return edgeInset + (usableWidth * progressIndex)
+                    if index < progress.total - 1 {
+                        Spacer(minLength: 0)
+                    }
+                }
+            }
+            .padding(.horizontal, edgeInset)
+        }
     }
 }
 
 private struct WorkoutCurrentSetHighlight: View {
-    @State private var angle: Angle = .degrees(0)
+    let pulseProgress: CGFloat
 
     var body: some View {
+        let pulse = Double(pulseProgress)
+
         RoundedRectangle(cornerRadius: 22, style: .continuous)
-            .stroke(
-                AngularGradient(
-                    stops: [
-                        .init(color: .white.opacity(0), location: 0),
-                        .init(color: .white.opacity(0), location: 0.68),
-                        .init(color: .white.opacity(0.95), location: 0.8),
-                        .init(color: .white.opacity(0), location: 0.92),
-                        .init(color: .white.opacity(0), location: 1)
+            .strokeBorder(
+                LinearGradient(
+                    colors: [
+                        Color.white.opacity(0.24 + (0.08 * pulse)),
+                        AppTheme.neonCyan.opacity(0.12 + (0.18 * pulse)),
+                        AppTheme.neonBlue.opacity(0.08 + (0.12 * pulse)),
+                        Color.white.opacity(0.08)
                     ],
-                    center: .center,
-                    angle: angle
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
                 ),
-                lineWidth: 1.8
+                lineWidth: 1.5 + (0.45 * pulseProgress)
             )
-            .shadow(color: .white.opacity(0.12), radius: 8)
-            .allowsHitTesting(false)
-            .onAppear {
-                withAnimation(.linear(duration: 5).repeatForever(autoreverses: false)) {
-                    angle = .degrees(360)
-                }
+            .overlay {
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .strokeBorder(
+                        LinearGradient(
+                            colors: [
+                                Color.clear,
+                                Color.white.opacity(0.1 + (0.18 * pulse)),
+                                Color.clear
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        ),
+                        lineWidth: 3
+                    )
+                    .opacity(0.32 + (0.32 * pulse))
             }
+            .scaleEffect(1 + (0.01 * pulseProgress))
+            .shadow(color: AppTheme.neonCyan.opacity(0.08 + (0.12 * pulse)), radius: 9 + (4 * pulseProgress))
+            .allowsHitTesting(false)
     }
 }
 
 private struct WorkoutCurrentSetBottomGlow: View {
+    let pulseProgress: CGFloat
+
     var body: some View {
+        let pulse = Double(pulseProgress)
+
         ZStack {
             Capsule()
                 .fill(
@@ -1016,15 +1081,50 @@ private struct WorkoutCurrentSetBottomGlow: View {
                     )
                 )
                 .frame(width: 180, height: 14)
-                .blur(radius: 14)
+                .blur(radius: 10 + (4 * pulseProgress))
+                .opacity(0.75 + (0.2 * pulse))
 
             Capsule()
-                .fill(AppTheme.neonCyan.opacity(0.12))
+                .fill(AppTheme.neonCyan.opacity(0.12 + (0.08 * pulse)))
                 .frame(width: 110, height: 8)
-                .blur(radius: 10)
+                .blur(radius: 8 + (2 * pulseProgress))
         }
         .frame(maxWidth: .infinity)
         .allowsHitTesting(false)
+    }
+}
+
+enum WorkoutTimeTextFormatter {
+    static func durationString(from startedAt: Date, to now: Date) -> String {
+        formatDuration(elapsedSeconds: Int(now.timeIntervalSince(startedAt)))
+    }
+
+    static func formatDuration(elapsedSeconds: Int) -> String {
+        format(seconds: elapsedSeconds, includeHours: elapsedSeconds >= 3600)
+    }
+
+    static func liveRestString(lastCompletedSetDate: Date?, now: Date, fallback: String) -> String {
+        guard let lastCompletedSetDate else { return fallback }
+        return formatRest(elapsedSeconds: Int(now.timeIntervalSince(lastCompletedSetDate)))
+    }
+
+    static func formatRest(elapsedSeconds: Int) -> String {
+        format(seconds: elapsedSeconds, includeHours: false)
+    }
+
+    private static func format(seconds: Int, includeHours: Bool) -> String {
+        let clampedSeconds = max(seconds, 0)
+        let hours = clampedSeconds / 3600
+        let minutes = includeHours
+            ? (clampedSeconds % 3600) / 60
+            : clampedSeconds / 60
+        let secondsComponent = clampedSeconds % 60
+
+        if includeHours {
+            return String(format: "%02d:%02d:%02d", hours, minutes, secondsComponent)
+        }
+
+        return String(format: "%02d:%02d", minutes, secondsComponent)
     }
 }
 

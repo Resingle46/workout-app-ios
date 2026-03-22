@@ -16,7 +16,7 @@ struct ProgramsView: View {
                         NavigationLink(destination: ProgramDetailView(programID: program.id)) {
                             programOverviewCard(program)
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(AppInteractiveCardButtonStyle())
                         .padding(.horizontal, 8)
                     }
                 }

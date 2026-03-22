@@ -427,6 +427,10 @@ private struct AppLiquidGlassCardModifier: ViewModifier {
                     Color.white.opacity(0.03),
                     Color.clear
                 ],
+                rimStart: UnitPoint(x: 0.04, y: 0.06),
+                rimEnd: UnitPoint(x: 0.94, y: 0.92),
+                edgeStart: UnitPoint(x: 0.84, y: 0.04),
+                edgeEnd: UnitPoint(x: 0.1, y: 0.96),
                 highlightStart: UnitPoint(x: 0.12, y: 0.04),
                 highlightEnd: UnitPoint(x: 0.9, y: 0.94)
             )
@@ -452,6 +456,10 @@ private struct AppLiquidGlassCardModifier: ViewModifier {
                     AppTheme.neonCyan.opacity(0.05),
                     Color.clear
                 ],
+                rimStart: UnitPoint(x: 0.02, y: 0.1),
+                rimEnd: UnitPoint(x: 0.94, y: 0.88),
+                edgeStart: UnitPoint(x: 0.9, y: 0.08),
+                edgeEnd: UnitPoint(x: 0.08, y: 0.94),
                 highlightStart: UnitPoint(x: 0.05, y: 0.08),
                 highlightEnd: UnitPoint(x: 0.86, y: 0.94)
             )
@@ -479,6 +487,10 @@ private struct AppLiquidGlassCardModifier: ViewModifier {
                     Color.white.opacity(0.08),
                     Color.clear
                 ],
+                rimStart: UnitPoint(x: 0.08, y: 0.02),
+                rimEnd: UnitPoint(x: 0.96, y: 0.96),
+                edgeStart: UnitPoint(x: 0.92, y: 0.06),
+                edgeEnd: UnitPoint(x: 0.18, y: 0.98),
                 highlightStart: UnitPoint(x: 0.42, y: 0.02),
                 highlightEnd: UnitPoint(x: 1.0, y: 0.92)
             )
@@ -504,6 +516,10 @@ private struct AppLiquidGlassCardModifier: ViewModifier {
                     AppTheme.neonViolet.opacity(0.06),
                     Color.clear
                 ],
+                rimStart: UnitPoint(x: 0.1, y: 0.04),
+                rimEnd: UnitPoint(x: 0.92, y: 0.94),
+                edgeStart: UnitPoint(x: 0.88, y: 0.06),
+                edgeEnd: UnitPoint(x: 0.14, y: 0.94),
                 highlightStart: UnitPoint(x: 0.18, y: 0.02),
                 highlightEnd: UnitPoint(x: 0.96, y: 0.92)
             )
@@ -528,6 +544,10 @@ private struct AppLiquidGlassCardModifier: ViewModifier {
                     Color.white.opacity(0.04),
                     Color.clear
                 ],
+                rimStart: UnitPoint(x: 0.06, y: 0.04),
+                rimEnd: UnitPoint(x: 0.9, y: 0.96),
+                edgeStart: UnitPoint(x: 0.82, y: 0.08),
+                edgeEnd: UnitPoint(x: 0.08, y: 0.92),
                 highlightStart: UnitPoint(x: 0.1, y: 0.04),
                 highlightEnd: UnitPoint(x: 0.84, y: 0.96)
             )
@@ -624,9 +644,10 @@ private struct AppLiquidGlassCardModifier: ViewModifier {
             .overlay {
                 shape
                     .strokeBorder(
-                        AngularGradient(
+                        LinearGradient(
                             colors: borderPalette.rimColors,
-                            center: .center
+                            startPoint: borderPalette.rimStart,
+                            endPoint: borderPalette.rimEnd
                         ),
                         lineWidth: 0.95
                     )
@@ -646,14 +667,14 @@ private struct AppLiquidGlassCardModifier: ViewModifier {
                     .overlay {
                         shape
                             .strokeBorder(
-                                AngularGradient(
+                                LinearGradient(
                                     colors: borderPalette.edgeGlowColors,
-                                    center: .center
+                                    startPoint: borderPalette.edgeStart,
+                                    endPoint: borderPalette.edgeEnd
                                 ),
-                                lineWidth: 1.45
+                                lineWidth: 1.2
                             )
-                            .blur(radius: 1.6)
-                            .opacity(0.55)
+                            .opacity(0.5)
                     }
             }
             .shadow(color: shadowColor, radius: 16, y: 8)
@@ -664,8 +685,52 @@ private struct AppLiquidGlassBorderPalette {
     let rimColors: [Color]
     let edgeGlowColors: [Color]
     let highlightColors: [Color]
+    let rimStart: UnitPoint
+    let rimEnd: UnitPoint
+    let edgeStart: UnitPoint
+    let edgeEnd: UnitPoint
     let highlightStart: UnitPoint
     let highlightEnd: UnitPoint
+}
+
+struct AppInteractiveCardButtonStyle: ButtonStyle {
+    var pressedScale: CGFloat = 0.985
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? pressedScale : 1)
+            .overlay {
+                RoundedRectangle(
+                    cornerRadius: AppTheme.cardCornerRadius + 2,
+                    style: .continuous
+                )
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color.white.opacity(configuration.isPressed ? 0.05 : 0),
+                            Color.white.opacity(configuration.isPressed ? 0.018 : 0),
+                            Color.clear
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+            }
+            .overlay {
+                RoundedRectangle(
+                    cornerRadius: AppTheme.cardCornerRadius + 2,
+                    style: .continuous
+                )
+                .stroke(
+                    Color.white.opacity(configuration.isPressed ? 0.12 : 0),
+                    lineWidth: 1
+                )
+            }
+            .animation(
+                .spring(response: 0.24, dampingFraction: 0.84),
+                value: configuration.isPressed
+            )
+    }
 }
 
 private struct AppScreenBackgroundModifier: ViewModifier {

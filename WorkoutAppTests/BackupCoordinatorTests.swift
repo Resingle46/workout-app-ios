@@ -124,6 +124,25 @@ final class BackupCoordinatorTests: XCTestCase {
         XCTAssertEqual(store.profile, snapshot.profile)
     }
 
+    func testWorkoutDurationFormatterUsesMinuteSecondBelowOneHour() {
+        XCTAssertEqual(WorkoutTimeTextFormatter.formatDuration(elapsedSeconds: 3_599), "59:59")
+    }
+
+    func testWorkoutDurationFormatterUsesHourMinuteSecondFromOneHour() {
+        XCTAssertEqual(WorkoutTimeTextFormatter.formatDuration(elapsedSeconds: 3_605), "01:00:05")
+    }
+
+    func testWorkoutLiveRestFormatterReturnsFallbackWithoutLastCompletedSetDate() {
+        XCTAssertEqual(
+            WorkoutTimeTextFormatter.liveRestString(
+                lastCompletedSetDate: nil,
+                now: Date(timeIntervalSince1970: 1_710_000_120),
+                fallback: "--"
+            ),
+            "--"
+        )
+    }
+
     private func backupFiles(in folderURL: URL) throws -> [URL] {
         try FileManager.default.contentsOfDirectory(
             at: folderURL,
