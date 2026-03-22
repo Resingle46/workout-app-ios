@@ -426,7 +426,7 @@ struct AddExerciseToWorkoutView: View {
                 )
                 .presentationDetents([.height(380)])
                 .presentationDragIndicator(.hidden)
-                .presentationBackground(.clear)
+                .presentationBackground(AppTheme.surface)
             }
             .appScreenBackground()
         }

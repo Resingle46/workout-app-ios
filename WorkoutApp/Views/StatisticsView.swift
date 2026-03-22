@@ -11,7 +11,7 @@ struct StatisticsView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
+            LazyVStack(alignment: .leading, spacing: 20) {
                 AppPageHeaderModule(titleKey: "header.statistics.title", subtitleKey: "header.statistics.subtitle")
 
                 if !recentExercises.isEmpty {
@@ -60,7 +60,7 @@ struct StatisticsView: View {
                 exerciseChartSection
 
                 AppCard(glowStyle: .statistics) {
-                    VStack(alignment: .leading, spacing: 14) {
+                    LazyVStack(alignment: .leading, spacing: 14) {
                         AppSectionTitle(titleKey: "stats.history")
 
                         if store.history.isEmpty {

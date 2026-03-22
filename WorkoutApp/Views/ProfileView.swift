@@ -11,7 +11,7 @@ struct ProfileView: View {
         @Bindable var store = store
 
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
+            LazyVStack(alignment: .leading, spacing: 20) {
                 AppPageHeaderModule(titleKey: "header.profile.title", subtitleKey: "header.profile.subtitle")
 
                 AppCard(glowStyle: .profile) {
@@ -69,7 +69,7 @@ struct ProfileView: View {
             )
             .presentationDetents([.height(312)])
             .presentationDragIndicator(.hidden)
-            .presentationBackground(.clear)
+            .presentationBackground(AppTheme.surface)
         }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .navigationBar)

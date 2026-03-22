@@ -456,6 +456,36 @@ private struct AppLiquidGlassCardModifier: ViewModifier {
         }
     }
 
+    private var primaryGlowColors: [Color] {
+        switch glowStyle {
+        case .neutral:
+            [Color.white.opacity(0.05), AppTheme.neonBlue.opacity(0.05), .clear]
+        case .programs:
+            [AppTheme.neonCyan.opacity(0.08), AppTheme.neonLime.opacity(0.04), .clear]
+        case .workout:
+            [AppTheme.neonBlue.opacity(0.08), AppTheme.neonCyan.opacity(0.05), .clear]
+        case .statistics:
+            [AppTheme.neonViolet.opacity(0.08), AppTheme.neonBlue.opacity(0.04), .clear]
+        case .profile:
+            [Color.white.opacity(0.05), AppTheme.neonCyan.opacity(0.035), .clear]
+        }
+    }
+
+    private var secondaryGlowColors: [Color] {
+        switch glowStyle {
+        case .neutral:
+            [Color.clear, Color.white.opacity(0.03), Color.black.opacity(0.12)]
+        case .programs:
+            [Color.clear, AppTheme.neonBlue.opacity(0.025), Color.black.opacity(0.12)]
+        case .workout:
+            [Color.clear, AppTheme.neonViolet.opacity(0.03), Color.black.opacity(0.14)]
+        case .statistics:
+            [Color.clear, AppTheme.neonCyan.opacity(0.02), Color.black.opacity(0.12)]
+        case .profile:
+            [Color.clear, Color.white.opacity(0.025), Color.black.opacity(0.12)]
+        }
+    }
+
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
 
@@ -476,12 +506,6 @@ private struct AppLiquidGlassCardModifier: ViewModifier {
                         )
                     )
                     .overlay {
-                        GeometryReader { proxy in
-                            AppLiquidGlassGlowLayer(glowStyle: glowStyle, size: proxy.size)
-                        }
-                        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-                    }
-                    .overlay {
                         shape
                             .fill(
                                 LinearGradient(
@@ -494,6 +518,29 @@ private struct AppLiquidGlassCardModifier: ViewModifier {
                                     endPoint: .bottomTrailing
                                 )
                             )
+                    }
+                    .overlay {
+                        shape
+                            .fill(
+                                RadialGradient(
+                                    colors: primaryGlowColors,
+                                    center: .topLeading,
+                                    startRadius: 4,
+                                    endRadius: 220
+                                )
+                            )
+                            .blendMode(.screen)
+                    }
+                    .overlay {
+                        shape
+                            .fill(
+                                LinearGradient(
+                                    colors: secondaryGlowColors,
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                            .blendMode(.screen)
                     }
             }
             .overlay {
@@ -531,235 +578,7 @@ private struct AppLiquidGlassCardModifier: ViewModifier {
                             .opacity(0.55)
                     }
             }
-            .shadow(color: shadowColor, radius: 24, y: 10)
-    }
-}
-
-private struct AppLiquidGlassGlowLayer: View {
-    let glowStyle: AppCardGlowStyle
-    let size: CGSize
-
-    var body: some View {
-        ZStack {
-            sheenBand
-            glowPattern
-            RoundedRectangle(cornerRadius: AppTheme.cardCornerRadius, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            Color.white.opacity(0.006),
-                            Color.clear,
-                            Color.black.opacity(0.12)
-                        ],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                )
-        }
-        .compositingGroup()
-        .allowsHitTesting(false)
-    }
-
-    @ViewBuilder
-    private var sheenBand: some View {
-        switch glowStyle {
-        case .neutral:
-            glassBand(x: -0.06, y: -0.06, width: 0.26, rotation: -6, opacity: 0.08)
-        case .programs:
-            glassBand(x: 0.02, y: -0.04, width: 0.22, rotation: -4, opacity: 0.08)
-        case .workout:
-            glassBand(x: 0.28, y: -0.02, width: 0.24, rotation: 18, opacity: 0.07)
-        case .statistics:
-            glassBand(x: 0.14, y: 0.06, width: 0.2, rotation: -16, opacity: 0.06)
-        case .profile:
-            glassBand(x: 0.08, y: -0.02, width: 0.18, rotation: 2, opacity: 0.055)
-        }
-    }
-
-    @ViewBuilder
-    private var glowPattern: some View {
-        switch glowStyle {
-        case .neutral:
-            glowEllipse(
-                colors: [AppTheme.neonBlue.opacity(0.08), AppTheme.neonViolet.opacity(0.05), .clear],
-                width: 0.76,
-                height: 0.4,
-                x: 0.08,
-                y: 0.36,
-                blur: 40
-            )
-        case .programs:
-            ZStack {
-                glowEllipse(
-                    colors: [AppTheme.neonCyan.opacity(0.15), AppTheme.neonBlue.opacity(0.06), .clear],
-                    width: 0.92,
-                    height: 0.34,
-                    x: -0.06,
-                    y: 0.4,
-                    blur: 42
-                )
-                glowEllipse(
-                    colors: [AppTheme.neonLime.opacity(0.08), AppTheme.neonCyan.opacity(0.03), .clear],
-                    width: 0.62,
-                    height: 0.24,
-                    x: 0.12,
-                    y: 0.42,
-                    blur: 34
-                )
-            }
-        case .workout:
-            ZStack {
-                glowCapsule(
-                    colors: [AppTheme.neonBlue.opacity(0.14), AppTheme.neonViolet.opacity(0.08), .clear],
-                    width: 0.92,
-                    height: 0.2,
-                    x: 0.18,
-                    y: 0.18,
-                    blur: 38,
-                    rotation: 24
-                )
-                glowEllipse(
-                    colors: [AppTheme.neonCyan.opacity(0.13), AppTheme.neonBlue.opacity(0.04), .clear],
-                    width: 0.56,
-                    height: 0.32,
-                    x: 0.28,
-                    y: 0.36,
-                    blur: 34
-                )
-                glowEllipse(
-                    colors: [AppTheme.neonLime.opacity(0.07), .clear],
-                    width: 0.42,
-                    height: 0.22,
-                    x: 0.22,
-                    y: 0.48,
-                    blur: 28
-                )
-            }
-        case .statistics:
-            ZStack {
-                glowCapsule(
-                    colors: [AppTheme.neonViolet.opacity(0.12), AppTheme.neonBlue.opacity(0.06), .clear],
-                    width: 0.32,
-                    height: 0.11,
-                    x: -0.18,
-                    y: 0.38,
-                    blur: 28,
-                    rotation: -18
-                )
-                glowCapsule(
-                    colors: [AppTheme.neonViolet.opacity(0.13), AppTheme.neonCyan.opacity(0.05), .clear],
-                    width: 0.34,
-                    height: 0.11,
-                    x: 0.02,
-                    y: 0.28,
-                    blur: 30,
-                    rotation: -18
-                )
-                glowCapsule(
-                    colors: [AppTheme.neonBlue.opacity(0.14), AppTheme.neonCyan.opacity(0.06), .clear],
-                    width: 0.34,
-                    height: 0.11,
-                    x: 0.22,
-                    y: 0.18,
-                    blur: 30,
-                    rotation: -18
-                )
-                glowEllipse(
-                    colors: [AppTheme.neonBlue.opacity(0.08), .clear],
-                    width: 0.6,
-                    height: 0.24,
-                    x: 0.16,
-                    y: 0.42,
-                    blur: 34
-                )
-            }
-        case .profile:
-            ZStack {
-                glowEllipse(
-                    colors: [Color.white.opacity(0.06), AppTheme.neonCyan.opacity(0.055), .clear],
-                    width: 0.66,
-                    height: 0.42,
-                    x: 0.02,
-                    y: 0.12,
-                    blur: 44
-                )
-                glowEllipse(
-                    colors: [AppTheme.neonCyan.opacity(0.075), AppTheme.neonBlue.opacity(0.025), .clear],
-                    width: 0.82,
-                    height: 0.28,
-                    x: 0.02,
-                    y: 0.4,
-                    blur: 38
-                )
-            }
-        }
-    }
-
-    private func glassBand(x: CGFloat, y: CGFloat, width: CGFloat, rotation: Double, opacity: Double) -> some View {
-        Rectangle()
-            .fill(
-                LinearGradient(
-                    colors: [
-                        Color.white.opacity(opacity * 0.08),
-                        Color.white.opacity(opacity),
-                        Color.white.opacity(opacity * 0.16),
-                        Color.clear
-                    ],
-                    startPoint: .leading,
-                    endPoint: .trailing
-                )
-            )
-            .frame(width: size.width * width, height: size.height * 1.22)
-            .rotationEffect(.degrees(rotation))
-            .offset(x: size.width * x, y: size.height * y)
-            .blur(radius: 34)
-    }
-
-    private func glowEllipse(
-        colors: [Color],
-        width: CGFloat,
-        height: CGFloat,
-        x: CGFloat,
-        y: CGFloat,
-        blur: CGFloat,
-        rotation: Double = 0
-    ) -> some View {
-        Ellipse()
-            .fill(
-                RadialGradient(
-                    colors: colors,
-                    center: .center,
-                    startRadius: 8,
-                    endRadius: max(size.width, size.height) * 0.46
-                )
-            )
-            .frame(width: size.width * width, height: size.height * height)
-            .rotationEffect(.degrees(rotation))
-            .offset(x: size.width * x, y: size.height * y)
-            .blur(radius: blur)
-    }
-
-    private func glowCapsule(
-        colors: [Color],
-        width: CGFloat,
-        height: CGFloat,
-        x: CGFloat,
-        y: CGFloat,
-        blur: CGFloat,
-        rotation: Double
-    ) -> some View {
-        Capsule()
-            .fill(
-                LinearGradient(
-                    colors: colors,
-                    startPoint: .leading,
-                    endPoint: .trailing
-                )
-            )
-            .frame(width: size.width * width, height: size.height * height)
-            .rotationEffect(.degrees(rotation))
-            .offset(x: size.width * x, y: size.height * y)
-            .blur(radius: blur)
+            .shadow(color: shadowColor, radius: 16, y: 8)
     }
 }
 
@@ -783,8 +602,6 @@ private struct AppScreenBackgroundModifier: ViewModifier {
 }
 
 private struct AppAmbientBackground: View {
-    @State private var driftForward = false
-
     var body: some View {
         GeometryReader { proxy in
             let width = proxy.size.width
@@ -808,10 +625,11 @@ private struct AppAmbientBackground: View {
                         Color.clear
                     ],
                     size: CGSize(width: width * 0.58, height: height * 0.2),
-                    startOffset: CGSize(width: -width * 0.34, height: -height * 0.08),
-                    endOffset: CGSize(width: -width * 0.12, height: height * 0.06),
-                    blur: 84,
-                    driftForward: driftForward
+                    offset: settledOffset(
+                        from: CGSize(width: -width * 0.34, height: -height * 0.08),
+                        to: CGSize(width: -width * 0.12, height: height * 0.06)
+                    ),
+                    blur: 84
                 )
 
                 ambientBlob(
@@ -821,10 +639,11 @@ private struct AppAmbientBackground: View {
                         Color.clear
                     ],
                     size: CGSize(width: width * 0.52, height: height * 0.18),
-                    startOffset: CGSize(width: width * 0.34, height: -height * 0.06),
-                    endOffset: CGSize(width: width * 0.16, height: height * 0.1),
-                    blur: 78,
-                    driftForward: driftForward
+                    offset: settledOffset(
+                        from: CGSize(width: width * 0.34, height: -height * 0.06),
+                        to: CGSize(width: width * 0.16, height: height * 0.1)
+                    ),
+                    blur: 78
                 )
 
                 ambientBlob(
@@ -834,10 +653,11 @@ private struct AppAmbientBackground: View {
                         Color.clear
                     ],
                     size: CGSize(width: width * 0.44, height: height * 0.2),
-                    startOffset: CGSize(width: -width * 0.2, height: height * 0.38),
-                    endOffset: CGSize(width: -width * 0.06, height: height * 0.24),
-                    blur: 82,
-                    driftForward: driftForward
+                    offset: settledOffset(
+                        from: CGSize(width: -width * 0.2, height: height * 0.38),
+                        to: CGSize(width: -width * 0.06, height: height * 0.24)
+                    ),
+                    blur: 82
                 )
 
                 ambientBlob(
@@ -847,10 +667,11 @@ private struct AppAmbientBackground: View {
                         Color.clear
                     ],
                     size: CGSize(width: width * 0.46, height: height * 0.19),
-                    startOffset: CGSize(width: width * 0.28, height: height * 0.34),
-                    endOffset: CGSize(width: width * 0.12, height: height * 0.18),
-                    blur: 76,
-                    driftForward: driftForward
+                    offset: settledOffset(
+                        from: CGSize(width: width * 0.28, height: height * 0.34),
+                        to: CGSize(width: width * 0.12, height: height * 0.18)
+                    ),
+                    blur: 76
                 )
 
                 ambientBlob(
@@ -860,10 +681,11 @@ private struct AppAmbientBackground: View {
                         Color.clear
                     ],
                     size: CGSize(width: width * 0.44, height: height * 0.18),
-                    startOffset: CGSize(width: -width * 0.28, height: height * 0.14),
-                    endOffset: CGSize(width: -width * 0.08, height: height * 0.02),
-                    blur: 72,
-                    driftForward: driftForward
+                    offset: settledOffset(
+                        from: CGSize(width: -width * 0.28, height: height * 0.14),
+                        to: CGSize(width: -width * 0.08, height: height * 0.02)
+                    ),
+                    blur: 72
                 )
 
                 ambientBlob(
@@ -873,10 +695,11 @@ private struct AppAmbientBackground: View {
                         Color.clear
                     ],
                     size: CGSize(width: width * 0.4, height: height * 0.16),
-                    startOffset: CGSize(width: width * 0.08, height: height * 0.58),
-                    endOffset: CGSize(width: width * 0.18, height: height * 0.42),
-                    blur: 70,
-                    driftForward: driftForward
+                    offset: settledOffset(
+                        from: CGSize(width: width * 0.08, height: height * 0.58),
+                        to: CGSize(width: width * 0.18, height: height * 0.42)
+                    ),
+                    blur: 70
                 )
 
                 LinearGradient(
@@ -909,23 +732,22 @@ private struct AppAmbientBackground: View {
                 Color.black.opacity(0.015)
             }
             .ignoresSafeArea()
-            .onAppear {
-                guard !driftForward else { return }
-                withAnimation(.easeInOut(duration: 60).repeatForever(autoreverses: true)) {
-                    driftForward = true
-                }
-            }
         }
         .allowsHitTesting(false)
+    }
+
+    private func settledOffset(from start: CGSize, to end: CGSize) -> CGSize {
+        CGSize(
+            width: (start.width + end.width) / 2,
+            height: (start.height + end.height) / 2
+        )
     }
 
     private func ambientBlob(
         colors: [Color],
         size: CGSize,
-        startOffset: CGSize,
-        endOffset: CGSize,
-        blur: CGFloat,
-        driftForward: Bool
+        offset: CGSize,
+        blur: CGFloat
     ) -> some View {
         Ellipse()
             .fill(
@@ -937,7 +759,7 @@ private struct AppAmbientBackground: View {
                 )
             )
             .frame(width: size.width, height: size.height)
-            .offset(driftForward ? endOffset : startOffset)
+            .offset(offset)
             .blur(radius: blur)
             .blendMode(.screen)
     }

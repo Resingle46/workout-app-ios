@@ -6,7 +6,7 @@ struct ProgramsView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
+            LazyVStack(alignment: .leading, spacing: 22) {
                 header
 
                 if store.programs.isEmpty {
