@@ -12,10 +12,10 @@ struct StatisticsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                AppPageHeaderModule(titleKey: "STATISTICS", subtitleKey: "PROGRESS METRICS")
+                AppPageHeaderModule(titleKey: "header.statistics.title", subtitleKey: "header.statistics.subtitle")
 
                 if !recentExercises.isEmpty {
-                    AppCard {
+                    AppCard(glowStyle: .statistics) {
                         VStack(alignment: .leading, spacing: 14) {
                             AppSectionTitle(titleKey: "stats.last_workout")
 
@@ -44,7 +44,7 @@ struct StatisticsView: View {
                     }
                 }
 
-                AppCard {
+                AppCard(glowStyle: .statistics) {
                     VStack(alignment: .leading, spacing: 16) {
                         AppSectionTitle(titleKey: "stats.exercise_picker")
                         Picker(NSLocalizedString("stats.exercise", comment: ""), selection: $selectedExerciseID) {
@@ -59,7 +59,7 @@ struct StatisticsView: View {
 
                 exerciseChartSection
 
-                AppCard {
+                AppCard(glowStyle: .statistics) {
                     VStack(alignment: .leading, spacing: 14) {
                         AppSectionTitle(titleKey: "stats.history")
 
@@ -120,7 +120,7 @@ struct StatisticsView: View {
            let exercise = store.exercise(for: selectedExerciseID) {
             exerciseChartCard(for: exercise)
         } else {
-            AppCard {
+            AppCard(glowStyle: .statistics) {
                 VStack(alignment: .leading, spacing: 10) {
                     AppSectionTitle(titleKey: "stats.exercise_chart")
                     Text("stats.pick_exercise_title")
@@ -136,7 +136,7 @@ struct StatisticsView: View {
         let points = store.chartPoints(for: exercise.id)
         let latestPoint = points.last
 
-        return AppCard {
+        return AppCard(glowStyle: .statistics) {
             VStack(alignment: .leading, spacing: 16) {
                 AppSectionTitle(titleKey: "stats.exercise_chart")
                 Text(exercise.localizedName)
@@ -265,7 +265,7 @@ struct WorkoutSummaryView: View {
                         .font(.system(size: 30, weight: .black, design: .rounded))
                 }
 
-                AppCard {
+                AppCard(glowStyle: .statistics) {
                     VStack(alignment: .leading, spacing: 14) {
                         HStack(alignment: .top, spacing: 12) {
                             Text(session.title)
@@ -291,7 +291,7 @@ struct WorkoutSummaryView: View {
 
                 ForEach(session.exercises) { exercise in
                     if let item = store.exercise(for: exercise.exerciseID) {
-                        AppCard {
+                        AppCard(glowStyle: .statistics) {
                             VStack(alignment: .leading, spacing: 14) {
                                 Text(item.localizedName)
                                     .font(.title3.weight(.heavy))

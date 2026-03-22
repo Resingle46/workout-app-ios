@@ -57,9 +57,9 @@ struct ActiveWorkoutView: View {
     private var emptyStateContent: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                AppPageHeaderModule(titleKey: "WORKOUT", subtitleKey: "ACTIVE SESSION")
+                AppPageHeaderModule(titleKey: "header.workout.title", subtitleKey: "header.workout.subtitle")
 
-                AppCard {
+                AppCard(glowStyle: .workout) {
                     VStack(alignment: .leading, spacing: 12) {
                         Text("workout.empty_title")
                             .font(.title2.weight(.heavy))
@@ -96,7 +96,7 @@ struct ActiveWorkoutView: View {
         onMarkedDone: @escaping () -> Void
     ) -> some View {
         VStack(alignment: .leading, spacing: 18) {
-            AppPageHeaderModule(titleKey: "WORKOUT", subtitleKey: "ACTIVE SESSION")
+            AppPageHeaderModule(titleKey: "header.workout.title", subtitleKey: "header.workout.subtitle")
             expandedHeader(for: session)
             exerciseList(for: session, currentSetPosition: currentSetPosition, onMarkedDone: onMarkedDone)
             finishWorkoutCTA
@@ -135,7 +135,7 @@ struct ActiveWorkoutView: View {
         currentSetPosition: CurrentWorkoutSetPosition?,
         onMarkedDone: @escaping () -> Void
     ) -> some View {
-        AppCard {
+        AppCard(glowStyle: .workout) {
             VStack(alignment: .leading, spacing: 16) {
                 HStack(alignment: .top, spacing: 12) {
                     VStack(alignment: .leading, spacing: 8) {
@@ -322,7 +322,6 @@ struct ActiveWorkoutView: View {
 
 private struct WorkoutHeroCard<Content: View>: View {
     let content: Content
-    @State private var animateGlow = false
 
     init(@ViewBuilder content: () -> Content) {
         self.content = content()
@@ -330,103 +329,11 @@ private struct WorkoutHeroCard<Content: View>: View {
 
     var body: some View {
         content
-            .padding(20)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: AppTheme.cardCornerRadius, style: .continuous)
-                    .fill(AppTheme.surface)
-                    .overlay {
-                        GeometryReader { proxy in
-                            heroGlowLayer(size: proxy.size)
-                        }
-                        .clipShape(RoundedRectangle(cornerRadius: AppTheme.cardCornerRadius, style: .continuous))
-                    }
-                    .overlay(
-                        RoundedRectangle(cornerRadius: AppTheme.cardCornerRadius, style: .continuous)
-                            .fill(
-                                LinearGradient(
-                                    colors: [
-                                        Color.white.opacity(0.03),
-                                        Color.clear,
-                                        Color.black.opacity(0.1)
-                                    ],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                )
-                            )
-                    )
+            .appLiquidGlassCard(
+                glowStyle: .workout,
+                padding: 20,
+                shadowColor: AppTheme.neonBlue.opacity(0.1)
             )
-            .overlay(
-                RoundedRectangle(cornerRadius: AppTheme.cardCornerRadius, style: .continuous)
-                    .stroke(Color.white.opacity(0.1), lineWidth: 1)
-            )
-            .shadow(color: AppTheme.neonViolet.opacity(0.08), radius: 24, y: 10)
-            .onAppear {
-                guard !animateGlow else { return }
-                withAnimation(.easeInOut(duration: 15).repeatForever(autoreverses: true)) {
-                    animateGlow = true
-                }
-            }
-    }
-
-    @ViewBuilder
-    private func heroGlowLayer(size: CGSize) -> some View {
-        ZStack {
-            Ellipse()
-                .fill(
-                    RadialGradient(
-                        colors: [
-                            AppTheme.neonViolet.opacity(0.18),
-                            AppTheme.neonBlue.opacity(0.1),
-                            Color.clear
-                        ],
-                        center: .center,
-                        startRadius: 8,
-                        endRadius: size.width * 0.56
-                    )
-                )
-                .frame(width: size.width * 0.92, height: size.height * 0.88)
-                .offset(
-                    x: animateGlow ? size.width * 0.12 : -size.width * 0.04,
-                    y: animateGlow ? -size.height * 0.2 : -size.height * 0.08
-                )
-                .blur(radius: 42)
-
-            Ellipse()
-                .fill(
-                    RadialGradient(
-                        colors: [
-                            AppTheme.neonCyan.opacity(0.1),
-                            AppTheme.neonLime.opacity(0.06),
-                            Color.clear
-                        ],
-                        center: .center,
-                        startRadius: 12,
-                        endRadius: size.width * 0.42
-                    )
-                )
-                .frame(width: size.width * 0.68, height: size.height * 0.54)
-                .offset(
-                    x: animateGlow ? -size.width * 0.08 : size.width * 0.12,
-                    y: animateGlow ? size.height * 0.12 : size.height * 0.2
-                )
-                .blur(radius: 34)
-
-            RoundedRectangle(cornerRadius: AppTheme.cardCornerRadius, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            Color.white.opacity(0.015),
-                            Color.clear,
-                            Color.black.opacity(0.14)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-        }
-        .opacity(0.95)
-        .allowsHitTesting(false)
     }
 }
 

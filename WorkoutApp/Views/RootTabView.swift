@@ -23,6 +23,14 @@ enum AppTypography {
     }
 }
 
+enum AppCardGlowStyle {
+    case neutral
+    case programs
+    case workout
+    case statistics
+    case profile
+}
+
 @MainActor
 struct RootTabView: View {
     @Environment(AppStore.self) private var store
@@ -98,21 +106,17 @@ struct RootTabView: View {
 }
 
 struct AppCard<Content: View>: View {
+    let glowStyle: AppCardGlowStyle
     let content: Content
 
-    init(@ViewBuilder content: () -> Content) {
+    init(glowStyle: AppCardGlowStyle = .neutral, @ViewBuilder content: () -> Content) {
+        self.glowStyle = glowStyle
         self.content = content()
     }
 
     var body: some View {
         content
-            .padding(18)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(AppTheme.surface, in: RoundedRectangle(cornerRadius: AppTheme.cardCornerRadius, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: AppTheme.cardCornerRadius, style: .continuous)
-                    .stroke(AppTheme.stroke, lineWidth: 1)
-            )
+            .appLiquidGlassCard(glowStyle: glowStyle)
     }
 }
 
@@ -128,6 +132,8 @@ struct AppSectionTitle: View {
 }
 
 struct AppPageHeaderModule: View {
+    @Environment(\.locale) private var locale
+
     let titleKey: LocalizedStringKey
     let subtitleKey: LocalizedStringKey?
 
@@ -155,6 +161,22 @@ struct AppPageHeaderModule: View {
         subtitleKey == nil ? -6 : -12
     }
 
+    private var usesRussianHeaderMetrics: Bool {
+        locale.identifier.lowercased().hasPrefix("ru")
+    }
+
+    private var titleTracking: CGFloat {
+        usesRussianHeaderMetrics ? 1.6 : 2.8
+    }
+
+    private var subtitleTracking: CGFloat {
+        usesRussianHeaderMetrics ? 2.2 : 3.8
+    }
+
+    private var subtitleFontSize: CGFloat {
+        usesRussianHeaderMetrics ? 10 : 10.5
+    }
+
     init(titleKey: LocalizedStringKey, subtitleKey: LocalizedStringKey? = nil) {
         self.titleKey = titleKey
         self.subtitleKey = subtitleKey
@@ -170,16 +192,22 @@ struct AppPageHeaderModule: View {
                             .font(AppTypography.pageHeaderTitle(size: titleFontSize))
                             .foregroundStyle(AppTheme.primaryText)
                             .multilineTextAlignment(.center)
-                            .tracking(2.8)
+                            .tracking(titleTracking)
                             .textCase(.uppercase)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.84)
+                            .allowsTightening(true)
 
                         if let subtitleKey {
                             Text(subtitleKey)
-                                .font(.system(size: 10.5, weight: .medium, design: .rounded))
+                                .font(.system(size: subtitleFontSize, weight: .medium, design: .rounded))
                                 .foregroundStyle(AppTheme.secondaryText)
                                 .multilineTextAlignment(.center)
-                                .tracking(3.8)
+                                .tracking(subtitleTracking)
                                 .textCase(.uppercase)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.8)
+                                .allowsTightening(true)
 
                             Rectangle()
                                 .fill(
@@ -271,8 +299,299 @@ struct AppOutlinedButtonStyle: ButtonStyle {
 }
 
 extension View {
+    func appLiquidGlassCard(
+        glowStyle: AppCardGlowStyle = .neutral,
+        padding: CGFloat = 18,
+        cornerRadius: CGFloat = AppTheme.cardCornerRadius,
+        shadowColor: Color = Color.black.opacity(0.26)
+    ) -> some View {
+        modifier(
+            AppLiquidGlassCardModifier(
+                glowStyle: glowStyle,
+                padding: padding,
+                cornerRadius: cornerRadius,
+                shadowColor: shadowColor
+            )
+        )
+    }
+
     func appScreenBackground() -> some View {
         modifier(AppScreenBackgroundModifier())
+    }
+}
+
+private struct AppLiquidGlassCardModifier: ViewModifier {
+    let glowStyle: AppCardGlowStyle
+    let padding: CGFloat
+    let cornerRadius: CGFloat
+    let shadowColor: Color
+
+    func body(content: Content) -> some View {
+        content
+            .padding(padding)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(AppTheme.surface.opacity(0.96))
+                    .overlay {
+                        GeometryReader { proxy in
+                            AppLiquidGlassGlowLayer(glowStyle: glowStyle, size: proxy.size)
+                        }
+                        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+                    }
+                    .overlay {
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            .fill(
+                                LinearGradient(
+                                    colors: [
+                                        Color.white.opacity(0.022),
+                                        Color.clear,
+                                        Color.black.opacity(0.1)
+                                    ],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                    }
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .stroke(Color.white.opacity(0.14), lineWidth: 1)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: max(cornerRadius - 10, 0), style: .continuous)
+                            .stroke(Color.white.opacity(0.045), lineWidth: 1)
+                            .padding(10)
+                    }
+            }
+            .shadow(color: shadowColor, radius: 24, y: 10)
+    }
+}
+
+private struct AppLiquidGlassGlowLayer: View {
+    let glowStyle: AppCardGlowStyle
+    let size: CGSize
+
+    var body: some View {
+        ZStack {
+            sheenBand
+            glowPattern
+            RoundedRectangle(cornerRadius: AppTheme.cardCornerRadius, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color.white.opacity(0.012),
+                            Color.clear,
+                            Color.black.opacity(0.075)
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+        }
+        .compositingGroup()
+        .allowsHitTesting(false)
+    }
+
+    @ViewBuilder
+    private var sheenBand: some View {
+        switch glowStyle {
+        case .neutral:
+            glassBand(x: -0.06, y: -0.06, width: 0.26, rotation: -6, opacity: 0.08)
+        case .programs:
+            glassBand(x: 0.02, y: -0.04, width: 0.22, rotation: -4, opacity: 0.08)
+        case .workout:
+            glassBand(x: 0.28, y: -0.02, width: 0.24, rotation: 18, opacity: 0.07)
+        case .statistics:
+            glassBand(x: 0.14, y: 0.06, width: 0.2, rotation: -16, opacity: 0.06)
+        case .profile:
+            glassBand(x: 0.08, y: -0.02, width: 0.18, rotation: 2, opacity: 0.055)
+        }
+    }
+
+    @ViewBuilder
+    private var glowPattern: some View {
+        switch glowStyle {
+        case .neutral:
+            glowEllipse(
+                colors: [AppTheme.neonBlue.opacity(0.08), AppTheme.neonViolet.opacity(0.05), .clear],
+                width: 0.76,
+                height: 0.4,
+                x: 0.08,
+                y: 0.36,
+                blur: 40
+            )
+        case .programs:
+            ZStack {
+                glowEllipse(
+                    colors: [AppTheme.neonCyan.opacity(0.15), AppTheme.neonBlue.opacity(0.06), .clear],
+                    width: 0.92,
+                    height: 0.34,
+                    x: -0.06,
+                    y: 0.4,
+                    blur: 42
+                )
+                glowEllipse(
+                    colors: [AppTheme.neonLime.opacity(0.08), AppTheme.neonCyan.opacity(0.03), .clear],
+                    width: 0.62,
+                    height: 0.24,
+                    x: 0.12,
+                    y: 0.42,
+                    blur: 34
+                )
+            }
+        case .workout:
+            ZStack {
+                glowCapsule(
+                    colors: [AppTheme.neonBlue.opacity(0.14), AppTheme.neonViolet.opacity(0.08), .clear],
+                    width: 0.92,
+                    height: 0.2,
+                    x: 0.18,
+                    y: 0.18,
+                    blur: 38,
+                    rotation: 24
+                )
+                glowEllipse(
+                    colors: [AppTheme.neonCyan.opacity(0.13), AppTheme.neonBlue.opacity(0.04), .clear],
+                    width: 0.56,
+                    height: 0.32,
+                    x: 0.28,
+                    y: 0.36,
+                    blur: 34
+                )
+                glowEllipse(
+                    colors: [AppTheme.neonLime.opacity(0.07), .clear],
+                    width: 0.42,
+                    height: 0.22,
+                    x: 0.22,
+                    y: 0.48,
+                    blur: 28
+                )
+            }
+        case .statistics:
+            ZStack {
+                glowCapsule(
+                    colors: [AppTheme.neonViolet.opacity(0.12), AppTheme.neonBlue.opacity(0.06), .clear],
+                    width: 0.32,
+                    height: 0.11,
+                    x: -0.18,
+                    y: 0.38,
+                    blur: 28,
+                    rotation: -18
+                )
+                glowCapsule(
+                    colors: [AppTheme.neonViolet.opacity(0.13), AppTheme.neonCyan.opacity(0.05), .clear],
+                    width: 0.34,
+                    height: 0.11,
+                    x: 0.02,
+                    y: 0.28,
+                    blur: 30,
+                    rotation: -18
+                )
+                glowCapsule(
+                    colors: [AppTheme.neonBlue.opacity(0.14), AppTheme.neonCyan.opacity(0.06), .clear],
+                    width: 0.34,
+                    height: 0.11,
+                    x: 0.22,
+                    y: 0.18,
+                    blur: 30,
+                    rotation: -18
+                )
+                glowEllipse(
+                    colors: [AppTheme.neonBlue.opacity(0.08), .clear],
+                    width: 0.6,
+                    height: 0.24,
+                    x: 0.16,
+                    y: 0.42,
+                    blur: 34
+                )
+            }
+        case .profile:
+            ZStack {
+                glowEllipse(
+                    colors: [Color.white.opacity(0.06), AppTheme.neonCyan.opacity(0.055), .clear],
+                    width: 0.66,
+                    height: 0.42,
+                    x: 0.02,
+                    y: 0.12,
+                    blur: 44
+                )
+                glowEllipse(
+                    colors: [AppTheme.neonCyan.opacity(0.075), AppTheme.neonBlue.opacity(0.025), .clear],
+                    width: 0.82,
+                    height: 0.28,
+                    x: 0.02,
+                    y: 0.4,
+                    blur: 38
+                )
+            }
+        }
+    }
+
+    private func glassBand(x: CGFloat, y: CGFloat, width: CGFloat, rotation: Double, opacity: Double) -> some View {
+        Rectangle()
+            .fill(
+                LinearGradient(
+                    colors: [
+                        Color.white.opacity(opacity * 0.08),
+                        Color.white.opacity(opacity),
+                        Color.white.opacity(opacity * 0.16),
+                        Color.clear
+                    ],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+            )
+            .frame(width: size.width * width, height: size.height * 1.22)
+            .rotationEffect(.degrees(rotation))
+            .offset(x: size.width * x, y: size.height * y)
+            .blur(radius: 34)
+    }
+
+    private func glowEllipse(
+        colors: [Color],
+        width: CGFloat,
+        height: CGFloat,
+        x: CGFloat,
+        y: CGFloat,
+        blur: CGFloat,
+        rotation: Double = 0
+    ) -> some View {
+        Ellipse()
+            .fill(
+                RadialGradient(
+                    colors: colors,
+                    center: .center,
+                    startRadius: 8,
+                    endRadius: max(size.width, size.height) * 0.46
+                )
+            )
+            .frame(width: size.width * width, height: size.height * height)
+            .rotationEffect(.degrees(rotation))
+            .offset(x: size.width * x, y: size.height * y)
+            .blur(radius: blur)
+    }
+
+    private func glowCapsule(
+        colors: [Color],
+        width: CGFloat,
+        height: CGFloat,
+        x: CGFloat,
+        y: CGFloat,
+        blur: CGFloat,
+        rotation: Double
+    ) -> some View {
+        Capsule()
+            .fill(
+                LinearGradient(
+                    colors: colors,
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+            )
+            .frame(width: size.width * width, height: size.height * height)
+            .rotationEffect(.degrees(rotation))
+            .offset(x: size.width * x, y: size.height * y)
+            .blur(radius: blur)
     }
 }
 

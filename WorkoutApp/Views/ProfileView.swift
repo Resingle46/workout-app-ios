@@ -12,9 +12,9 @@ struct ProfileView: View {
 
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                AppPageHeaderModule(titleKey: "PROFILE", subtitleKey: "ACCOUNT SETTINGS")
+                AppPageHeaderModule(titleKey: "header.profile.title", subtitleKey: "header.profile.subtitle")
 
-                AppCard {
+                AppCard(glowStyle: .profile) {
                     VStack(alignment: .leading, spacing: 16) {
                         AppSectionTitle(titleKey: "profile.personal")
 
@@ -36,7 +36,7 @@ struct ProfileView: View {
                     }
                 }
 
-                AppCard {
+                AppCard(glowStyle: .profile) {
                     VStack(alignment: .leading, spacing: 16) {
                         AppSectionTitle(titleKey: "profile.language")
 
@@ -101,7 +101,7 @@ private struct BackupControlsCard: View {
     @State private var pendingRestoreRequest: BackupRestoreRequest?
 
     var body: some View {
-        AppCard {
+        AppCard(glowStyle: .profile) {
             VStack(alignment: .leading, spacing: 16) {
                 AppSectionTitle(titleKey: "backup.section")
 

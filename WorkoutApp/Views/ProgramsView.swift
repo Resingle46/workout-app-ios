@@ -35,7 +35,7 @@ struct ProgramsView: View {
 
     private var header: some View {
         ZStack(alignment: .topTrailing) {
-            AppPageHeaderModule(titleKey: "PROGRAMS", subtitleKey: "TRAINING ARCHIVE")
+            AppPageHeaderModule(titleKey: "header.programs.title", subtitleKey: "header.programs.subtitle")
 
             Button {
                 showingCreateProgram = true
@@ -131,13 +131,7 @@ private struct ProgramsCompactCard<Content: View>: View {
 
     var body: some View {
         content
-            .padding(18)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(AppTheme.surface, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .stroke(AppTheme.stroke, lineWidth: 1)
-            )
+            .appLiquidGlassCard(glowStyle: .programs)
     }
 }
 
@@ -157,7 +151,7 @@ struct ProgramDetailView: View {
             if let program {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 20) {
-                        AppCard {
+                        AppCard(glowStyle: .programs) {
                             VStack(alignment: .leading, spacing: 16) {
                                 Text(program.title)
                                     .font(.system(size: 30, weight: .black, design: .rounded))
@@ -176,7 +170,7 @@ struct ProgramDetailView: View {
                         }
 
                         if program.workouts.isEmpty {
-                            AppCard {
+                            AppCard(glowStyle: .programs) {
                                 VStack(alignment: .leading, spacing: 12) {
                                     AppSectionTitle(titleKey: "program.no_workouts_label")
                                     Text("program.no_workouts_description")
@@ -185,7 +179,7 @@ struct ProgramDetailView: View {
                             }
                         } else {
                             ForEach(program.workouts) { workout in
-                                AppCard {
+                                AppCard(glowStyle: .programs) {
                                     VStack(alignment: .leading, spacing: 16) {
                                         HStack(alignment: .top, spacing: 12) {
                                             VStack(alignment: .leading, spacing: 8) {
@@ -279,7 +273,7 @@ struct CreateProgramView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    AppCard {
+                    AppCard(glowStyle: .programs) {
                         VStack(alignment: .leading, spacing: 16) {
                             AppSectionTitle(titleKey: "program.name")
                             AppInputField(titleKey: "program.name", text: $title)
@@ -321,7 +315,7 @@ struct CreateWorkoutView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    AppCard {
+                    AppCard(glowStyle: .programs) {
                         VStack(alignment: .leading, spacing: 16) {
                             AppSectionTitle(titleKey: "workout.name")
                             AppInputField(titleKey: "workout.name", text: $title)
