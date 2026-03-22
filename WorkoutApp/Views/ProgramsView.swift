@@ -22,21 +22,11 @@ struct ProgramsView: View {
                 }
             }
             .padding(.horizontal, 20)
-            .padding(.top, 4)
+            .padding(.top, 0)
             .padding(.bottom, 28)
         }
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    showingCreateProgram = true
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.headline.weight(.bold))
-                        .foregroundStyle(AppTheme.primaryText)
-                }
-            }
-        }
+        .toolbar(.hidden, for: .navigationBar)
         .sheet(isPresented: $showingCreateProgram) {
             CreateProgramView()
         }
@@ -44,7 +34,26 @@ struct ProgramsView: View {
     }
 
     private var header: some View {
-        AppPageHeaderModule(titleKey: "programs.title", subtitleKey: "programs.subtitle")
+        ZStack(alignment: .topTrailing) {
+            AppPageHeaderModule(titleKey: "PROGRAMS", subtitleKey: "TRAINING ARCHIVE")
+
+            Button {
+                showingCreateProgram = true
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 20, weight: .medium))
+                    .foregroundStyle(AppTheme.primaryText)
+                    .frame(width: 36, height: 36)
+                    .background(Color.white.opacity(0.05), in: Circle())
+                    .overlay(
+                        Circle()
+                            .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                    )
+            }
+            .buttonStyle(.plain)
+            .padding(.top, 8)
+            .padding(.trailing, 4)
+        }
     }
 
     private var emptyState: some View {

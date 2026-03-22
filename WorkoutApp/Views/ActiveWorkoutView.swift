@@ -3,7 +3,6 @@ import SwiftUI
 struct ActiveWorkoutView: View {
     @Environment(AppStore.self) private var store
 
-    @State private var scrollOffset: CGFloat = 0
     @State private var presentedSummary: PresentedWorkoutSummary?
     @FocusState private var focusedField: WorkoutSetField?
 
@@ -58,7 +57,7 @@ struct ActiveWorkoutView: View {
     private var emptyStateContent: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                AppPageHeaderModule(titleKey: "tab.workout")
+                AppPageHeaderModule(titleKey: "WORKOUT", subtitleKey: "ACTIVE SESSION")
 
                 AppCard {
                     VStack(alignment: .leading, spacing: 12) {
@@ -69,7 +68,9 @@ struct ActiveWorkoutView: View {
                     }
                 }
             }
-            .padding(20)
+            .padding(.horizontal, 20)
+            .padding(.top, 0)
+            .padding(.bottom, 24)
         }
         .appScreenBackground()
     }
@@ -85,16 +86,6 @@ struct ActiveWorkoutView: View {
                     onMarkedDone: { scrollToCurrentSet(using: proxy) }
                 )
             }
-            .coordinateSpace(name: "workout-scroll")
-            .overlay(alignment: .top) {
-                if scrollOffset < -70 {
-                    collapsedHeader(for: session)
-                        .padding(.horizontal, 20)
-                        .padding(.top, 8)
-                        .transition(.move(edge: .top).combined(with: .opacity))
-                }
-            }
-            .onPreferenceChange(WorkoutScrollOffsetPreferenceKey.self) { scrollOffset = $0 }
             .appScreenBackground()
         }
     }
@@ -105,14 +96,13 @@ struct ActiveWorkoutView: View {
         onMarkedDone: @escaping () -> Void
     ) -> some View {
         VStack(alignment: .leading, spacing: 18) {
-            scrollOffsetReader
-            AppPageHeaderModule(titleKey: "tab.workout")
+            AppPageHeaderModule(titleKey: "WORKOUT", subtitleKey: "ACTIVE SESSION")
             expandedHeader(for: session)
             exerciseList(for: session, currentSetPosition: currentSetPosition, onMarkedDone: onMarkedDone)
             finishWorkoutCTA
         }
         .padding(.horizontal, 20)
-        .padding(.top, 12)
+        .padding(.top, 0)
         .padding(.bottom, 32)
     }
 
@@ -230,14 +220,6 @@ struct ActiveWorkoutView: View {
         .padding(.top, 8)
     }
 
-    private var scrollOffsetReader: some View {
-        GeometryReader { geometry in
-            Color.clear
-                .preference(key: WorkoutScrollOffsetPreferenceKey.self, value: geometry.frame(in: .named("workout-scroll")).minY)
-        }
-        .frame(height: 0)
-    }
-
     private func expandedHeader(for session: WorkoutSession) -> some View {
         WorkoutHeroCard {
             VStack(alignment: .leading, spacing: 18) {
@@ -261,35 +243,6 @@ struct ActiveWorkoutView: View {
                 }
             }
         }
-    }
-
-    private func collapsedHeader(for session: WorkoutSession) -> some View {
-        HStack(spacing: 14) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("workout.rest_live")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(AppTheme.secondaryText)
-                WorkoutLiveRestText(session: session)
-                    .font(.headline.weight(.heavy))
-            }
-
-            Spacer()
-
-            VStack(alignment: .trailing, spacing: 4) {
-                Text("workout.duration")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(AppTheme.secondaryText)
-                WorkoutDurationText(startedAt: session.startedAt)
-                    .font(.headline.weight(.heavy))
-            }
-        }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 14)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .stroke(Color.white.opacity(0.12), lineWidth: 1)
-        )
     }
 
     private func restSummary(for exercise: WorkoutExerciseLog) -> String {
@@ -380,16 +333,16 @@ private struct WorkoutHeroCard<Content: View>: View {
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
-                RoundedRectangle(cornerRadius: 28, style: .continuous)
+                RoundedRectangle(cornerRadius: AppTheme.cardCornerRadius, style: .continuous)
                     .fill(AppTheme.surface)
                     .overlay {
                         GeometryReader { proxy in
                             heroGlowLayer(size: proxy.size)
                         }
-                        .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
+                        .clipShape(RoundedRectangle(cornerRadius: AppTheme.cardCornerRadius, style: .continuous))
                     }
                     .overlay(
-                        RoundedRectangle(cornerRadius: 28, style: .continuous)
+                        RoundedRectangle(cornerRadius: AppTheme.cardCornerRadius, style: .continuous)
                             .fill(
                                 LinearGradient(
                                     colors: [
@@ -404,7 +357,7 @@ private struct WorkoutHeroCard<Content: View>: View {
                     )
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 28, style: .continuous)
+                RoundedRectangle(cornerRadius: AppTheme.cardCornerRadius, style: .continuous)
                     .stroke(Color.white.opacity(0.1), lineWidth: 1)
             )
             .shadow(color: AppTheme.neonViolet.opacity(0.08), radius: 24, y: 10)
@@ -459,7 +412,7 @@ private struct WorkoutHeroCard<Content: View>: View {
                 )
                 .blur(radius: 34)
 
-            RoundedRectangle(cornerRadius: 28, style: .continuous)
+            RoundedRectangle(cornerRadius: AppTheme.cardCornerRadius, style: .continuous)
                 .fill(
                     LinearGradient(
                         colors: [
@@ -1067,14 +1020,6 @@ private struct WorkoutExerciseProgressCard: View {
         let usableWidth = max(width - edgeInset * 2, 1)
         let progressIndex = CGFloat(index) / CGFloat(progress.total - 1)
         return edgeInset + (usableWidth * progressIndex)
-    }
-}
-
-private struct WorkoutScrollOffsetPreferenceKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
     }
 }
 

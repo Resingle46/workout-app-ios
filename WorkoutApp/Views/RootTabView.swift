@@ -14,6 +14,7 @@ enum AppTheme {
     static let neonCyan = Color(red: 0.22, green: 0.88, blue: 0.96)
     static let neonLime = Color(red: 0.73, green: 1.0, blue: 0.25)
     static let neonOrange = Color(red: 0.98, green: 0.48, blue: 0.26)
+    static let cardCornerRadius: CGFloat = 24
 }
 
 enum AppTypography {
@@ -105,11 +106,11 @@ struct AppCard<Content: View>: View {
 
     var body: some View {
         content
-            .padding(20)
+            .padding(18)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(AppTheme.surface, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+            .background(AppTheme.surface, in: RoundedRectangle(cornerRadius: AppTheme.cardCornerRadius, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: 28, style: .continuous)
+                RoundedRectangle(cornerRadius: AppTheme.cardCornerRadius, style: .continuous)
                     .stroke(AppTheme.stroke, lineWidth: 1)
             )
     }
@@ -138,21 +139,23 @@ struct AppPageHeaderModule: View {
     var body: some View {
         VStack(spacing: 0) {
             Color.black
-                .frame(height: subtitleKey == nil ? 70 : 78)
+                .frame(height: subtitleKey == nil ? 56 : 68)
                 .overlay(alignment: .top) {
-                    VStack(spacing: subtitleKey == nil ? 0 : 5) {
+                    VStack(spacing: subtitleKey == nil ? 0 : 6) {
                         Text(titleKey)
-                            .font(AppTypography.pageHeaderTitle(size: subtitleKey == nil ? 23 : 25))
+                            .font(AppTypography.pageHeaderTitle(size: subtitleKey == nil ? 22 : 24))
                             .foregroundStyle(AppTheme.primaryText)
                             .multilineTextAlignment(.center)
-                            .tracking(subtitleKey == nil ? 1.8 : 1.6)
+                            .tracking(2.8)
+                            .textCase(.uppercase)
 
                         if let subtitleKey {
                             Text(subtitleKey)
-                                .font(.system(size: 10.5, weight: .light, design: .rounded))
+                                .font(.system(size: 10.5, weight: .medium, design: .rounded))
                                 .foregroundStyle(AppTheme.secondaryText)
                                 .multilineTextAlignment(.center)
-                                .tracking(4.6)
+                                .tracking(3.8)
+                                .textCase(.uppercase)
 
                             Rectangle()
                                 .fill(
@@ -168,25 +171,27 @@ struct AppPageHeaderModule: View {
                                         endPoint: .trailing
                                     )
                                 )
-                                .frame(width: 162, height: 1.8)
+                                .frame(width: 148, height: 1.6)
                                 .clipShape(Capsule())
-                                .opacity(0.8)
-                                .padding(.top, 1)
+                                .opacity(0.62)
+                                .padding(.top, 2)
                         }
                     }
-                    .padding(.top, subtitleKey == nil ? 18 : 14)
+                    .padding(.top, subtitleKey == nil ? 8 : 2)
                 }
 
             LinearGradient(
                 colors: [
                     Color.black,
-                    Color.black.opacity(0.72),
+                    Color.black.opacity(0.94),
+                    Color.black.opacity(0.82),
+                    AppTheme.background.opacity(0.42),
                     AppTheme.background.opacity(0)
                 ],
                 startPoint: .top,
                 endPoint: .bottom
             )
-            .frame(height: subtitleKey == nil ? 46 : 58)
+            .frame(height: subtitleKey == nil ? 64 : 88)
         }
         .padding(.horizontal, -20)
         .frame(maxWidth: .infinity, alignment: .top)
@@ -278,98 +283,115 @@ private struct AppAmbientBackground: View {
 
                 ambientBlob(
                     colors: [
-                        AppTheme.neonOrange.opacity(0.4),
-                        AppTheme.neonViolet.opacity(0.26),
+                        AppTheme.neonOrange.opacity(0.2),
+                        AppTheme.neonViolet.opacity(0.1),
                         Color.clear
                     ],
-                    size: CGSize(width: width * 1.55, height: height * 0.68),
-                    startOffset: CGSize(width: -width * 0.92, height: -height * 0.34),
-                    endOffset: CGSize(width: width * 0.42, height: -height * 0.24),
-                    blur: 138,
+                    size: CGSize(width: width * 0.58, height: height * 0.2),
+                    startOffset: CGSize(width: -width * 0.34, height: -height * 0.08),
+                    endOffset: CGSize(width: -width * 0.12, height: height * 0.06),
+                    blur: 84,
                     driftForward: driftForward
                 )
 
                 ambientBlob(
                     colors: [
-                        AppTheme.neonBlue.opacity(0.34),
-                        AppTheme.neonCyan.opacity(0.24),
+                        AppTheme.neonBlue.opacity(0.16),
+                        AppTheme.neonCyan.opacity(0.12),
                         Color.clear
                     ],
-                    size: CGSize(width: width * 1.26, height: height * 0.58),
-                    startOffset: CGSize(width: width * 0.88, height: -height * 0.24),
-                    endOffset: CGSize(width: -width * 0.38, height: height * 0.02),
-                    blur: 126,
-                    driftForward: driftForward
-                )
-
-                ambientBlob(
-                    colors: [
-                        AppTheme.neonViolet.opacity(0.32),
-                        AppTheme.neonBlue.opacity(0.22),
-                        Color.clear
-                    ],
-                    size: CGSize(width: width * 1.48, height: height * 0.66),
-                    startOffset: CGSize(width: -width * 0.4, height: height * 0.66),
-                    endOffset: CGSize(width: width * 0.52, height: height * 0.2),
-                    blur: 144,
-                    driftForward: driftForward
-                )
-
-                ambientBlob(
-                    colors: [
-                        AppTheme.neonLime.opacity(0.2),
-                        AppTheme.neonCyan.opacity(0.18),
-                        Color.clear
-                    ],
-                    size: CGSize(width: width * 1.02, height: height * 0.44),
-                    startOffset: CGSize(width: width * 0.7, height: height * 0.1),
-                    endOffset: CGSize(width: -width * 0.16, height: height * 0.38),
-                    blur: 110,
-                    driftForward: driftForward
-                )
-
-                ambientBlob(
-                    colors: [
-                        AppTheme.neonCyan.opacity(0.2),
-                        AppTheme.neonBlue.opacity(0.18),
-                        Color.clear
-                    ],
-                    size: CGSize(width: width * 1.36, height: height * 0.5),
-                    startOffset: CGSize(width: -width * 0.82, height: height * 0.14),
-                    endOffset: CGSize(width: width * 0.32, height: -height * 0.08),
-                    blur: 122,
+                    size: CGSize(width: width * 0.52, height: height * 0.18),
+                    startOffset: CGSize(width: width * 0.34, height: -height * 0.06),
+                    endOffset: CGSize(width: width * 0.16, height: height * 0.1),
+                    blur: 78,
                     driftForward: driftForward
                 )
 
                 ambientBlob(
                     colors: [
                         AppTheme.neonViolet.opacity(0.16),
-                        AppTheme.neonOrange.opacity(0.14),
+                        AppTheme.neonBlue.opacity(0.1),
                         Color.clear
                     ],
-                    size: CGSize(width: width * 1.18, height: height * 0.4),
-                    startOffset: CGSize(width: width * 0.5, height: -height * 0.02),
-                    endOffset: CGSize(width: -width * 0.28, height: -height * 0.18),
-                    blur: 112,
+                    size: CGSize(width: width * 0.44, height: height * 0.2),
+                    startOffset: CGSize(width: -width * 0.2, height: height * 0.38),
+                    endOffset: CGSize(width: -width * 0.06, height: height * 0.24),
+                    blur: 82,
+                    driftForward: driftForward
+                )
+
+                ambientBlob(
+                    colors: [
+                        AppTheme.neonLime.opacity(0.14),
+                        AppTheme.neonCyan.opacity(0.08),
+                        Color.clear
+                    ],
+                    size: CGSize(width: width * 0.46, height: height * 0.19),
+                    startOffset: CGSize(width: width * 0.28, height: height * 0.34),
+                    endOffset: CGSize(width: width * 0.12, height: height * 0.18),
+                    blur: 76,
+                    driftForward: driftForward
+                )
+
+                ambientBlob(
+                    colors: [
+                        AppTheme.neonCyan.opacity(0.14),
+                        AppTheme.neonBlue.opacity(0.1),
+                        Color.clear
+                    ],
+                    size: CGSize(width: width * 0.44, height: height * 0.18),
+                    startOffset: CGSize(width: -width * 0.28, height: height * 0.14),
+                    endOffset: CGSize(width: -width * 0.08, height: height * 0.02),
+                    blur: 72,
+                    driftForward: driftForward
+                )
+
+                ambientBlob(
+                    colors: [
+                        AppTheme.neonViolet.opacity(0.1),
+                        AppTheme.neonOrange.opacity(0.08),
+                        Color.clear
+                    ],
+                    size: CGSize(width: width * 0.4, height: height * 0.16),
+                    startOffset: CGSize(width: width * 0.08, height: height * 0.58),
+                    endOffset: CGSize(width: width * 0.18, height: height * 0.42),
+                    blur: 70,
                     driftForward: driftForward
                 )
 
                 LinearGradient(
                     colors: [
                         Color.black.opacity(0.04),
-                        AppTheme.background.opacity(0.18),
-                        Color.black.opacity(0.1)
+                        AppTheme.background.opacity(0.12),
+                        Color.black.opacity(0.08)
                     ],
                     startPoint: .top,
                     endPoint: .bottom
                 )
 
-                Color.black.opacity(0.02)
+                VStack(spacing: 0) {
+                    LinearGradient(
+                        colors: [
+                            Color.black,
+                            Color.black,
+                            Color.black.opacity(0.94),
+                            AppTheme.background.opacity(0.55),
+                            Color.clear
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                    .frame(height: min(height * 0.28, 220))
+
+                    Spacer()
+                }
+
+                Color.black.opacity(0.015)
             }
             .ignoresSafeArea()
             .onAppear {
                 guard !driftForward else { return }
-                withAnimation(.easeInOut(duration: 42).repeatForever(autoreverses: true)) {
+                withAnimation(.easeInOut(duration: 60).repeatForever(autoreverses: true)) {
                     driftForward = true
                 }
             }

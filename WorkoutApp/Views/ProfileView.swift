@@ -12,16 +12,7 @@ struct ProfileView: View {
 
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                AppPageHeaderModule(titleKey: "tab.profile")
-
-                AppCard {
-                    VStack(alignment: .leading, spacing: 16) {
-                        Text("profile.card_title")
-                            .font(.system(size: 28, weight: .black, design: .rounded))
-                        Text("profile.card_description")
-                            .foregroundStyle(AppTheme.secondaryText)
-                    }
-                }
+                AppPageHeaderModule(titleKey: "PROFILE", subtitleKey: "ACCOUNT SETTINGS")
 
                 AppCard {
                     VStack(alignment: .leading, spacing: 16) {
@@ -62,7 +53,9 @@ struct ProfileView: View {
 
                 BackupControlsCard()
             }
-            .padding(20)
+            .padding(.horizontal, 20)
+            .padding(.top, 0)
+            .padding(.bottom, 24)
         }
         .sheet(item: $activePicker) { picker in
             ProfilePickerSheet(
@@ -79,6 +72,7 @@ struct ProfileView: View {
             .presentationBackground(.clear)
         }
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.hidden, for: .navigationBar)
         .appScreenBackground()
     }
 

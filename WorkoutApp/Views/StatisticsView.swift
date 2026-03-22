@@ -12,7 +12,7 @@ struct StatisticsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                AppPageHeaderModule(titleKey: "tab.statistics")
+                AppPageHeaderModule(titleKey: "STATISTICS", subtitleKey: "PROGRESS METRICS")
 
                 if !recentExercises.isEmpty {
                     AppCard {
@@ -97,7 +97,8 @@ struct StatisticsView: View {
                     }
                 }
             }
-            .padding(20)
+            .padding(.horizontal, 20)
+            .padding(.top, 0)
             .padding(.bottom, 24)
         }
         .onAppear {
@@ -106,6 +107,7 @@ struct StatisticsView: View {
             }
         }
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.hidden, for: .navigationBar)
         .toolbarColorScheme(.dark, for: .tabBar)
         .toolbarBackground(.visible, for: .tabBar)
         .toolbarBackground(AppTheme.surface, for: .tabBar)
