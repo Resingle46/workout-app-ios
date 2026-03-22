@@ -3,6 +3,15 @@
 "tab.statistics" = "Statistics";
 "tab.profile" = "Profile";
 
+"header.programs.title" = "Programs";
+"header.programs.subtitle" = "Training Archive";
+"header.workout.title" = "Workout";
+"header.workout.subtitle" = "Active Session";
+"header.statistics.title" = "Statistics";
+"header.statistics.subtitle" = "Progress Metrics";
+"header.profile.title" = "Profile";
+"header.profile.subtitle" = "Account Settings";
+
 "programs.title" = "Programs";
 "programs.subtitle" = "Build plans, launch workouts, and keep every session ready.";
 "programs.empty_title" = "Create your first program";

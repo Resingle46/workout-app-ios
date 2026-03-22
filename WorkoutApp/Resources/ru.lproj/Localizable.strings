@@ -3,6 +3,15 @@
 "tab.statistics" = "Статистика";
 "tab.profile" = "Профиль";
 
+"header.programs.title" = "Программы";
+"header.programs.subtitle" = "Архив тренировок";
+"header.workout.title" = "Тренировка";
+"header.workout.subtitle" = "Активная сессия";
+"header.statistics.title" = "Статистика";
+"header.statistics.subtitle" = "Метрики прогресса";
+"header.profile.title" = "Профиль";
+"header.profile.subtitle" = "Настройки профиля";
+
 "programs.title" = "Программы";
 "programs.subtitle" = "Собирайте планы, быстро запускайте тренировки и держите весь цикл под рукой.";
 "programs.empty_title" = "Создайте первую программу";
