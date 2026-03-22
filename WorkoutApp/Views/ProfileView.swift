@@ -80,12 +80,14 @@ struct ProfileView: View {
         Button(action: action) {
             HStack(spacing: 12) {
                 Text(titleKey)
+                    .font(AppTypography.body(size: 18))
                     .foregroundStyle(AppTheme.primaryText)
                 Spacer()
                 Text(value)
+                    .font(AppTypography.value(size: 18, weight: .medium))
                     .foregroundStyle(AppTheme.secondaryText)
                 Image(systemName: "chevron.right")
-                    .font(.caption.weight(.bold))
+                    .font(AppTypography.caption(size: 12, weight: .bold))
                     .foregroundStyle(AppTheme.secondaryText)
             }
             .padding(.vertical, 10)
@@ -113,7 +115,7 @@ private struct BackupControlsCard: View {
 
                 if let folderPath = store.backupStatus.selectedFolderPath, !folderPath.isEmpty {
                     Text(folderPath)
-                        .font(.footnote)
+                        .font(AppTypography.caption(size: 13, weight: .regular))
                         .foregroundStyle(AppTheme.secondaryText)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -129,13 +131,14 @@ private struct BackupControlsCard: View {
                         ProgressView()
                             .tint(AppTheme.accent)
                         Text(progressTextKey)
+                            .font(AppTypography.body(size: 16, weight: .medium))
                             .foregroundStyle(AppTheme.secondaryText)
                     }
                 }
 
                 if let errorDescription = store.backupStatus.lastErrorDescription, !errorDescription.isEmpty {
                     Text(errorDescription)
-                        .font(.footnote.weight(.medium))
+                        .font(AppTypography.caption(size: 13, weight: .medium))
                         .foregroundStyle(AppTheme.neonOrange)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -215,13 +218,14 @@ private struct BackupControlsCard: View {
     private func backupRow(titleKey: LocalizedStringKey, value: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             Text(titleKey)
+                .font(AppTypography.body(size: 17))
                 .foregroundStyle(AppTheme.primaryText)
             Spacer(minLength: 20)
             Text(value)
+                .font(AppTypography.body(size: 17, weight: .medium))
                 .multilineTextAlignment(.trailing)
                 .foregroundStyle(AppTheme.secondaryText)
         }
-        .font(.subheadline)
     }
 
     private func formattedDate(_ date: Date?) -> String {
@@ -307,7 +311,7 @@ private struct ProfilePickerSheet: View {
 
             HStack {
                 Text(title(for: picker))
-                    .font(.title3.weight(.heavy))
+                    .font(AppTypography.heading(size: 21))
                     .foregroundStyle(AppTheme.primaryText)
                 Spacer()
                 Button("action.done") {
@@ -322,6 +326,7 @@ private struct ProfilePickerSheet: View {
                     )
                     dismiss()
                 }
+                .font(AppTypography.button(size: 16))
                 .foregroundStyle(AppTheme.primaryText)
             }
             .padding(.horizontal, 20)

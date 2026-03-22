@@ -41,7 +41,7 @@ struct ProgramsView: View {
                 showingCreateProgram = true
             } label: {
                 Image(systemName: "plus")
-                    .font(.system(size: 20, weight: .medium))
+                    .font(AppTypography.icon(size: 20, weight: .medium))
                     .foregroundStyle(AppTheme.primaryText)
                     .frame(width: 36, height: 36)
                     .background(Color.white.opacity(0.05), in: Circle())
@@ -60,9 +60,9 @@ struct ProgramsView: View {
         ProgramsCompactCard {
             VStack(alignment: .leading, spacing: 18) {
                 Text("programs.empty_title")
-                    .font(.system(size: 26, weight: .black, design: .rounded))
+                    .font(AppTypography.title(size: 26))
                 Text("programs.empty_description")
-                    .font(.body)
+                    .font(AppTypography.body())
                     .foregroundStyle(AppTheme.secondaryText)
                 Button {
                     showingCreateProgram = true
@@ -82,15 +82,15 @@ struct ProgramsView: View {
                 HStack(alignment: .top, spacing: 12) {
                     VStack(alignment: .leading, spacing: 8) {
                         Text(program.title)
-                            .font(.system(size: 24, weight: .black, design: .rounded))
+                            .font(AppTypography.heading(size: 24))
                             .foregroundStyle(AppTheme.primaryText)
                         Text(String(format: NSLocalizedString("program.workout_count", comment: ""), program.workouts.count))
-                            .font(.subheadline.weight(.medium))
+                            .font(AppTypography.body(size: 17, weight: .medium, relativeTo: .subheadline))
                             .foregroundStyle(AppTheme.secondaryText)
                     }
                     Spacer()
                     Image(systemName: "chevron.right")
-                        .font(.headline.weight(.bold))
+                        .font(AppTypography.icon(size: 17, weight: .bold))
                         .foregroundStyle(AppTheme.secondaryText)
                 }
 
@@ -99,7 +99,7 @@ struct ProgramsView: View {
 
                 if program.workouts.isEmpty {
                     Text("program.no_workouts")
-                        .font(.subheadline)
+                        .font(AppTypography.body(size: 16, relativeTo: .subheadline))
                         .foregroundStyle(AppTheme.secondaryText)
                 } else {
                     VStack(alignment: .leading, spacing: 8) {
@@ -111,7 +111,7 @@ struct ProgramsView: View {
                                     .foregroundStyle(AppTheme.primaryText)
                                 Spacer()
                                 Text(String(format: NSLocalizedString("program.exercise_count", comment: ""), workout.exercises.count))
-                                    .font(.caption.weight(.medium))
+                                    .font(AppTypography.caption())
                                     .foregroundStyle(AppTheme.secondaryText)
                             }
                         }
@@ -131,6 +131,7 @@ private struct ProgramsCompactCard<Content: View>: View {
 
     var body: some View {
         content
+            .font(AppTypography.body())
             .appLiquidGlassCard(glowStyle: .programs)
     }
 }
@@ -154,8 +155,9 @@ struct ProgramDetailView: View {
                         AppCard(glowStyle: .programs) {
                             VStack(alignment: .leading, spacing: 16) {
                                 Text(program.title)
-                                    .font(.system(size: 30, weight: .black, design: .rounded))
+                                    .font(AppTypography.title(size: 30))
                                 Text(String(format: NSLocalizedString("program.workout_count", comment: ""), program.workouts.count))
+                                    .font(AppTypography.body(size: 18, weight: .medium))
                                     .foregroundStyle(AppTheme.secondaryText)
 
                                 HStack(spacing: 12) {
@@ -174,6 +176,7 @@ struct ProgramDetailView: View {
                                 VStack(alignment: .leading, spacing: 12) {
                                     AppSectionTitle(titleKey: "program.no_workouts_label")
                                     Text("program.no_workouts_description")
+                                        .font(AppTypography.body(size: 16, relativeTo: .subheadline))
                                         .foregroundStyle(AppTheme.secondaryText)
                                 }
                             }
@@ -184,12 +187,12 @@ struct ProgramDetailView: View {
                                         HStack(alignment: .top, spacing: 12) {
                                             VStack(alignment: .leading, spacing: 8) {
                                                 Text(workout.title)
-                                                    .font(.title3.weight(.heavy))
+                                                    .font(AppTypography.heading(size: 21))
                                                 Text(workout.focus.isEmpty ? String(localized: "workout.focus_empty") : workout.focus)
-                                                    .font(.subheadline)
+                                                    .font(AppTypography.body(size: 16, relativeTo: .subheadline))
                                                     .foregroundStyle(AppTheme.secondaryText)
                                                 Text(String(format: NSLocalizedString("program.exercise_count", comment: ""), workout.exercises.count))
-                                                    .font(.caption.weight(.medium))
+                                                    .font(AppTypography.caption())
                                                     .foregroundStyle(AppTheme.secondaryText)
                                             }
 
@@ -203,7 +206,7 @@ struct ProgramDetailView: View {
                                                 }
                                             } label: {
                                                 Image(systemName: "ellipsis.circle")
-                                                    .font(.title3)
+                                                    .font(AppTypography.icon(size: 20, weight: .medium))
                                                     .foregroundStyle(AppTheme.secondaryText)
                                             }
                                         }

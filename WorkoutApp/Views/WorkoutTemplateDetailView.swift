@@ -24,7 +24,7 @@ struct WorkoutTemplateDetailView: View {
                             AppCard(glowStyle: .programs) {
                                 VStack(alignment: .leading, spacing: 14) {
                                     Text("template.empty_title")
-                                        .font(.system(size: 24, weight: .black, design: .rounded))
+                                        .font(AppTypography.heading(size: 24))
                                     Text("template.empty_description")
                                         .foregroundStyle(AppTheme.secondaryText)
                                     Button {
@@ -100,11 +100,11 @@ struct WorkoutTemplateDetailView: View {
         AppCard(glowStyle: .programs) {
             VStack(alignment: .leading, spacing: 16) {
                 Text(workout.title)
-                    .font(.system(size: 30, weight: .black, design: .rounded))
+                    .font(AppTypography.title(size: 30))
                 Text(workout.focus.isEmpty ? String(localized: "workout.focus_empty") : workout.focus)
                     .foregroundStyle(AppTheme.secondaryText)
                 Text(String(format: NSLocalizedString("program.exercise_count", comment: ""), workout.exercises.count))
-                    .font(.subheadline.weight(.medium))
+                    .font(AppTypography.body(size: 17, weight: .medium, relativeTo: .subheadline))
                     .foregroundStyle(AppTheme.secondaryText)
 
                 VStack(spacing: 12) {
@@ -125,7 +125,7 @@ struct WorkoutTemplateDetailView: View {
                 if group.isSuperset {
                     HStack {
                         Label("label.superset", systemImage: "bolt.fill")
-                            .font(.caption.weight(.semibold))
+                            .font(AppTypography.caption(size: 13, weight: .semibold))
                             .foregroundStyle(AppTheme.primaryText)
                             .padding(.horizontal, 12)
                             .padding(.vertical, 8)
@@ -140,10 +140,10 @@ struct WorkoutTemplateDetailView: View {
                             HStack(alignment: .top, spacing: 12) {
                                 VStack(alignment: .leading, spacing: 8) {
                                     Text(exercise.localizedName)
-                                        .font(.title3.weight(.heavy))
+                                        .font(AppTypography.heading(size: 21))
                                     if !exercise.equipment.isEmpty {
                                         Text(exercise.equipment)
-                                            .font(.subheadline)
+                                            .font(AppTypography.body(size: 16, relativeTo: .subheadline))
                                             .foregroundStyle(AppTheme.secondaryText)
                                     }
                                 }
@@ -170,7 +170,7 @@ struct WorkoutTemplateDetailView: View {
                                     }
                                 } label: {
                                     Image(systemName: "ellipsis.circle")
-                                        .font(.title3)
+                                        .font(AppTypography.icon(size: 20, weight: .medium))
                                         .foregroundStyle(AppTheme.secondaryText)
                                 }
                             }
@@ -223,7 +223,7 @@ struct WorkoutTemplateDetailView: View {
 
     private func tableHeaderCell(_ titleKey: LocalizedStringKey, alignment: Alignment) -> some View {
         Text(titleKey)
-            .font(.caption.weight(.semibold))
+            .font(AppTypography.caption(size: 13, weight: .semibold))
             .foregroundStyle(AppTheme.secondaryText)
             .textCase(.uppercase)
             .frame(maxWidth: .infinity, alignment: alignment)
@@ -231,7 +231,7 @@ struct WorkoutTemplateDetailView: View {
 
     private func tableValueCell(_ value: String, alignment: Alignment) -> some View {
         Text(value)
-            .font(.system(size: 18, weight: .semibold, design: .rounded))
+            .font(AppTypography.value(size: 18, weight: .semibold))
             .foregroundStyle(AppTheme.primaryText)
             .frame(maxWidth: .infinity, alignment: alignment)
     }
@@ -316,9 +316,9 @@ struct AddExerciseToWorkoutView: View {
                             Toggle(isOn: $isSuperset) {
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text("template.superset")
-                                        .font(.headline)
+                                        .font(AppTypography.body(size: 18, weight: .semibold, relativeTo: .headline))
                                     Text(LocalizedStringKey(isSuperset ? "template.superset_hint_pair" : "template.superset_hint_single"))
-                                        .font(.caption)
+                                        .font(AppTypography.caption(size: 13, weight: .regular))
                                         .foregroundStyle(AppTheme.secondaryText)
                                 }
                             }
@@ -488,7 +488,7 @@ private struct ExerciseSelectionCard: View {
                     Circle()
                         .fill(Color.white.opacity(0.14))
                     Image(systemName: category?.symbol ?? "figure.strengthtraining.functional")
-                        .font(.system(size: 18, weight: .semibold))
+                        .font(AppTypography.icon(size: 18, weight: .semibold))
                         .foregroundStyle(.white)
                 }
                 .frame(width: 44, height: 44)
@@ -496,12 +496,12 @@ private struct ExerciseSelectionCard: View {
                 VStack(alignment: .leading, spacing: 4) {
                     if let category {
                         Text(LocalizedStringKey(category.nameKey))
-                            .font(.caption2.weight(.medium))
+                            .font(AppTypography.label(size: 11, weight: .medium))
                             .foregroundStyle(Color.white.opacity(0.72))
                     }
 
                     Text(exercise.localizedName)
-                        .font(.system(size: 18, weight: .medium, design: .rounded))
+                        .font(AppTypography.body(size: 18, weight: .medium))
                         .foregroundStyle(.white)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .multilineTextAlignment(.leading)
@@ -509,7 +509,7 @@ private struct ExerciseSelectionCard: View {
 
                     if !exercise.equipment.isEmpty {
                         Text(exercise.equipment)
-                            .font(.footnote)
+                            .font(AppTypography.caption(size: 13, weight: .regular))
                             .foregroundStyle(Color.white.opacity(0.74))
                             .lineLimit(1)
                     }
@@ -524,7 +524,7 @@ private struct ExerciseSelectionCard: View {
                         .shadow(color: Color.black.opacity(0.2), radius: 8, y: 4)
 
                     Image(systemName: isSelected ? "checkmark" : "plus")
-                        .font(.system(size: 15, weight: .bold))
+                        .font(AppTypography.icon(size: 15, weight: .bold))
                         .foregroundStyle(
                             isSelected
                                 ? LinearGradient(
@@ -714,7 +714,7 @@ struct TemplateExerciseConfigSheet: View {
                 Spacer()
 
                 Text(title)
-                    .font(.headline.weight(.heavy))
+                    .font(AppTypography.heading(size: 18))
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
 
@@ -770,7 +770,7 @@ struct TemplateExerciseConfigSheet: View {
     private func wheelColumn<Content: View>(titleKey: LocalizedStringKey, width: CGFloat, @ViewBuilder content: () -> Content) -> some View {
         VStack(spacing: 6) {
             Text(titleKey)
-                .font(.caption.weight(.semibold))
+                .font(AppTypography.caption(size: 13, weight: .semibold))
                 .foregroundStyle(AppTheme.secondaryText)
             content()
                 .frame(width: width, height: 180)

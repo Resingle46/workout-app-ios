@@ -62,7 +62,7 @@ struct ActiveWorkoutView: View {
                 AppCard(glowStyle: .workout) {
                     VStack(alignment: .leading, spacing: 12) {
                         Text("workout.empty_title")
-                            .font(.title2.weight(.heavy))
+                            .font(AppTypography.heading(size: 24))
                         Text("workout.empty_description")
                             .foregroundStyle(AppTheme.secondaryText)
                     }
@@ -140,7 +140,7 @@ struct ActiveWorkoutView: View {
                 HStack(alignment: .top, spacing: 12) {
                     VStack(alignment: .leading, spacing: 8) {
                         Text(exercise.localizedName)
-                            .font(.title3.weight(.heavy))
+                            .font(AppTypography.heading(size: 21))
 
                         WorkoutExerciseInfoRow(
                             targetWeightText: targetWeightText(for: item, session: session),
@@ -149,7 +149,7 @@ struct ActiveWorkoutView: View {
 
                         if item.groupKind == .superset {
                             Label("label.superset", systemImage: "bolt.fill")
-                                .font(.caption.weight(.semibold))
+                                .font(AppTypography.caption(size: 13, weight: .semibold))
                                 .padding(.horizontal, 10)
                                 .padding(.vertical, 6)
                                 .background(AppTheme.accentMuted, in: Capsule())
@@ -181,7 +181,7 @@ struct ActiveWorkoutView: View {
                         Text(String(format: NSLocalizedString("workout.previous_rest", comment: ""), previousSetRest))
                     }
                 }
-                .font(.caption)
+                .font(AppTypography.caption(size: 13, weight: .regular))
                 .foregroundStyle(AppTheme.secondaryText)
             }
         }
@@ -224,7 +224,7 @@ struct ActiveWorkoutView: View {
         WorkoutHeroCard {
             VStack(alignment: .leading, spacing: 18) {
                 Text(session.title)
-                    .font(.system(size: 30, weight: .black, design: .rounded))
+                    .font(AppTypography.title(size: 30))
 
                 WorkoutExerciseProgressCard(progress: workoutProgress(for: session))
 
@@ -404,10 +404,10 @@ private struct WorkoutExerciseInfoRow: View {
     private func infoChip(titleKey: LocalizedStringKey, value: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(titleKey)
-                .font(.caption2.weight(.semibold))
+                .font(AppTypography.label(size: 11, weight: .semibold))
                 .foregroundStyle(AppTheme.secondaryText)
             Text(value)
-                .font(.caption.weight(.medium))
+                .font(AppTypography.caption())
                 .foregroundStyle(AppTheme.primaryText)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
@@ -444,11 +444,11 @@ private struct WorkoutSetRow: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
                 Text(String(format: NSLocalizedString("workout.set_number", comment: ""), setIndex + 1))
-                    .font(.subheadline.weight(.semibold))
+                    .font(AppTypography.body(size: 16, weight: .semibold, relativeTo: .subheadline))
                 Spacer()
                 if set.completedAt != nil {
                     Label("workout.done_badge", systemImage: "checkmark.circle.fill")
-                        .font(.caption.weight(.bold))
+                        .font(AppTypography.caption(size: 13, weight: .bold))
                         .foregroundStyle(AppTheme.accent)
                 }
             }
@@ -503,7 +503,7 @@ private struct WorkoutSetRow: View {
                     store.removeSetFromActiveWorkout(exerciseIndex: exerciseIndex, setIndex: setIndex)
                 } label: {
                     Image(systemName: "trash")
-                        .font(.system(size: 20, weight: .semibold))
+                        .font(AppTypography.icon(size: 20, weight: .semibold))
                         .frame(width: 48, height: 46)
                 }
                 .buttonStyle(WorkoutSetIconButtonStyle())
@@ -537,7 +537,7 @@ private struct WorkoutSetRow: View {
                 updateReps(max(1, set.reps - 1))
             } label: {
                 Image(systemName: "minus")
-                    .font(.system(size: 16, weight: .bold))
+                    .font(AppTypography.icon(size: 16, weight: .bold))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .contentShape(Rectangle())
             }
@@ -569,7 +569,7 @@ private struct WorkoutSetRow: View {
                 updateReps(min(50, set.reps + 1))
             } label: {
                 Image(systemName: "plus")
-                    .font(.system(size: 16, weight: .bold))
+                    .font(AppTypography.icon(size: 16, weight: .bold))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .contentShape(Rectangle())
             }
@@ -577,7 +577,7 @@ private struct WorkoutSetRow: View {
             .contentShape(Rectangle())
             .buttonStyle(.plain)
         }
-        .font(.system(size: 18, weight: .semibold, design: .rounded))
+        .font(AppTypography.value(size: 18, weight: .semibold))
         .foregroundStyle(AppTheme.primaryText)
         .background(AppTheme.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
@@ -692,7 +692,7 @@ private struct WorkoutSetPrimaryActionLabel: View {
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: systemImage)
-                .font(.system(size: 15, weight: .semibold))
+                .font(AppTypography.icon(size: 15, weight: .semibold))
             Text(titleKey)
                 .multilineTextAlignment(.center)
                 .lineLimit(1)
@@ -709,7 +709,7 @@ private struct WorkoutSetActionButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 12, weight: .semibold, design: .rounded))
+            .font(AppTypography.label(size: 12, weight: .semibold))
             .foregroundStyle(AppTheme.primaryText)
             .padding(.horizontal, 10)
             .padding(.vertical, 4)
@@ -773,7 +773,7 @@ private struct WorkoutSetIconButtonStyle: ButtonStyle {
 private struct WorkoutFinishButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 17, weight: .semibold, design: .rounded))
+            .font(AppTypography.button(size: 17))
             .foregroundStyle(.white)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 18)
@@ -811,11 +811,11 @@ private struct WorkoutMetricPanel<Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title)
-                .font(.caption.weight(.semibold))
+                .font(AppTypography.caption(size: 13, weight: .semibold))
                 .foregroundStyle(AppTheme.secondaryText)
                 .lineLimit(3)
             content
-                .font(.system(size: 22, weight: .bold, design: .rounded))
+                .font(AppTypography.heading(size: 22))
         }
         .padding(16)
         .frame(maxWidth: .infinity, minHeight: 118, maxHeight: 118, alignment: .topLeading)
@@ -847,10 +847,10 @@ private struct WorkoutExerciseProgressCard: View {
             HStack {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("workout.progress_title")
-                        .font(.headline.weight(.medium))
+                        .font(AppTypography.body(size: 18, weight: .medium, relativeTo: .headline))
                         .foregroundStyle(Color.white.opacity(0.76))
                     Text(String(format: NSLocalizedString("workout.progress_value", comment: ""), progress.completed, progress.remaining))
-                        .font(.system(size: 15, weight: .medium, design: .rounded))
+                        .font(AppTypography.body(size: 15, weight: .medium))
                         .foregroundStyle(AppTheme.primaryText)
                 }
 
@@ -944,7 +944,7 @@ private struct WorkoutExerciseProgressCard: View {
                 .shadow(color: Color.black.opacity(0.22), radius: 12, y: 6)
 
             Text("\(progress.currentStep)")
-                .font(.system(size: 28, weight: .black, design: .rounded))
+                .font(AppTypography.metric(size: 28))
                 .foregroundStyle(Color.white.opacity(0.94))
         }
     }

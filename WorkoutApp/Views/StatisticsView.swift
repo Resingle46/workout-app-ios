@@ -23,15 +23,15 @@ struct StatisticsView: View {
                                 VStack(alignment: .leading, spacing: 8) {
                                     HStack {
                                         Text(exercise.exerciseName)
-                                            .font(.headline.weight(.heavy))
+                                            .font(AppTypography.heading(size: 18))
                                         Spacer()
                                         Text(exercise.performedAt, format: .dateTime.day().month().year())
-                                            .font(.caption.weight(.medium))
+                                            .font(AppTypography.caption())
                                             .foregroundStyle(AppTheme.secondaryText)
                                     }
 
                                     Text(setSummary(for: exercise.sets))
-                                        .font(.subheadline)
+                                        .font(AppTypography.body(size: 16, relativeTo: .subheadline))
                                         .foregroundStyle(AppTheme.secondaryText)
                                 }
 
@@ -72,16 +72,16 @@ struct StatisticsView: View {
                                     VStack(alignment: .leading, spacing: 8) {
                                         HStack {
                                             Text(session.title)
-                                                .font(.headline.weight(.heavy))
+                                                .font(AppTypography.heading(size: 18))
                                                 .foregroundStyle(AppTheme.primaryText)
                                             Spacer()
                                             Text(session.startedAt, format: .dateTime.day().month().year())
-                                                .font(.caption.weight(.medium))
+                                                .font(AppTypography.caption())
                                                 .foregroundStyle(AppTheme.secondaryText)
                                         }
 
                                         Text(sessionSubtitle(for: session))
-                                            .font(.subheadline)
+                                            .font(AppTypography.body(size: 16, relativeTo: .subheadline))
                                             .foregroundStyle(AppTheme.secondaryText)
                                     }
                                     .padding(.vertical, 4)
@@ -124,7 +124,7 @@ struct StatisticsView: View {
                 VStack(alignment: .leading, spacing: 10) {
                     AppSectionTitle(titleKey: "stats.exercise_chart")
                     Text("stats.pick_exercise_title")
-                        .font(.title3.weight(.heavy))
+                        .font(AppTypography.heading(size: 21))
                     Text("stats.pick_exercise_description")
                         .foregroundStyle(AppTheme.secondaryText)
                 }
@@ -140,7 +140,7 @@ struct StatisticsView: View {
             VStack(alignment: .leading, spacing: 16) {
                 AppSectionTitle(titleKey: "stats.exercise_chart")
                 Text(exercise.localizedName)
-                    .font(.title3.weight(.heavy))
+                    .font(AppTypography.heading(size: 21))
 
                 if points.isEmpty {
                     Text("stats.empty")
@@ -199,7 +199,7 @@ struct StatisticsView: View {
                                 Spacer()
                                 Text(String(format: NSLocalizedString("stats.weight_value", comment: ""), point.1))
                             }
-                            .font(.subheadline)
+                            .font(AppTypography.body(size: 16, relativeTo: .subheadline))
                             .foregroundStyle(AppTheme.secondaryText)
                         }
                     }
@@ -259,20 +259,20 @@ struct WorkoutSummaryView: View {
             VStack(alignment: .leading, spacing: 20) {
                 if mode == .completion {
                     Text("stats.summary")
-                        .font(.system(size: 38, weight: .black, design: .rounded))
+                        .font(AppTypography.metric(size: 38))
                 } else if mode == .previousWorkout {
                     Text("stats.previous_workout_preview")
-                        .font(.system(size: 30, weight: .black, design: .rounded))
+                        .font(AppTypography.title(size: 30))
                 }
 
                 AppCard(glowStyle: .statistics) {
                     VStack(alignment: .leading, spacing: 14) {
                         HStack(alignment: .top, spacing: 12) {
                             Text(session.title)
-                                .font(.system(size: 28, weight: .black, design: .rounded))
+                                .font(AppTypography.metric(size: 28))
                             Spacer(minLength: 8)
                             Text(completedAtText)
-                                .font(.caption.weight(.medium))
+                                .font(AppTypography.caption())
                                 .foregroundStyle(AppTheme.secondaryText)
                                 .multilineTextAlignment(.trailing)
                         }
@@ -294,7 +294,7 @@ struct WorkoutSummaryView: View {
                         AppCard(glowStyle: .statistics) {
                             VStack(alignment: .leading, spacing: 14) {
                                 Text(item.localizedName)
-                                    .font(.title3.weight(.heavy))
+                                    .font(AppTypography.heading(size: 21))
 
                                 ForEach(Array(exercise.sets.enumerated()), id: \.element.id) { index, set in
                                     HStack {
@@ -413,10 +413,10 @@ private struct WorkoutSummaryMetricCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(titleKey)
-                .font(.caption.weight(.semibold))
+                .font(AppTypography.caption(size: 13, weight: .semibold))
                 .foregroundStyle(AppTheme.secondaryText)
             Text(value)
-                .font(.system(size: 26, weight: .black, design: .rounded))
+                .font(AppTypography.metric(size: 26))
                 .foregroundStyle(AppTheme.primaryText)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)

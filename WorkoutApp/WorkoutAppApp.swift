@@ -6,6 +6,7 @@ struct WorkoutAppApp: App {
     @State private var store: AppStore
 
     init() {
+        AppTypography.configureGlobalAppearance()
         _store = State(initialValue: AppStore())
     }
 

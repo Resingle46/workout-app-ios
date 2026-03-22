@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 enum AppTheme {
     static let background = Color(red: 0.03, green: 0.03, blue: 0.05)
@@ -18,8 +19,122 @@ enum AppTheme {
 }
 
 enum AppTypography {
+    private static let onestPostScriptName = "Onest-Regular"
+    private static let onestWeightAxis = 2003265652
+
     static func pageHeaderTitle(size: CGFloat = 25) -> Font {
         .custom("PlayfairDisplaySC-Regular", size: size, relativeTo: .title2)
+    }
+
+    static func body(size: CGFloat = 17, weight: AppFontWeight = .regular, relativeTo textStyle: Font.TextStyle = .body) -> Font {
+        onest(size: size, weight: weight, relativeTo: textStyle)
+    }
+
+    static func title(size: CGFloat = 30) -> Font {
+        onest(size: size, weight: .black, relativeTo: .title2)
+    }
+
+    static func heading(size: CGFloat = 24) -> Font {
+        onest(size: size, weight: .heavy, relativeTo: .title3)
+    }
+
+    static func metric(size: CGFloat = 28) -> Font {
+        onest(size: size, weight: .black, relativeTo: .title3)
+    }
+
+    static func button(size: CGFloat = 17) -> Font {
+        onest(size: size, weight: .semibold, relativeTo: .headline)
+    }
+
+    static func label(size: CGFloat = 12, weight: AppFontWeight = .semibold) -> Font {
+        onest(size: size, weight: weight, relativeTo: .caption)
+    }
+
+    static func caption(size: CGFloat = 13, weight: AppFontWeight = .medium) -> Font {
+        onest(size: size, weight: weight, relativeTo: .caption)
+    }
+
+    static func value(size: CGFloat = 18, weight: AppFontWeight = .semibold) -> Font {
+        onest(size: size, weight: weight, relativeTo: .body)
+    }
+
+    static func icon(size: CGFloat = 18, weight: AppFontWeight = .semibold) -> Font {
+        onest(size: size, weight: weight, relativeTo: .body)
+    }
+
+    static func configureGlobalAppearance() {
+        let segmented = UISegmentedControl.appearance()
+        segmented.setTitleTextAttributes([.font: onestUIFont(size: 14, weight: .medium, relativeTo: .subheadline)], for: .normal)
+        segmented.setTitleTextAttributes([.font: onestUIFont(size: 14, weight: .semibold, relativeTo: .subheadline)], for: .selected)
+    }
+
+    private static func onest(size: CGFloat, weight: AppFontWeight, relativeTo textStyle: Font.TextStyle) -> Font {
+        Font(onestUIFont(size: size, weight: weight, relativeTo: textStyle))
+    }
+
+    private static func onestUIFont(size: CGFloat, weight: AppFontWeight, relativeTo textStyle: Font.TextStyle) -> UIFont {
+        let descriptor = UIFontDescriptor(name: onestPostScriptName, size: size).addingAttributes([
+            .variation: [onestWeightAxis: weight.axisValue]
+        ])
+        let font = UIFont(descriptor: descriptor, size: size)
+        return UIFontMetrics(forTextStyle: textStyle.uiTextStyle).scaledFont(for: font)
+    }
+}
+
+enum AppFontWeight {
+    case regular
+    case medium
+    case semibold
+    case bold
+    case heavy
+    case black
+
+    fileprivate var axisValue: CGFloat {
+        switch self {
+        case .regular:
+            400
+        case .medium:
+            500
+        case .semibold:
+            600
+        case .bold:
+            700
+        case .heavy:
+            800
+        case .black:
+            900
+        }
+    }
+}
+
+private extension Font.TextStyle {
+    var uiTextStyle: UIFont.TextStyle {
+        switch self {
+        case .largeTitle:
+            .largeTitle
+        case .title:
+            .title1
+        case .title2:
+            .title2
+        case .title3:
+            .title3
+        case .headline:
+            .headline
+        case .subheadline:
+            .subheadline
+        case .body:
+            .body
+        case .callout:
+            .callout
+        case .footnote:
+            .footnote
+        case .caption:
+            .caption1
+        case .caption2:
+            .caption2
+        @unknown default:
+            .body
+        }
     }
 }
 
@@ -116,6 +231,7 @@ struct AppCard<Content: View>: View {
 
     var body: some View {
         content
+            .font(AppTypography.body())
             .appLiquidGlassCard(glowStyle: glowStyle)
     }
 }
@@ -124,7 +240,7 @@ struct AppSectionTitle: View {
     let titleKey: LocalizedStringKey
     var body: some View {
         Text(titleKey)
-            .font(.caption.weight(.semibold))
+            .font(AppTypography.label())
             .foregroundStyle(AppTheme.secondaryText)
             .textCase(.uppercase)
             .tracking(1.2)
@@ -254,7 +370,7 @@ struct AppPageHeaderModule: View {
 struct AppPrimaryButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 17, weight: .medium, design: .rounded))
+            .font(AppTypography.button())
             .foregroundStyle(Color.black)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 18)
@@ -267,7 +383,7 @@ struct AppPrimaryButtonStyle: ButtonStyle {
 struct AppSecondaryButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 17, weight: .medium, design: .rounded))
+            .font(AppTypography.button())
             .foregroundStyle(AppTheme.primaryText)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 16)
@@ -284,7 +400,7 @@ struct AppSecondaryButtonStyle: ButtonStyle {
 struct AppOutlinedButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 17, weight: .medium, design: .rounded))
+            .font(AppTypography.button())
             .foregroundStyle(AppTheme.primaryText)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 18)
