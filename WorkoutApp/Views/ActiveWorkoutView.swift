@@ -436,6 +436,10 @@ private struct WorkoutSetRow: View {
         return set.completedAt != nil
     }
 
+    private var isUpcoming: Bool {
+        !isCompleted && !isCurrent
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
@@ -505,7 +509,15 @@ private struct WorkoutSetRow: View {
                 .buttonStyle(WorkoutSetIconButtonStyle())
             }
         }
+        .opacity(contentOpacity)
+        .saturation(contentSaturation)
         .padding(16)
+        .background(alignment: .bottom) {
+            if isCurrent {
+                WorkoutCurrentSetBottomGlow()
+                    .offset(y: 18)
+            }
+        }
         .background(cardBackground, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 22, style: .continuous)
@@ -516,6 +528,7 @@ private struct WorkoutSetRow: View {
                 WorkoutCurrentSetHighlight()
             }
         }
+        .shadow(color: activeCardShadowColor, radius: 16, y: 8)
     }
 
     private var repsControl: some View {
@@ -586,8 +599,23 @@ private struct WorkoutSetRow: View {
             )
         }
 
+        if isCurrent {
+            return LinearGradient(
+                colors: [
+                    Color(red: 0.14, green: 0.15, blue: 0.2),
+                    Color(red: 0.11, green: 0.15, blue: 0.24),
+                    Color(red: 0.1, green: 0.11, blue: 0.16)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        }
+
         return LinearGradient(
-            colors: [AppTheme.surfaceElevated, Color(red: 0.15, green: 0.15, blue: 0.18)],
+            colors: [
+                Color(red: 0.08, green: 0.08, blue: 0.11),
+                Color(red: 0.1, green: 0.1, blue: 0.13)
+            ],
             startPoint: .topLeading,
             endPoint: .bottomTrailing
         )
@@ -598,7 +626,19 @@ private struct WorkoutSetRow: View {
             return Color(red: 0.22, green: 0.42, blue: 0.33).opacity(0.55)
         }
 
-        return isCurrent ? Color.white.opacity(0.18) : AppTheme.stroke
+        return isCurrent ? Color.white.opacity(0.14) : Color.white.opacity(0.05)
+    }
+
+    private var contentOpacity: Double {
+        isUpcoming ? 0.7 : 1
+    }
+
+    private var contentSaturation: Double {
+        isUpcoming ? 0.82 : 1
+    }
+
+    private var activeCardShadowColor: Color {
+        isCurrent ? AppTheme.neonCyan.opacity(0.08) : .clear
     }
 
     private func updateSet(_ change: (inout WorkoutSetLog) -> Void) {
@@ -956,6 +996,35 @@ private struct WorkoutCurrentSetHighlight: View {
                     angle = .degrees(360)
                 }
             }
+    }
+}
+
+private struct WorkoutCurrentSetBottomGlow: View {
+    var body: some View {
+        ZStack {
+            Capsule()
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            AppTheme.neonBlue.opacity(0.08),
+                            AppTheme.neonCyan.opacity(0.16),
+                            AppTheme.neonLime.opacity(0.08),
+                            Color.clear
+                        ],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
+                .frame(width: 180, height: 14)
+                .blur(radius: 14)
+
+            Capsule()
+                .fill(AppTheme.neonCyan.opacity(0.12))
+                .frame(width: 110, height: 8)
+                .blur(radius: 10)
+        }
+        .frame(maxWidth: .infinity)
+        .allowsHitTesting(false)
     }
 }
 
