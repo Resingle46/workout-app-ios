@@ -131,6 +131,30 @@ struct AppPageHeaderModule: View {
     let titleKey: LocalizedStringKey
     let subtitleKey: LocalizedStringKey?
 
+    private var headerBarHeight: CGFloat {
+        subtitleKey == nil ? 46 : 54
+    }
+
+    private var headerFadeHeight: CGFloat {
+        subtitleKey == nil ? 26 : 38
+    }
+
+    private var titleFontSize: CGFloat {
+        subtitleKey == nil ? 21 : 22
+    }
+
+    private var titleTopPadding: CGFloat {
+        subtitleKey == nil ? 7 : 1
+    }
+
+    private var contentSpacing: CGFloat {
+        subtitleKey == nil ? 0 : 4
+    }
+
+    private var bottomOverlap: CGFloat {
+        subtitleKey == nil ? -6 : -12
+    }
+
     init(titleKey: LocalizedStringKey, subtitleKey: LocalizedStringKey? = nil) {
         self.titleKey = titleKey
         self.subtitleKey = subtitleKey
@@ -139,11 +163,11 @@ struct AppPageHeaderModule: View {
     var body: some View {
         VStack(spacing: 0) {
             Color.black
-                .frame(height: subtitleKey == nil ? 56 : 68)
+                .frame(height: headerBarHeight)
                 .overlay(alignment: .top) {
-                    VStack(spacing: subtitleKey == nil ? 0 : 6) {
+                    VStack(spacing: contentSpacing) {
                         Text(titleKey)
-                            .font(AppTypography.pageHeaderTitle(size: subtitleKey == nil ? 22 : 24))
+                            .font(AppTypography.pageHeaderTitle(size: titleFontSize))
                             .foregroundStyle(AppTheme.primaryText)
                             .multilineTextAlignment(.center)
                             .tracking(2.8)
@@ -171,29 +195,30 @@ struct AppPageHeaderModule: View {
                                         endPoint: .trailing
                                     )
                                 )
-                                .frame(width: 148, height: 1.6)
+                                .frame(width: 132, height: 1.4)
                                 .clipShape(Capsule())
                                 .opacity(0.62)
-                                .padding(.top, 2)
+                                .padding(.top, 1)
                         }
                     }
-                    .padding(.top, subtitleKey == nil ? 8 : 2)
+                    .padding(.top, titleTopPadding)
                 }
 
             LinearGradient(
                 colors: [
                     Color.black,
-                    Color.black.opacity(0.94),
-                    Color.black.opacity(0.82),
-                    AppTheme.background.opacity(0.42),
+                    Color.black.opacity(0.86),
+                    Color.black.opacity(0.62),
+                    AppTheme.background.opacity(0.28),
                     AppTheme.background.opacity(0)
                 ],
                 startPoint: .top,
                 endPoint: .bottom
             )
-            .frame(height: subtitleKey == nil ? 64 : 88)
+            .frame(height: headerFadeHeight)
         }
         .padding(.horizontal, -20)
+        .padding(.bottom, bottomOverlap)
         .frame(maxWidth: .infinity, alignment: .top)
     }
 }
