@@ -223,7 +223,7 @@ struct ActiveWorkoutView: View {
     private func expandedHeader(for session: WorkoutSession) -> some View {
         let lastCompletedSetDate = lastCompletedSetDate(in: session)
 
-        WorkoutHeroCard {
+        return WorkoutHeroCard {
             VStack(alignment: .leading, spacing: 18) {
                 Text(session.title)
                     .font(AppTypography.title(size: 30))
