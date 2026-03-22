@@ -20,7 +20,6 @@ enum AppTheme {
 
 enum AppTypography {
     private static let onestPostScriptName = "Onest-Regular"
-    private static let onestWeightAxis = 2003265652
 
     static func pageHeaderTitle(size: CGFloat = 25) -> Font {
         .custom("PlayfairDisplaySC-Regular", size: size, relativeTo: .title2)
@@ -64,20 +63,14 @@ enum AppTypography {
 
     static func configureGlobalAppearance() {
         let segmented = UISegmentedControl.appearance()
-        segmented.setTitleTextAttributes([.font: onestUIFont(size: 14, weight: .medium, relativeTo: .subheadline)], for: .normal)
-        segmented.setTitleTextAttributes([.font: onestUIFont(size: 14, weight: .semibold, relativeTo: .subheadline)], for: .selected)
+        let normalFont = UIFont(name: onestPostScriptName, size: 14) ?? .systemFont(ofSize: 14, weight: .medium)
+        let selectedFont = UIFont(name: onestPostScriptName, size: 14) ?? .systemFont(ofSize: 14, weight: .semibold)
+        segmented.setTitleTextAttributes([.font: normalFont], for: .normal)
+        segmented.setTitleTextAttributes([.font: selectedFont], for: .selected)
     }
 
     private static func onest(size: CGFloat, weight: AppFontWeight, relativeTo textStyle: Font.TextStyle) -> Font {
-        Font(onestUIFont(size: size, weight: weight, relativeTo: textStyle))
-    }
-
-    private static func onestUIFont(size: CGFloat, weight: AppFontWeight, relativeTo textStyle: Font.TextStyle) -> UIFont {
-        let descriptor = UIFontDescriptor(name: onestPostScriptName, size: size).addingAttributes([
-            .variation: [onestWeightAxis: weight.axisValue]
-        ])
-        let font = UIFont(descriptor: descriptor, size: size)
-        return UIFontMetrics(forTextStyle: textStyle.uiTextStyle).scaledFont(for: font)
+        .custom(onestPostScriptName, size: size, relativeTo: textStyle).weight(weight.fontWeight)
     }
 }
 
@@ -89,51 +82,20 @@ enum AppFontWeight {
     case heavy
     case black
 
-    fileprivate var axisValue: CGFloat {
+    fileprivate var fontWeight: Font.Weight {
         switch self {
         case .regular:
-            400
+            .regular
         case .medium:
-            500
+            .medium
         case .semibold:
-            600
+            .semibold
         case .bold:
-            700
+            .bold
         case .heavy:
-            800
+            .heavy
         case .black:
-            900
-        }
-    }
-}
-
-private extension Font.TextStyle {
-    var uiTextStyle: UIFont.TextStyle {
-        switch self {
-        case .largeTitle:
-            .largeTitle
-        case .title:
-            .title1
-        case .title2:
-            .title2
-        case .title3:
-            .title3
-        case .headline:
-            .headline
-        case .subheadline:
-            .subheadline
-        case .body:
-            .body
-        case .callout:
-            .callout
-        case .footnote:
-            .footnote
-        case .caption:
-            .caption1
-        case .caption2:
-            .caption2
-        @unknown default:
-            .body
+            .black
         }
     }
 }
