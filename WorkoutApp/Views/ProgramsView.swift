@@ -14,55 +14,15 @@ struct ProgramsView: View {
                 } else {
                     ForEach(store.programs) { program in
                         NavigationLink(destination: ProgramDetailView(programID: program.id)) {
-                            AppCard {
-                                VStack(alignment: .leading, spacing: 14) {
-                                    HStack(alignment: .top, spacing: 12) {
-                                        VStack(alignment: .leading, spacing: 8) {
-                                            Text(program.title)
-                                                .font(.system(size: 24, weight: .black, design: .rounded))
-                                                .foregroundStyle(AppTheme.primaryText)
-                                            Text(String(format: NSLocalizedString("program.workout_count", comment: ""), program.workouts.count))
-                                                .font(.subheadline.weight(.medium))
-                                                .foregroundStyle(AppTheme.secondaryText)
-                                        }
-                                        Spacer()
-                                        Image(systemName: "chevron.right")
-                                            .font(.headline.weight(.bold))
-                                            .foregroundStyle(AppTheme.secondaryText)
-                                    }
-
-                                    Divider()
-                                        .overlay(AppTheme.stroke)
-
-                                    if program.workouts.isEmpty {
-                                        Text("program.no_workouts")
-                                            .font(.subheadline)
-                                            .foregroundStyle(AppTheme.secondaryText)
-                                    } else {
-                                        VStack(alignment: .leading, spacing: 8) {
-                                            ForEach(Array(program.workouts.prefix(3).enumerated()), id: \.element.id) { index, workout in
-                                                HStack {
-                                                    Text("\(index + 1).")
-                                                        .foregroundStyle(AppTheme.secondaryText)
-                                                    Text(workout.title)
-                                                        .foregroundStyle(AppTheme.primaryText)
-                                                    Spacer()
-                                                    Text(String(format: NSLocalizedString("program.exercise_count", comment: ""), workout.exercises.count))
-                                                        .font(.caption.weight(.medium))
-                                                        .foregroundStyle(AppTheme.secondaryText)
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
+                            programOverviewCard(program)
                         }
                         .buttonStyle(.plain)
+                        .padding(.horizontal, 8)
                     }
                 }
             }
             .padding(.horizontal, 20)
-            .padding(.top, 20)
+            .padding(.top, 4)
             .padding(.bottom, 28)
         }
         .navigationBarTitleDisplayMode(.inline)
@@ -88,7 +48,7 @@ struct ProgramsView: View {
     }
 
     private var emptyState: some View {
-        AppCard {
+        ProgramsCompactCard {
             VStack(alignment: .leading, spacing: 18) {
                 Text("programs.empty_title")
                     .font(.system(size: 26, weight: .black, design: .rounded))
@@ -103,6 +63,72 @@ struct ProgramsView: View {
                 .buttonStyle(AppPrimaryButtonStyle())
             }
         }
+        .padding(.horizontal, 8)
+    }
+
+    @ViewBuilder
+    private func programOverviewCard(_ program: WorkoutProgram) -> some View {
+        ProgramsCompactCard {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .top, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(program.title)
+                            .font(.system(size: 24, weight: .black, design: .rounded))
+                            .foregroundStyle(AppTheme.primaryText)
+                        Text(String(format: NSLocalizedString("program.workout_count", comment: ""), program.workouts.count))
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(AppTheme.secondaryText)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.headline.weight(.bold))
+                        .foregroundStyle(AppTheme.secondaryText)
+                }
+
+                Divider()
+                    .overlay(AppTheme.stroke)
+
+                if program.workouts.isEmpty {
+                    Text("program.no_workouts")
+                        .font(.subheadline)
+                        .foregroundStyle(AppTheme.secondaryText)
+                } else {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(Array(program.workouts.prefix(3).enumerated()), id: \.element.id) { index, workout in
+                            HStack {
+                                Text("\(index + 1).")
+                                    .foregroundStyle(AppTheme.secondaryText)
+                                Text(workout.title)
+                                    .foregroundStyle(AppTheme.primaryText)
+                                Spacer()
+                                Text(String(format: NSLocalizedString("program.exercise_count", comment: ""), workout.exercises.count))
+                                    .font(.caption.weight(.medium))
+                                    .foregroundStyle(AppTheme.secondaryText)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct ProgramsCompactCard<Content: View>: View {
+    let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        content
+            .padding(18)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(AppTheme.surface, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .stroke(AppTheme.stroke, lineWidth: 1)
+            )
     }
 }
 

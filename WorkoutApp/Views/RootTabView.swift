@@ -16,6 +16,12 @@ enum AppTheme {
     static let neonOrange = Color(red: 0.98, green: 0.48, blue: 0.26)
 }
 
+enum AppTypography {
+    static func pageHeaderTitle(size: CGFloat = 25) -> Font {
+        .custom("PlayfairDisplaySC-Regular", size: size, relativeTo: .title2)
+    }
+}
+
 @MainActor
 struct RootTabView: View {
     @Environment(AppStore.self) private var store
@@ -130,55 +136,60 @@ struct AppPageHeaderModule: View {
     }
 
     var body: some View {
-        VStack(spacing: 10) {
-            Text(titleKey)
-                .font(.system(size: 38, weight: .black, design: .rounded))
-                .multilineTextAlignment(.center)
+        VStack(spacing: 0) {
+            Color.black
+                .frame(height: subtitleKey == nil ? 70 : 78)
+                .overlay(alignment: .top) {
+                    VStack(spacing: subtitleKey == nil ? 0 : 5) {
+                        Text(titleKey)
+                            .font(AppTypography.pageHeaderTitle(size: subtitleKey == nil ? 23 : 25))
+                            .foregroundStyle(AppTheme.primaryText)
+                            .multilineTextAlignment(.center)
+                            .tracking(subtitleKey == nil ? 1.8 : 1.6)
 
-            if let subtitleKey {
-                Text(subtitleKey)
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(AppTheme.secondaryText)
-                    .multilineTextAlignment(.center)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+                        if let subtitleKey {
+                            Text(subtitleKey)
+                                .font(.system(size: 10.5, weight: .light, design: .rounded))
+                                .foregroundStyle(AppTheme.secondaryText)
+                                .multilineTextAlignment(.center)
+                                .tracking(4.6)
+
+                            Rectangle()
+                                .fill(
+                                    LinearGradient(
+                                        colors: [
+                                            AppTheme.neonViolet.opacity(0),
+                                            AppTheme.neonViolet.opacity(0.32),
+                                            AppTheme.neonBlue.opacity(0.28),
+                                            AppTheme.neonCyan.opacity(0.24),
+                                            AppTheme.neonLime.opacity(0)
+                                        ],
+                                        startPoint: .leading,
+                                        endPoint: .trailing
+                                    )
+                                )
+                                .frame(width: 162, height: 1.8)
+                                .clipShape(Capsule())
+                                .opacity(0.8)
+                                .padding(.top, 1)
+                        }
+                    }
+                    .padding(.top, subtitleKey == nil ? 18 : 14)
+                }
+
+            LinearGradient(
+                colors: [
+                    Color.black,
+                    Color.black.opacity(0.72),
+                    AppTheme.background.opacity(0)
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .frame(height: subtitleKey == nil ? 46 : 58)
         }
-        .padding(.horizontal, 22)
-        .padding(.vertical, subtitleKey == nil ? 16 : 18)
-        .frame(maxWidth: 440)
-        .background(
-            RoundedRectangle(cornerRadius: 28, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            AppTheme.surface.opacity(0.94),
-                            Color(red: 0.1, green: 0.1, blue: 0.14).opacity(0.92)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 28, style: .continuous)
-                        .fill(
-                            LinearGradient(
-                                colors: [
-                                    AppTheme.neonViolet.opacity(0.08),
-                                    AppTheme.neonBlue.opacity(0.05),
-                                    Color.clear
-                                ],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                        )
-                )
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 28, style: .continuous)
-                .stroke(Color.white.opacity(0.1), lineWidth: 1)
-        )
-        .shadow(color: AppTheme.neonBlue.opacity(0.06), radius: 18, y: 8)
-        .frame(maxWidth: .infinity, alignment: .center)
+        .padding(.horizontal, -20)
+        .frame(maxWidth: .infinity, alignment: .top)
     }
 }
 

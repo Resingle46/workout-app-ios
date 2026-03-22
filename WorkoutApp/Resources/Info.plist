@@ -20,6 +20,12 @@
     <string>1</string>
     <key>LSRequiresIPhoneOS</key>
     <true/>
+    <key>UIAppFonts</key>
+    <array>
+        <string>PlayfairDisplaySC-Regular.ttf</string>
+        <string>PlayfairDisplaySC-Bold.ttf</string>
+        <string>PlayfairDisplaySC-Black.ttf</string>
+    </array>
     <key>UIApplicationSceneManifest</key>
     <dict>
         <key>UIApplicationSupportsMultipleScenes</key>
