@@ -326,12 +326,144 @@ private struct AppLiquidGlassCardModifier: ViewModifier {
     let cornerRadius: CGFloat
     let shadowColor: Color
 
+    private var borderPalette: AppLiquidGlassBorderPalette {
+        switch glowStyle {
+        case .neutral:
+            AppLiquidGlassBorderPalette(
+                rimColors: [
+                    Color.white.opacity(0.72),
+                    AppTheme.neonBlue.opacity(0.42),
+                    Color.white.opacity(0.22),
+                    AppTheme.neonViolet.opacity(0.34),
+                    Color.white.opacity(0.68)
+                ],
+                edgeGlowColors: [
+                    Color.white.opacity(0.14),
+                    AppTheme.neonBlue.opacity(0.16),
+                    Color.clear,
+                    AppTheme.neonViolet.opacity(0.14),
+                    Color.white.opacity(0.12)
+                ],
+                highlightColors: [
+                    Color.white.opacity(0.46),
+                    Color.white.opacity(0.08),
+                    Color.clear
+                ],
+                highlightStart: UnitPoint(x: 0.12, y: 0.04),
+                highlightEnd: UnitPoint(x: 0.9, y: 0.94)
+            )
+        case .programs:
+            AppLiquidGlassBorderPalette(
+                rimColors: [
+                    Color.white.opacity(0.84),
+                    AppTheme.neonCyan.opacity(0.54),
+                    AppTheme.neonLime.opacity(0.22),
+                    Color.white.opacity(0.2),
+                    AppTheme.neonBlue.opacity(0.3),
+                    Color.white.opacity(0.78)
+                ],
+                edgeGlowColors: [
+                    Color.white.opacity(0.18),
+                    AppTheme.neonCyan.opacity(0.22),
+                    AppTheme.neonLime.opacity(0.12),
+                    Color.clear,
+                    Color.white.opacity(0.12)
+                ],
+                highlightColors: [
+                    Color.white.opacity(0.52),
+                    AppTheme.neonCyan.opacity(0.12),
+                    Color.clear
+                ],
+                highlightStart: UnitPoint(x: 0.05, y: 0.08),
+                highlightEnd: UnitPoint(x: 0.86, y: 0.94)
+            )
+        case .workout:
+            AppLiquidGlassBorderPalette(
+                rimColors: [
+                    Color.white.opacity(0.72),
+                    AppTheme.neonBlue.opacity(0.4),
+                    AppTheme.neonCyan.opacity(0.34),
+                    Color.white.opacity(0.18),
+                    AppTheme.neonViolet.opacity(0.46),
+                    Color.white.opacity(0.76)
+                ],
+                edgeGlowColors: [
+                    Color.white.opacity(0.1),
+                    AppTheme.neonBlue.opacity(0.2),
+                    AppTheme.neonCyan.opacity(0.14),
+                    Color.clear,
+                    AppTheme.neonViolet.opacity(0.14)
+                ],
+                highlightColors: [
+                    Color.clear,
+                    Color.white.opacity(0.18),
+                    AppTheme.neonBlue.opacity(0.32),
+                    Color.white.opacity(0.18),
+                    Color.clear
+                ],
+                highlightStart: UnitPoint(x: 0.42, y: 0.02),
+                highlightEnd: UnitPoint(x: 1.0, y: 0.92)
+            )
+        case .statistics:
+            AppLiquidGlassBorderPalette(
+                rimColors: [
+                    Color.white.opacity(0.7),
+                    AppTheme.neonViolet.opacity(0.48),
+                    AppTheme.neonBlue.opacity(0.32),
+                    Color.white.opacity(0.16),
+                    AppTheme.neonCyan.opacity(0.3),
+                    Color.white.opacity(0.74)
+                ],
+                edgeGlowColors: [
+                    Color.white.opacity(0.12),
+                    AppTheme.neonViolet.opacity(0.22),
+                    AppTheme.neonBlue.opacity(0.16),
+                    Color.clear,
+                    AppTheme.neonCyan.opacity(0.12)
+                ],
+                highlightColors: [
+                    Color.white.opacity(0.38),
+                    AppTheme.neonViolet.opacity(0.16),
+                    Color.clear
+                ],
+                highlightStart: UnitPoint(x: 0.18, y: 0.02),
+                highlightEnd: UnitPoint(x: 0.96, y: 0.92)
+            )
+        case .profile:
+            AppLiquidGlassBorderPalette(
+                rimColors: [
+                    Color.white.opacity(0.8),
+                    Color.white.opacity(0.22),
+                    AppTheme.neonCyan.opacity(0.32),
+                    AppTheme.neonBlue.opacity(0.16),
+                    Color.white.opacity(0.72)
+                ],
+                edgeGlowColors: [
+                    Color.white.opacity(0.16),
+                    AppTheme.neonCyan.opacity(0.18),
+                    Color.clear,
+                    AppTheme.neonBlue.opacity(0.1),
+                    Color.white.opacity(0.12)
+                ],
+                highlightColors: [
+                    Color.white.opacity(0.5),
+                    Color.white.opacity(0.12),
+                    Color.clear
+                ],
+                highlightStart: UnitPoint(x: 0.1, y: 0.04),
+                highlightEnd: UnitPoint(x: 0.84, y: 0.96)
+            )
+        }
+    }
+
     func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+
         content
             .padding(padding)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background {
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                shape
                     .fill(AppTheme.surface.opacity(0.96))
                     .overlay {
                         GeometryReader { proxy in
@@ -340,7 +472,7 @@ private struct AppLiquidGlassCardModifier: ViewModifier {
                         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
                     }
                     .overlay {
-                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        shape
                             .fill(
                                 LinearGradient(
                                     colors: [
@@ -355,12 +487,37 @@ private struct AppLiquidGlassCardModifier: ViewModifier {
                     }
             }
             .overlay {
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .stroke(Color.white.opacity(0.14), lineWidth: 1)
+                shape
+                    .strokeBorder(
+                        AngularGradient(
+                            colors: borderPalette.rimColors,
+                            center: .center
+                        ),
+                        lineWidth: 1.3
+                    )
                     .overlay {
-                        RoundedRectangle(cornerRadius: max(cornerRadius - 10, 0), style: .continuous)
-                            .stroke(Color.white.opacity(0.045), lineWidth: 1)
-                            .padding(10)
+                        shape
+                            .strokeBorder(
+                                LinearGradient(
+                                    colors: borderPalette.highlightColors,
+                                    startPoint: borderPalette.highlightStart,
+                                    endPoint: borderPalette.highlightEnd
+                                ),
+                                lineWidth: 1.05
+                            )
+                            .blendMode(.screen)
+                    }
+                    .overlay {
+                        shape
+                            .strokeBorder(
+                                AngularGradient(
+                                    colors: borderPalette.edgeGlowColors,
+                                    center: .center
+                                ),
+                                lineWidth: 2.4
+                            )
+                            .blur(radius: 2.4)
+                            .opacity(0.82)
                     }
             }
             .shadow(color: shadowColor, radius: 24, y: 10)
@@ -593,6 +750,14 @@ private struct AppLiquidGlassGlowLayer: View {
             .offset(x: size.width * x, y: size.height * y)
             .blur(radius: blur)
     }
+}
+
+private struct AppLiquidGlassBorderPalette {
+    let rimColors: [Color]
+    let edgeGlowColors: [Color]
+    let highlightColors: [Color]
+    let highlightStart: UnitPoint
+    let highlightEnd: UnitPoint
 }
 
 private struct AppScreenBackgroundModifier: ViewModifier {
