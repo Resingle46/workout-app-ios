@@ -331,22 +331,22 @@ private struct AppLiquidGlassCardModifier: ViewModifier {
         case .neutral:
             AppLiquidGlassBorderPalette(
                 rimColors: [
-                    Color.white.opacity(0.72),
-                    AppTheme.neonBlue.opacity(0.42),
-                    Color.white.opacity(0.22),
-                    AppTheme.neonViolet.opacity(0.34),
-                    Color.white.opacity(0.68)
+                    Color.white.opacity(0.42),
+                    AppTheme.neonBlue.opacity(0.22),
+                    Color.white.opacity(0.1),
+                    AppTheme.neonViolet.opacity(0.18),
+                    Color.white.opacity(0.38)
                 ],
                 edgeGlowColors: [
-                    Color.white.opacity(0.14),
-                    AppTheme.neonBlue.opacity(0.16),
+                    Color.white.opacity(0.06),
+                    AppTheme.neonBlue.opacity(0.08),
                     Color.clear,
-                    AppTheme.neonViolet.opacity(0.14),
-                    Color.white.opacity(0.12)
+                    AppTheme.neonViolet.opacity(0.08),
+                    Color.white.opacity(0.05)
                 ],
                 highlightColors: [
-                    Color.white.opacity(0.46),
-                    Color.white.opacity(0.08),
+                    Color.white.opacity(0.22),
+                    Color.white.opacity(0.03),
                     Color.clear
                 ],
                 highlightStart: UnitPoint(x: 0.12, y: 0.04),
@@ -355,23 +355,23 @@ private struct AppLiquidGlassCardModifier: ViewModifier {
         case .programs:
             AppLiquidGlassBorderPalette(
                 rimColors: [
-                    Color.white.opacity(0.84),
-                    AppTheme.neonCyan.opacity(0.54),
-                    AppTheme.neonLime.opacity(0.22),
-                    Color.white.opacity(0.2),
-                    AppTheme.neonBlue.opacity(0.3),
-                    Color.white.opacity(0.78)
+                    Color.white.opacity(0.5),
+                    AppTheme.neonCyan.opacity(0.28),
+                    AppTheme.neonLime.opacity(0.1),
+                    Color.white.opacity(0.08),
+                    AppTheme.neonBlue.opacity(0.16),
+                    Color.white.opacity(0.44)
                 ],
                 edgeGlowColors: [
-                    Color.white.opacity(0.18),
-                    AppTheme.neonCyan.opacity(0.22),
-                    AppTheme.neonLime.opacity(0.12),
+                    Color.white.opacity(0.08),
+                    AppTheme.neonCyan.opacity(0.1),
+                    AppTheme.neonLime.opacity(0.04),
                     Color.clear,
-                    Color.white.opacity(0.12)
+                    Color.white.opacity(0.05)
                 ],
                 highlightColors: [
-                    Color.white.opacity(0.52),
-                    AppTheme.neonCyan.opacity(0.12),
+                    Color.white.opacity(0.26),
+                    AppTheme.neonCyan.opacity(0.05),
                     Color.clear
                 ],
                 highlightStart: UnitPoint(x: 0.05, y: 0.08),
@@ -380,25 +380,25 @@ private struct AppLiquidGlassCardModifier: ViewModifier {
         case .workout:
             AppLiquidGlassBorderPalette(
                 rimColors: [
-                    Color.white.opacity(0.72),
-                    AppTheme.neonBlue.opacity(0.4),
-                    AppTheme.neonCyan.opacity(0.34),
-                    Color.white.opacity(0.18),
-                    AppTheme.neonViolet.opacity(0.46),
-                    Color.white.opacity(0.76)
+                    Color.white.opacity(0.42),
+                    AppTheme.neonBlue.opacity(0.22),
+                    AppTheme.neonCyan.opacity(0.16),
+                    Color.white.opacity(0.08),
+                    AppTheme.neonViolet.opacity(0.24),
+                    Color.white.opacity(0.44)
                 ],
                 edgeGlowColors: [
-                    Color.white.opacity(0.1),
-                    AppTheme.neonBlue.opacity(0.2),
-                    AppTheme.neonCyan.opacity(0.14),
+                    Color.white.opacity(0.05),
+                    AppTheme.neonBlue.opacity(0.1),
+                    AppTheme.neonCyan.opacity(0.06),
                     Color.clear,
-                    AppTheme.neonViolet.opacity(0.14)
+                    AppTheme.neonViolet.opacity(0.07)
                 ],
                 highlightColors: [
                     Color.clear,
-                    Color.white.opacity(0.18),
-                    AppTheme.neonBlue.opacity(0.32),
-                    Color.white.opacity(0.18),
+                    Color.white.opacity(0.08),
+                    AppTheme.neonBlue.opacity(0.14),
+                    Color.white.opacity(0.08),
                     Color.clear
                 ],
                 highlightStart: UnitPoint(x: 0.42, y: 0.02),
@@ -407,23 +407,23 @@ private struct AppLiquidGlassCardModifier: ViewModifier {
         case .statistics:
             AppLiquidGlassBorderPalette(
                 rimColors: [
-                    Color.white.opacity(0.7),
-                    AppTheme.neonViolet.opacity(0.48),
-                    AppTheme.neonBlue.opacity(0.32),
-                    Color.white.opacity(0.16),
-                    AppTheme.neonCyan.opacity(0.3),
-                    Color.white.opacity(0.74)
+                    Color.white.opacity(0.42),
+                    AppTheme.neonViolet.opacity(0.24),
+                    AppTheme.neonBlue.opacity(0.16),
+                    Color.white.opacity(0.08),
+                    AppTheme.neonCyan.opacity(0.14),
+                    Color.white.opacity(0.42)
                 ],
                 edgeGlowColors: [
-                    Color.white.opacity(0.12),
-                    AppTheme.neonViolet.opacity(0.22),
-                    AppTheme.neonBlue.opacity(0.16),
+                    Color.white.opacity(0.05),
+                    AppTheme.neonViolet.opacity(0.1),
+                    AppTheme.neonBlue.opacity(0.07),
                     Color.clear,
-                    AppTheme.neonCyan.opacity(0.12)
+                    AppTheme.neonCyan.opacity(0.05)
                 ],
                 highlightColors: [
-                    Color.white.opacity(0.38),
-                    AppTheme.neonViolet.opacity(0.16),
+                    Color.white.opacity(0.18),
+                    AppTheme.neonViolet.opacity(0.06),
                     Color.clear
                 ],
                 highlightStart: UnitPoint(x: 0.18, y: 0.02),
@@ -432,22 +432,22 @@ private struct AppLiquidGlassCardModifier: ViewModifier {
         case .profile:
             AppLiquidGlassBorderPalette(
                 rimColors: [
-                    Color.white.opacity(0.8),
-                    Color.white.opacity(0.22),
-                    AppTheme.neonCyan.opacity(0.32),
-                    AppTheme.neonBlue.opacity(0.16),
-                    Color.white.opacity(0.72)
+                    Color.white.opacity(0.46),
+                    Color.white.opacity(0.1),
+                    AppTheme.neonCyan.opacity(0.16),
+                    AppTheme.neonBlue.opacity(0.08),
+                    Color.white.opacity(0.42)
                 ],
                 edgeGlowColors: [
-                    Color.white.opacity(0.16),
-                    AppTheme.neonCyan.opacity(0.18),
+                    Color.white.opacity(0.06),
+                    AppTheme.neonCyan.opacity(0.08),
                     Color.clear,
-                    AppTheme.neonBlue.opacity(0.1),
-                    Color.white.opacity(0.12)
+                    AppTheme.neonBlue.opacity(0.04),
+                    Color.white.opacity(0.05)
                 ],
                 highlightColors: [
-                    Color.white.opacity(0.5),
-                    Color.white.opacity(0.12),
+                    Color.white.opacity(0.24),
+                    Color.white.opacity(0.04),
                     Color.clear
                 ],
                 highlightStart: UnitPoint(x: 0.1, y: 0.04),
@@ -464,7 +464,17 @@ private struct AppLiquidGlassCardModifier: ViewModifier {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background {
                 shape
-                    .fill(AppTheme.surface.opacity(0.96))
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                AppTheme.surfaceElevated.opacity(0.7),
+                                AppTheme.surface.opacity(0.92),
+                                Color.black.opacity(0.86)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
                     .overlay {
                         GeometryReader { proxy in
                             AppLiquidGlassGlowLayer(glowStyle: glowStyle, size: proxy.size)
@@ -476,9 +486,9 @@ private struct AppLiquidGlassCardModifier: ViewModifier {
                             .fill(
                                 LinearGradient(
                                     colors: [
-                                        Color.white.opacity(0.022),
+                                        Color.white.opacity(0.012),
                                         Color.clear,
-                                        Color.black.opacity(0.1)
+                                        Color.black.opacity(0.18)
                                     ],
                                     startPoint: .topLeading,
                                     endPoint: .bottomTrailing
@@ -493,7 +503,7 @@ private struct AppLiquidGlassCardModifier: ViewModifier {
                             colors: borderPalette.rimColors,
                             center: .center
                         ),
-                        lineWidth: 1.3
+                        lineWidth: 0.95
                     )
                     .overlay {
                         shape
@@ -503,9 +513,10 @@ private struct AppLiquidGlassCardModifier: ViewModifier {
                                     startPoint: borderPalette.highlightStart,
                                     endPoint: borderPalette.highlightEnd
                                 ),
-                                lineWidth: 1.05
+                                lineWidth: 0.75
                             )
                             .blendMode(.screen)
+                            .opacity(0.78)
                     }
                     .overlay {
                         shape
@@ -514,10 +525,10 @@ private struct AppLiquidGlassCardModifier: ViewModifier {
                                     colors: borderPalette.edgeGlowColors,
                                     center: .center
                                 ),
-                                lineWidth: 2.4
+                                lineWidth: 1.45
                             )
-                            .blur(radius: 2.4)
-                            .opacity(0.82)
+                            .blur(radius: 1.6)
+                            .opacity(0.55)
                     }
             }
             .shadow(color: shadowColor, radius: 24, y: 10)
@@ -536,9 +547,9 @@ private struct AppLiquidGlassGlowLayer: View {
                 .fill(
                     LinearGradient(
                         colors: [
-                            Color.white.opacity(0.012),
+                            Color.white.opacity(0.006),
                             Color.clear,
-                            Color.black.opacity(0.075)
+                            Color.black.opacity(0.12)
                         ],
                         startPoint: .top,
                         endPoint: .bottom
