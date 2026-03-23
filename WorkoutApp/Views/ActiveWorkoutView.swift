@@ -1190,6 +1190,7 @@ struct ActiveWorkoutDerivedState {
         lastCompletedSetDate: nil
     )
 
+    @MainActor
     static func build(session: WorkoutSession, store: AppStore) -> ActiveWorkoutDerivedState {
         let exercisesByID = Dictionary(uniqueKeysWithValues: store.exercises.map { ($0.id, $0) })
         let displayBlocks = ActiveWorkoutDisplayResolver.buildBlocks(session: session, exercisesByID: exercisesByID)
@@ -1301,17 +1302,18 @@ enum ActiveWorkoutDisplayResolver {
             )
         }
 
-        let supersetBlocksByFirstIndex = Dictionary(uniqueKeysWithValues: supersetFirstIndexByGroupID.compactMap { groupID, firstIndex in
+        var supersetBlocksByFirstIndex: [Int: ActiveWorkoutDisplayBlock] = [:]
+        for (groupID, firstIndex) in supersetFirstIndexByGroupID {
             guard let groupItems = supersetItemsByGroupID[groupID],
                   groupItems.count > 1 else {
-                return nil
+                continue
             }
 
             let rounds = buildSupersetRounds(groupID: groupID, groupItems: groupItems)
-            return (firstIndex, ActiveWorkoutDisplayBlock.superset(
+            supersetBlocksByFirstIndex[firstIndex] = .superset(
                 ActiveWorkoutSupersetBlock(id: groupID, items: groupItems, rounds: rounds)
-            ))
-        })
+            )
+        }
 
         var result: [ActiveWorkoutDisplayBlock] = []
 
