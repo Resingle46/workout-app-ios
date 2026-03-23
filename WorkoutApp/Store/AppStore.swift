@@ -5,6 +5,8 @@ import ObjectiveC
 @MainActor
 @Observable
 final class AppStore {
+    private static let automaticBackupDebounceInterval: Duration = .seconds(60)
+
     var categories: [ExerciseCategory]
     var exercises: [Exercise]
     var programs: [WorkoutProgram]
@@ -567,7 +569,7 @@ final class AppStore {
         backupDebounceTask?.cancel()
         backupDebounceTask = Task { [weak self] in
             do {
-                try await Task.sleep(for: .seconds(2))
+                try await Task.sleep(for: Self.automaticBackupDebounceInterval)
             } catch {
                 return
             }
