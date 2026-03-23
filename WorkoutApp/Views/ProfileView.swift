@@ -5,6 +5,7 @@ import UIKit
 @MainActor
 struct ProfileView: View {
     @Environment(AppStore.self) private var store
+    @Environment(\.appBottomRailInset) private var bottomRailInset
     @State private var activePicker: ProfilePickerField?
 
     var body: some View {
@@ -56,7 +57,7 @@ struct ProfileView: View {
             }
             .padding(.horizontal, 20)
             .padding(.top, 0)
-            .padding(.bottom, 24)
+            .padding(.bottom, 24 + bottomRailInset)
         }
         .sheet(item: $activePicker) { picker in
             ProfilePickerSheet(

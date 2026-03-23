@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ActiveWorkoutView: View {
     @Environment(AppStore.self) private var store
+    @Environment(\.appBottomRailInset) private var bottomRailInset
 
     @State private var presentedSummary: PresentedWorkoutSummary?
     @FocusState private var focusedField: WorkoutSetField?
@@ -70,7 +71,7 @@ struct ActiveWorkoutView: View {
             }
             .padding(.horizontal, 20)
             .padding(.top, 0)
-            .padding(.bottom, 24)
+            .padding(.bottom, 24 + bottomRailInset)
         }
         .appScreenBackground()
     }
@@ -103,7 +104,7 @@ struct ActiveWorkoutView: View {
         }
         .padding(.horizontal, 20)
         .padding(.top, 0)
-        .padding(.bottom, 32)
+        .padding(.bottom, 32 + bottomRailInset)
     }
 
     private func exerciseList(

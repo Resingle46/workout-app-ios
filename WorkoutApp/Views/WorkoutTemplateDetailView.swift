@@ -2,6 +2,7 @@ import SwiftUI
 
 struct WorkoutTemplateDetailView: View {
     @Environment(AppStore.self) private var store
+    @Environment(\.appBottomRailInset) private var bottomRailInset
 
     let programID: UUID
     let workoutID: UUID
@@ -49,7 +50,7 @@ struct WorkoutTemplateDetailView: View {
                         }
                     }
                     .padding(20)
-                    .padding(.bottom, 28)
+                    .padding(.bottom, 28 + bottomRailInset)
                 }
                 .navigationTitle(workout.title)
                 .navigationBarTitleDisplayMode(.inline)

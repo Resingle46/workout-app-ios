@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ProgramsView: View {
     @Environment(AppStore.self) private var store
+    @Environment(\.appBottomRailInset) private var bottomRailInset
     @State private var showingCreateProgram = false
 
     var body: some View {
@@ -23,7 +24,7 @@ struct ProgramsView: View {
             }
             .padding(.horizontal, 20)
             .padding(.top, 0)
-            .padding(.bottom, 28)
+            .padding(.bottom, 28 + bottomRailInset)
         }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .navigationBar)
@@ -134,6 +135,7 @@ private struct ProgramsCompactCard<Content: View>: View {
 
 struct ProgramDetailView: View {
     @Environment(AppStore.self) private var store
+    @Environment(\.appBottomRailInset) private var bottomRailInset
     @Environment(\.dismiss) private var dismiss
 
     let programID: UUID
@@ -226,7 +228,7 @@ struct ProgramDetailView: View {
                         }
                     }
                     .padding(20)
-                    .padding(.bottom, 28)
+                    .padding(.bottom, 28 + bottomRailInset)
                 }
                 .navigationTitle(program.title)
                 .navigationBarTitleDisplayMode(.inline)

@@ -76,7 +76,7 @@ struct StatisticsView: View {
             }
             .padding(.horizontal, 20)
             .padding(.top, 0)
-            .padding(.bottom, bottomRailInset > 0 ? 12 : 24)
+            .padding(.bottom, 24 + bottomRailInset)
         }
         .onAppear(perform: syncSelectedExercise)
         .onChange(of: store.exercises.map(\.id)) { _, _ in

@@ -244,11 +244,6 @@ struct RootTabView: View {
                 ProfileView()
             }
         }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            Color.clear
-                .frame(height: bottomRailInset)
-                .allowsHitTesting(false)
-        }
         .environment(\.appBottomRailInset, bottomRailInset)
         .opacity(isSelected ? 1 : 0)
         .allowsHitTesting(isSelected)
@@ -589,20 +584,20 @@ private struct AppExpandedTabBar: View {
     let onToggleWorkoutTabs: () -> Void
 
     var body: some View {
-        let usesCompactLabels = presentationMode == .expandedFromWorkout
+        let usesCompactLayout = presentationMode == .expandedFromWorkout
 
-        return HStack(spacing: usesCompactLabels ? 8 : 10) {
-            HStack(spacing: usesCompactLabels ? 6 : 8) {
+        return HStack(spacing: usesCompactLayout ? 8 : 10) {
+            HStack(spacing: usesCompactLayout ? 6 : 8) {
                 ForEach(RootTab.allCases, id: \.self) { tab in
                     Button {
                         onSelect(tab)
                     } label: {
-                        tabCell(for: tab, compact: usesCompactLabels)
+                        tabCell(for: tab, compact: usesCompactLayout)
                     }
                     .buttonStyle(.plain)
                 }
             }
-            .padding(usesCompactLabels ? 6 : 8)
+            .padding(usesCompactLayout ? 6 : 8)
             .frame(maxWidth: .infinity)
             .background(tabBarBackground)
 
@@ -636,16 +631,20 @@ private struct AppExpandedTabBar: View {
         return VStack(spacing: 6) {
             Image(systemName: tab.systemImage)
                 .font(AppTypography.icon(size: compact ? 17 : 18, weight: .semibold))
-            Text(tab.titleKey)
-                .font(AppTypography.label(size: compact ? 10 : 11, weight: .semibold))
-                .multilineTextAlignment(.center)
-                .lineLimit(compact ? 2 : 1)
-                .minimumScaleFactor(compact ? 0.68 : 0.8)
+            if !compact {
+                Text(tab.titleKey)
+                    .font(AppTypography.label(size: 11, weight: .semibold))
+                    .multilineTextAlignment(.center)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
         }
         .foregroundStyle(isSelected ? AppTheme.primaryText : AppTheme.secondaryText)
         .frame(maxWidth: .infinity)
-        .padding(.horizontal, compact ? 4 : 0)
-        .padding(.vertical, compact ? 10 : 12)
+        .frame(minHeight: compact ? 56 : nil)
+        .padding(.horizontal, compact ? 2 : 0)
+        .padding(.vertical, compact ? 12 : 12)
+        .accessibilityLabel(Text(tab.titleKey))
         .background(
             Group {
                 if isSelected {
