@@ -154,6 +154,24 @@ struct RecentWorkoutExerciseSummary: Identifiable, Hashable, Sendable {
     var sets: [WorkoutSetLog]
 }
 
+struct WeeklyStrengthSummary: Hashable, Sendable {
+    var percentChange: Int
+    var currentVolume: Double
+    var previousVolume: Double
+
+    var isPositive: Bool {
+        percentChange > 0
+    }
+}
+
+struct ExerciseSessionAverage: Identifiable, Hashable, Sendable {
+    let id: UUID
+    var date: Date
+    var averageWeight: Double
+    var averageReps: Double
+    var setsCount: Int
+}
+
 struct UserProfile: Codable, Hashable, Sendable {
     var sex: String
     var age: Int

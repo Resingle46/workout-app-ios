@@ -220,6 +220,13 @@ final class AppStore {
         Locale(identifier: selectedLanguageCode)
     }
 
+    static func statisticsCalendar(locale: Locale, timeZone: TimeZone = .autoupdatingCurrent) -> Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.locale = locale
+        calendar.timeZone = timeZone
+        return calendar
+    }
+
     func updateLanguage(_ languageCode: String) {
         profile.appLanguageCode = Self.normalizedLanguageCode(languageCode)
         save()
@@ -375,16 +382,20 @@ final class AppStore {
     }
 
     func chartPoints(for exerciseID: UUID) -> [(Date, Double)] {
-        history.compactMap { session in
-            let values = session.exercises
+        history
+            .filter(\.isFinished)
+            .compactMap { session in
+                let values = session.exercises
                 .filter { $0.exerciseID == exerciseID }
                 .flatMap(\.sets)
+                .filter { $0.completedAt != nil }
                 .map(\.weight)
+                .filter { $0 > 0 }
 
-            guard let maxWeight = values.max(), maxWeight > 0 else { return nil }
-            return (session.startedAt, maxWeight)
-        }
-        .sorted { $0.0 < $1.0 }
+                guard let maxWeight = values.max() else { return nil }
+                return (session.startedAt, maxWeight)
+            }
+            .sorted { $0.0 < $1.0 }
     }
 
     func recentExercisesFromLastWorkout(limit: Int = 3) -> [RecentWorkoutExerciseSummary] {
@@ -400,6 +411,63 @@ final class AppStore {
                 sets: exerciseLog.sets
             )
         }
+    }
+
+    func weeklyStrengthSummary(
+        referenceDate: Date = .now,
+        calendar: Calendar? = nil
+    ) -> WeeklyStrengthSummary {
+        let calendar = calendar ?? Self.statisticsCalendar(locale: locale)
+        let currentWeekInterval = weekInterval(containing: referenceDate, calendar: calendar)
+        let previousWeekStart = calendar.date(byAdding: .weekOfYear, value: -1, to: currentWeekInterval.start) ?? currentWeekInterval.start
+        let previousWeekInterval = DateInterval(start: previousWeekStart, end: currentWeekInterval.start)
+        let currentWeekVolumes = weeklyExerciseVolumes(in: currentWeekInterval)
+        let previousWeekVolumes = weeklyExerciseVolumes(in: previousWeekInterval)
+        let matchedExerciseIDs = Set(currentWeekVolumes.keys).intersection(previousWeekVolumes.keys)
+        let currentVolume = matchedExerciseIDs.reduce(into: 0.0) { partialResult, exerciseID in
+            partialResult += currentWeekVolumes[exerciseID] ?? 0
+        }
+        let previousVolume = matchedExerciseIDs.reduce(into: 0.0) { partialResult, exerciseID in
+            partialResult += previousWeekVolumes[exerciseID] ?? 0
+        }
+
+        guard !matchedExerciseIDs.isEmpty, previousVolume > 0 else {
+            return WeeklyStrengthSummary(percentChange: 0, currentVolume: currentVolume, previousVolume: previousVolume)
+        }
+
+        let percentChange = Int((((currentVolume - previousVolume) / previousVolume) * 100).rounded())
+        return WeeklyStrengthSummary(
+            percentChange: percentChange,
+            currentVolume: currentVolume,
+            previousVolume: previousVolume
+        )
+    }
+
+    func recentSessionAverages(for exerciseID: UUID, limit: Int = 3) -> [ExerciseSessionAverage] {
+        history
+            .filter(\.isFinished)
+            .compactMap { session in
+                let completedSets = session.exercises
+                    .filter { $0.exerciseID == exerciseID }
+                    .flatMap(\.sets)
+                    .filter { $0.completedAt != nil }
+
+                guard !completedSets.isEmpty else { return nil }
+
+                let setsCount = completedSets.count
+                let averageWeight = completedSets.reduce(0.0) { $0 + $1.weight } / Double(setsCount)
+                let averageReps = Double(completedSets.reduce(0) { $0 + $1.reps }) / Double(setsCount)
+
+                return ExerciseSessionAverage(
+                    id: session.id,
+                    date: session.startedAt,
+                    averageWeight: averageWeight,
+                    averageReps: averageReps,
+                    setsCount: setsCount
+                )
+            }
+            .prefix(limit)
+            .map { $0 }
     }
 
     func targetWeight(workoutTemplateID: UUID, templateExerciseID: UUID) -> Double? {
@@ -534,6 +602,32 @@ final class AppStore {
 
     private enum PreferenceKey {
         static let didCompleteFirstLaunch = "app.didCompleteFirstLaunch"
+    }
+
+    private func weekInterval(containing date: Date, calendar: Calendar) -> DateInterval {
+        calendar.dateInterval(of: .weekOfYear, for: date)
+            ?? DateInterval(start: date, duration: 7 * 24 * 60 * 60)
+    }
+
+    private func weeklyExerciseVolumes(in interval: DateInterval) -> [UUID: Double] {
+        history
+            .filter(\.isFinished)
+            .reduce(into: [UUID: Double]()) { result, session in
+                let sessionDate = session.endedAt ?? session.startedAt
+                guard interval.contains(sessionDate) else { return }
+
+                for exerciseLog in session.exercises {
+                    let completedSets = exerciseLog.sets.filter { $0.completedAt != nil }
+                    guard !completedSets.isEmpty else { continue }
+
+                    let volume = completedSets.reduce(0.0) { partialResult, set in
+                        partialResult + (set.weight * Double(set.reps))
+                    }
+
+                    guard volume > 0 else { continue }
+                    result[exerciseLog.exerciseID, default: 0] += volume
+                }
+            }
     }
 }
 

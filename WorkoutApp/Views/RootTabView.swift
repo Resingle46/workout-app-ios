@@ -153,6 +153,7 @@ struct RootTabView: View {
     @State private var launchBackupPickerMode: BackupDocumentPickerMode?
     @State private var launchRestoreRequest: BackupRestoreRequest?
     @State private var workoutTabsExpanded = false
+    @State private var bottomRailInset: CGFloat = 0
 
     private var tabBarPresentationMode: TabBarPresentationMode {
         RootTabBarPresentationResolver.resolve(
@@ -169,7 +170,6 @@ struct RootTabView: View {
             rootNavigationStack(for: .statistics)
             rootNavigationStack(for: .profile)
         }
-        .environment(\.locale, store.locale)
         .onChange(of: store.shouldPromptForBackupSetup, initial: true) { _, newValue in
             showBackupSetupPrompt = newValue
         }
@@ -183,9 +183,13 @@ struct RootTabView: View {
                 workoutTabsExpanded = false
             }
         }
+        .onPreferenceChange(AppBottomRailHeightPreferenceKey.self) { bottomRailInset = $0 }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             bottomRail
+                .measureBottomRailHeight()
         }
+        .environment(\.locale, store.locale)
+        .environment(\.appBottomRailInset, bottomRailInset)
         .confirmationDialog("backup.setup.title", isPresented: $showBackupSetupPrompt, titleVisibility: .visible) {
             Button("backup.setup.choose_folder") {
                 store.dismissBackupSetupPrompt()
@@ -240,6 +244,8 @@ struct RootTabView: View {
                 ProfileView()
             }
         }
+        .safeAreaPadding(.bottom, bottomRailInset)
+        .environment(\.appBottomRailInset, bottomRailInset)
         .opacity(isSelected ? 1 : 0)
         .allowsHitTesting(isSelected)
         .accessibilityHidden(!isSelected)
@@ -468,6 +474,36 @@ private struct AppSurfaceCardModifier: ViewModifier {
                     .stroke(AppTheme.border, lineWidth: 1)
             }
             .shadow(color: AppTheme.shadowSubtle, radius: 14, y: 8)
+    }
+}
+
+private struct AppBottomRailHeightPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
+private struct AppBottomRailInsetEnvironmentKey: EnvironmentKey {
+    static let defaultValue: CGFloat = 0
+}
+
+extension EnvironmentValues {
+    var appBottomRailInset: CGFloat {
+        get { self[AppBottomRailInsetEnvironmentKey.self] }
+        set { self[AppBottomRailInsetEnvironmentKey.self] = newValue }
+    }
+}
+
+private extension View {
+    func measureBottomRailHeight() -> some View {
+        background {
+            GeometryReader { proxy in
+                Color.clear
+                    .preference(key: AppBottomRailHeightPreferenceKey.self, value: proxy.size.height)
+            }
+        }
     }
 }
 

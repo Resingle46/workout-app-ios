@@ -114,6 +114,13 @@
 "stats.pick_exercise_title" = "Pick an exercise";
 "stats.pick_exercise_description" = "Choose an exercise above to see its weight trend over time.";
 "stats.history_meta" = "%d exercises • %@";
+"stats.weekly_strength_summary" = "%@ strength vs last week";
+"stats.exercise_recent_sessions" = "Recent sessions";
+"stats.exercise_recent_sessions_empty" = "No completed sessions with this exercise yet.";
+"stats.table_date" = "Date";
+"stats.table_avg_weight" = "Avg weight";
+"stats.table_avg_reps" = "Avg reps";
+"stats.table_sets" = "Sets";
 
 "profile.personal" = "Personal profile";
 "profile.card_title" = "Profile";

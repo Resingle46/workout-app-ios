@@ -187,6 +187,191 @@ final class BackupCoordinatorTests: XCTestCase {
         )
     }
 
+    @MainActor
+    func testWeeklyStrengthSummaryCountsOnlyMatchedExercisesFromCurrentWeek() {
+        let exerciseA = makeExercise(id: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!, name: "Bench")
+        let exerciseB = makeExercise(id: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!, name: "Row")
+        let exerciseC = makeExercise(id: UUID(uuidString: "33333333-3333-3333-3333-333333333333")!, name: "Squat")
+        let currentWeekSession = makeSession(
+            startedAt: makeDate(year: 2024, month: 3, day: 20, hour: 10),
+            endedAt: makeDate(year: 2024, month: 3, day: 20, hour: 11),
+            exerciseLogs: [
+                makeExerciseLog(exerciseID: exerciseA.id, sets: [(60, 5, true), (60, 5, true)]),
+                makeExerciseLog(exerciseID: exerciseC.id, sets: [(100, 5, true)])
+            ]
+        )
+        let previousWeekSession = makeSession(
+            startedAt: makeDate(year: 2024, month: 3, day: 13, hour: 10),
+            endedAt: makeDate(year: 2024, month: 3, day: 13, hour: 11),
+            exerciseLogs: [
+                makeExerciseLog(exerciseID: exerciseA.id, sets: [(30, 5, true), (30, 5, true)]),
+                makeExerciseLog(exerciseID: exerciseB.id, sets: [(200, 10, true)])
+            ]
+        )
+
+        let store = AppStore()
+        store.apply(snapshot: makeStatisticsSnapshot(exercises: [exerciseA, exerciseB, exerciseC], history: [currentWeekSession, previousWeekSession]))
+
+        let summary = store.weeklyStrengthSummary(
+            referenceDate: makeDate(year: 2024, month: 3, day: 21, hour: 12),
+            calendar: statisticsCalendar(localeIdentifier: "ru_RU")
+        )
+
+        XCTAssertEqual(summary.currentVolume, 600, accuracy: 0.001)
+        XCTAssertEqual(summary.previousVolume, 300, accuracy: 0.001)
+        XCTAssertEqual(summary.percentChange, 100)
+    }
+
+    @MainActor
+    func testWeeklyStrengthSummaryReturnsNegativeChangeWhenVolumeDrops() {
+        let exerciseA = makeExercise(id: UUID(uuidString: "44444444-4444-4444-4444-444444444444")!, name: "Press")
+        let currentWeekSession = makeSession(
+            startedAt: makeDate(year: 2024, month: 3, day: 20, hour: 10),
+            endedAt: makeDate(year: 2024, month: 3, day: 20, hour: 11),
+            exerciseLogs: [
+                makeExerciseLog(exerciseID: exerciseA.id, sets: [(20, 5, true), (20, 5, true)])
+            ]
+        )
+        let previousWeekSession = makeSession(
+            startedAt: makeDate(year: 2024, month: 3, day: 14, hour: 10),
+            endedAt: makeDate(year: 2024, month: 3, day: 14, hour: 11),
+            exerciseLogs: [
+                makeExerciseLog(exerciseID: exerciseA.id, sets: [(40, 5, true), (40, 5, true)])
+            ]
+        )
+
+        let store = AppStore()
+        store.apply(snapshot: makeStatisticsSnapshot(exercises: [exerciseA], history: [currentWeekSession, previousWeekSession]))
+
+        let summary = store.weeklyStrengthSummary(
+            referenceDate: makeDate(year: 2024, month: 3, day: 21, hour: 12),
+            calendar: statisticsCalendar(localeIdentifier: "ru_RU")
+        )
+
+        XCTAssertEqual(summary.percentChange, -50)
+    }
+
+    @MainActor
+    func testWeeklyStrengthSummaryReturnsZeroWhenWeeksDoNotShareExercises() {
+        let exerciseA = makeExercise(id: UUID(uuidString: "55555555-5555-5555-5555-555555555555")!, name: "Bench")
+        let exerciseB = makeExercise(id: UUID(uuidString: "66666666-6666-6666-6666-666666666666")!, name: "Row")
+        let currentWeekSession = makeSession(
+            startedAt: makeDate(year: 2024, month: 3, day: 20, hour: 10),
+            endedAt: makeDate(year: 2024, month: 3, day: 20, hour: 11),
+            exerciseLogs: [
+                makeExerciseLog(exerciseID: exerciseA.id, sets: [(60, 5, true)])
+            ]
+        )
+        let previousWeekSession = makeSession(
+            startedAt: makeDate(year: 2024, month: 3, day: 13, hour: 10),
+            endedAt: makeDate(year: 2024, month: 3, day: 13, hour: 11),
+            exerciseLogs: [
+                makeExerciseLog(exerciseID: exerciseB.id, sets: [(60, 5, true)])
+            ]
+        )
+
+        let store = AppStore()
+        store.apply(snapshot: makeStatisticsSnapshot(exercises: [exerciseA, exerciseB], history: [currentWeekSession, previousWeekSession]))
+
+        let summary = store.weeklyStrengthSummary(
+            referenceDate: makeDate(year: 2024, month: 3, day: 21, hour: 12),
+            calendar: statisticsCalendar(localeIdentifier: "ru_RU")
+        )
+
+        XCTAssertEqual(summary.currentVolume, 0, accuracy: 0.001)
+        XCTAssertEqual(summary.previousVolume, 0, accuracy: 0.001)
+        XCTAssertEqual(summary.percentChange, 0)
+    }
+
+    @MainActor
+    func testWeeklyStrengthSummaryUsesWeekBoundariesFromCalendar() {
+        let exerciseA = makeExercise(id: UUID(uuidString: "77777777-7777-7777-7777-777777777777")!, name: "Squat")
+        let sundaySession = makeSession(
+            startedAt: makeDate(year: 2024, month: 3, day: 17, hour: 20),
+            endedAt: makeDate(year: 2024, month: 3, day: 17, hour: 21),
+            exerciseLogs: [
+                makeExerciseLog(exerciseID: exerciseA.id, sets: [(40, 5, true)])
+            ]
+        )
+        let mondaySession = makeSession(
+            startedAt: makeDate(year: 2024, month: 3, day: 18, hour: 8),
+            endedAt: makeDate(year: 2024, month: 3, day: 18, hour: 9),
+            exerciseLogs: [
+                makeExerciseLog(exerciseID: exerciseA.id, sets: [(60, 5, true)])
+            ]
+        )
+
+        let store = AppStore()
+        store.apply(snapshot: makeStatisticsSnapshot(exercises: [exerciseA], history: [mondaySession, sundaySession]))
+
+        let summary = store.weeklyStrengthSummary(
+            referenceDate: makeDate(year: 2024, month: 3, day: 20, hour: 12),
+            calendar: statisticsCalendar(localeIdentifier: "ru_RU")
+        )
+
+        XCTAssertEqual(summary.currentVolume, 300, accuracy: 0.001)
+        XCTAssertEqual(summary.previousVolume, 200, accuracy: 0.001)
+        XCTAssertEqual(summary.percentChange, 50)
+    }
+
+    @MainActor
+    func testRecentSessionAveragesReturnsLatestThreeCompletedSessionsForExercise() {
+        let exerciseA = makeExercise(id: UUID(uuidString: "88888888-8888-8888-8888-888888888888")!, name: "Bench")
+        let exerciseB = makeExercise(id: UUID(uuidString: "99999999-9999-9999-9999-999999999999")!, name: "Row")
+        let newestSession = makeSession(
+            startedAt: makeDate(year: 2024, month: 3, day: 20, hour: 10),
+            endedAt: makeDate(year: 2024, month: 3, day: 20, hour: 11),
+            exerciseLogs: [
+                makeExerciseLog(exerciseID: exerciseA.id, sets: [(100, 5, true), (90, 8, true)]),
+                makeExerciseLog(exerciseID: exerciseB.id, sets: [(70, 8, true)])
+            ]
+        )
+        let secondSession = makeSession(
+            startedAt: makeDate(year: 2024, month: 3, day: 17, hour: 10),
+            endedAt: makeDate(year: 2024, month: 3, day: 17, hour: 11),
+            exerciseLogs: [
+                makeExerciseLog(exerciseID: exerciseA.id, sets: [(80, 10, true), (75, 8, false)])
+            ]
+        )
+        let ignoredSession = makeSession(
+            startedAt: makeDate(year: 2024, month: 3, day: 15, hour: 10),
+            endedAt: makeDate(year: 2024, month: 3, day: 15, hour: 11),
+            exerciseLogs: [
+                makeExerciseLog(exerciseID: exerciseB.id, sets: [(85, 6, true)])
+            ]
+        )
+        let thirdSession = makeSession(
+            startedAt: makeDate(year: 2024, month: 3, day: 12, hour: 10),
+            endedAt: makeDate(year: 2024, month: 3, day: 12, hour: 11),
+            exerciseLogs: [
+                makeExerciseLog(exerciseID: exerciseA.id, sets: [(70, 12, true)])
+            ]
+        )
+        let unfinishedSession = makeSession(
+            startedAt: makeDate(year: 2024, month: 3, day: 11, hour: 10),
+            endedAt: nil,
+            exerciseLogs: [
+                makeExerciseLog(exerciseID: exerciseA.id, sets: [(120, 3, true)])
+            ]
+        )
+
+        let store = AppStore()
+        store.apply(snapshot: makeStatisticsSnapshot(exercises: [exerciseA, exerciseB], history: [newestSession, secondSession, ignoredSession, thirdSession, unfinishedSession]))
+
+        let averages = store.recentSessionAverages(for: exerciseA.id)
+
+        XCTAssertEqual(averages.map(\.id), [newestSession.id, secondSession.id, thirdSession.id])
+        XCTAssertEqual(averages[0].averageWeight, 95, accuracy: 0.001)
+        XCTAssertEqual(averages[0].averageReps, 6.5, accuracy: 0.001)
+        XCTAssertEqual(averages[0].setsCount, 2)
+        XCTAssertEqual(averages[1].averageWeight, 80, accuracy: 0.001)
+        XCTAssertEqual(averages[1].averageReps, 10, accuracy: 0.001)
+        XCTAssertEqual(averages[1].setsCount, 1)
+        XCTAssertEqual(averages[2].averageWeight, 70, accuracy: 0.001)
+        XCTAssertEqual(averages[2].averageReps, 12, accuracy: 0.001)
+        XCTAssertEqual(averages[2].setsCount, 1)
+    }
+
     private func backupFiles(in folderURL: URL) throws -> [URL] {
         try FileManager.default.contentsOfDirectory(
             at: folderURL,
@@ -277,6 +462,80 @@ final class BackupCoordinatorTests: XCTestCase {
             exercises: [exercise],
             history: [session],
             profile: UserProfile(sex: "M", age: 29, weight: 88, height: 182, appLanguageCode: "en")
+        )
+    }
+
+    private func makeStatisticsSnapshot(exercises: [Exercise], history: [WorkoutSession]) -> AppSnapshot {
+        AppSnapshot(
+            programs: [],
+            exercises: exercises,
+            history: history,
+            profile: UserProfile(sex: "M", age: 29, weight: 88, height: 182, appLanguageCode: "ru")
+        )
+    }
+
+    private func makeExercise(id: UUID, name: String) -> Exercise {
+        Exercise(
+            id: id,
+            name: name,
+            categoryID: UUID(uuidString: "AAAAAAAA-1111-1111-1111-AAAAAAAAAAAA")!,
+            equipment: "",
+            notes: ""
+        )
+    }
+
+    private func makeSession(
+        startedAt: Date,
+        endedAt: Date?,
+        exerciseLogs: [WorkoutExerciseLog]
+    ) -> WorkoutSession {
+        WorkoutSession(
+            workoutTemplateID: UUID(uuidString: "BBBBBBBB-1111-1111-1111-BBBBBBBBBBBB")!,
+            title: "Session",
+            startedAt: startedAt,
+            endedAt: endedAt,
+            exercises: exerciseLogs
+        )
+    }
+
+    private func makeExerciseLog(
+        exerciseID: UUID,
+        sets: [(weight: Double, reps: Int, completed: Bool)]
+    ) -> WorkoutExerciseLog {
+        WorkoutExerciseLog(
+            templateExerciseID: UUID(),
+            exerciseID: exerciseID,
+            groupKind: .regular,
+            groupID: nil,
+            sets: sets.enumerated().map { index, set in
+                WorkoutSetLog(
+                    reps: set.reps,
+                    weight: set.weight,
+                    completedAt: set.completed
+                        ? Date(timeIntervalSince1970: 1_710_000_000 + TimeInterval(index * 60))
+                        : nil
+                )
+            }
+        )
+    }
+
+    private func makeDate(year: Int, month: Int, day: Int, hour: Int) -> Date {
+        var components = DateComponents()
+        components.calendar = statisticsCalendar(localeIdentifier: "ru_RU")
+        components.timeZone = TimeZone(secondsFromGMT: 0)
+        components.year = year
+        components.month = month
+        components.day = day
+        components.hour = hour
+        components.minute = 0
+        components.second = 0
+        return components.date!
+    }
+
+    private func statisticsCalendar(localeIdentifier: String) -> Calendar {
+        AppStore.statisticsCalendar(
+            locale: Locale(identifier: localeIdentifier),
+            timeZone: TimeZone(secondsFromGMT: 0)!
         )
     }
 }

@@ -114,6 +114,13 @@
 "stats.pick_exercise_title" = "Выберите упражнение";
 "stats.pick_exercise_description" = "Выберите упражнение выше, чтобы посмотреть изменение рабочего веса.";
 "stats.history_meta" = "%d упражнений • %@";
+"stats.weekly_strength_summary" = "%@ силовых к прошлой неделе";
+"stats.exercise_recent_sessions" = "Последние 3 тренировки";
+"stats.exercise_recent_sessions_empty" = "Для этого упражнения пока нет завершённых тренировок.";
+"stats.table_date" = "Дата";
+"stats.table_avg_weight" = "Средний вес";
+"stats.table_avg_reps" = "Средние повторы";
+"stats.table_sets" = "Подходы";
 
 "profile.personal" = "Личный профиль";
 "profile.card_title" = "Профиль";
