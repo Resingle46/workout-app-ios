@@ -615,7 +615,7 @@ final class AppStore {
             history: normalizedHistory
         )
 
-        AppSnapshot(
+        return AppSnapshot(
             programs: normalizedPrograms,
             exercises: normalizedExercises(snapshot.exercises, referencedExerciseIDs: referencedExerciseIDs),
             history: normalizedHistory,
