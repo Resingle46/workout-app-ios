@@ -176,6 +176,23 @@ final class BackupCoordinatorTests: XCTestCase {
         XCTAssertEqual(localizedExercise?.localizedEquipment, "Штанга / Скамья")
     }
 
+    @MainActor
+    func testAppStoreAddCustomExercisePreservesProvidedIdentifier() {
+        let store = AppStore()
+        let exerciseID = UUID(uuidString: "12121212-3434-5656-7878-909090909090")!
+        let exercise = Exercise(
+            id: exerciseID,
+            name: "Tempo Row",
+            categoryID: SeedData.backCategoryID,
+            equipment: "Cable",
+            notes: "Custom"
+        )
+
+        store.addCustomExercise(exercise)
+
+        XCTAssertEqual(store.exercises.first(where: { $0.id == exerciseID })?.name, "Tempo Row")
+    }
+
     func testWorkoutDurationFormatterUsesMinuteSecondBelowOneHour() {
         XCTAssertEqual(WorkoutTimeTextFormatter.formatDuration(elapsedSeconds: 3_599), "59:59")
     }

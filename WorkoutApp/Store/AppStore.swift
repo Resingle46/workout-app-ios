@@ -380,6 +380,12 @@ final class AppStore {
         return exercise
     }
 
+    func addCustomExercise(_ exercise: Exercise) {
+        guard !exercises.contains(where: { $0.id == exercise.id }) else { return }
+        exercises.insert(exercise, at: 0)
+        save()
+    }
+
     func removeSetFromActiveWorkout(exerciseIndex: Int, setIndex: Int) {
         updateActiveSession { session in
             guard session.exercises.indices.contains(exerciseIndex),

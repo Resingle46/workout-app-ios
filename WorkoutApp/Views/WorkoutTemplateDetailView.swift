@@ -280,12 +280,17 @@ struct AddExerciseToWorkoutView: View {
 
     @State private var query = ""
     @State private var selectedCategoryID: UUID?
-    @State private var addedExerciseIDs = Set<UUID>()
+    @State private var stagedCustomExercises: [Exercise] = []
+    @State private var stagedExercises: [StagedWorkoutExercise] = []
     @State private var showingCreateExercise = false
     @State private var pendingConfiguration: PendingExerciseConfiguration?
 
+    private var availableExercises: [Exercise] {
+        stagedCustomExercises + store.exercises
+    }
+
     private var filteredExercises: [Exercise] {
-        store.exercises.filter { exercise in
+        availableExercises.filter { exercise in
             let matchesCategory = selectedCategoryID == nil || exercise.categoryID == selectedCategoryID
             let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
             let matchesQuery = normalizedQuery.isEmpty ||
@@ -333,7 +338,7 @@ struct AddExerciseToWorkoutView: View {
                                     ExerciseSelectionCard(
                                         exercise: exercise,
                                         category: store.category(for: exercise.categoryID),
-                                        isSelected: addedExerciseIDs.contains(exercise.id),
+                                        isSelected: stagedExercises.contains(where: { $0.exercise.id == exercise.id }),
                                         action: { presentConfiguration(for: exercise) }
                                     )
                                 }
@@ -350,12 +355,15 @@ struct AddExerciseToWorkoutView: View {
                     Button("action.cancel") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("action.done") { dismiss() }
+                    Button("action.done") {
+                        commitStagedExercises()
+                    }
                 }
             }
             .sheet(isPresented: $showingCreateExercise) {
                 CreateCustomExerciseView { name, equipment, notes, categoryID in
-                    let exercise = store.addCustomExercise(name: name, categoryID: categoryID, equipment: equipment, notes: notes)
+                    let exercise = Exercise(name: name, categoryID: categoryID, equipment: equipment, notes: notes)
+                    stagedCustomExercises.insert(exercise, at: 0)
                     selectedCategoryID = categoryID
                     presentConfiguration(for: exercise)
                 }
@@ -363,23 +371,19 @@ struct AddExerciseToWorkoutView: View {
             .sheet(item: $pendingConfiguration) { configuration in
                 TemplateExerciseConfigSheet(
                     title: configuration.title,
-                    setsCount: 4,
-                    reps: 12,
-                    suggestedWeight: 0,
+                    setsCount: configuration.setsCount,
+                    reps: configuration.reps,
+                    suggestedWeight: configuration.suggestedWeight,
                     onCancel: {
                         pendingConfiguration = nil
                     },
                     onSave: { setsCount, reps, weight in
-                        store.addExercise(
-                            to: workoutID,
-                            exerciseID: configuration.exerciseID,
+                        stageExercise(
+                            exercise: configuration.exercise,
                             reps: reps,
                             setsCount: setsCount,
-                            suggestedWeight: weight,
-                            groupKind: .regular,
-                            groupID: nil
+                            suggestedWeight: weight
                         )
-                        addedExerciseIDs.insert(configuration.exerciseID)
                         pendingConfiguration = nil
                     }
                 )
@@ -393,19 +397,69 @@ struct AddExerciseToWorkoutView: View {
 
     private func presentConfiguration(for exercise: Exercise) {
         guard pendingConfiguration == nil else { return }
-        guard !addedExerciseIDs.contains(exercise.id) else { return }
+
+        let stagedExercise = stagedExercises.first(where: { $0.exercise.id == exercise.id })
 
         pendingConfiguration = PendingExerciseConfiguration(
-            exerciseID: exercise.id,
-            title: exercise.localizedName
+            exercise: exercise,
+            title: exercise.localizedName,
+            setsCount: stagedExercise?.setsCount ?? 4,
+            reps: stagedExercise?.reps ?? 12,
+            suggestedWeight: stagedExercise?.suggestedWeight ?? 0
         )
     }
+
+    private func stageExercise(exercise: Exercise, reps: Int, setsCount: Int, suggestedWeight: Double) {
+        let stagedExercise = StagedWorkoutExercise(
+            exercise: exercise,
+            setsCount: setsCount,
+            reps: reps,
+            suggestedWeight: suggestedWeight
+        )
+
+        if let existingIndex = stagedExercises.firstIndex(where: { $0.exercise.id == exercise.id }) {
+            stagedExercises[existingIndex] = stagedExercise
+        } else {
+            stagedExercises.append(stagedExercise)
+        }
+    }
+
+    private func commitStagedExercises() {
+        for stagedExercise in stagedExercises {
+            if store.exercise(for: stagedExercise.exercise.id) == nil {
+                store.addCustomExercise(stagedExercise.exercise)
+            }
+
+            store.addExercise(
+                to: workoutID,
+                exerciseID: stagedExercise.exercise.id,
+                reps: stagedExercise.reps,
+                setsCount: stagedExercise.setsCount,
+                suggestedWeight: stagedExercise.suggestedWeight,
+                groupKind: .regular,
+                groupID: nil
+            )
+        }
+
+        dismiss()
+    }
+}
+
+private struct StagedWorkoutExercise: Identifiable {
+    var id: UUID { exercise.id }
+    let exercise: Exercise
+    let setsCount: Int
+    let reps: Int
+    let suggestedWeight: Double
 }
 
 private struct PendingExerciseConfiguration: Identifiable {
     let id = UUID()
-    let exerciseID: UUID
+    let exercise: Exercise
     let title: String
+    let setsCount: Int
+    let reps: Int
+    let suggestedWeight: Double
 }
 
 private struct ExerciseSelectionCard: View {
