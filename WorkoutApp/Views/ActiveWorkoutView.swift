@@ -426,7 +426,7 @@ private struct WorkoutSetRow: View {
     var onMarkedDone: () -> Void = {}
 
     private var isCompleted: Bool {
-        set.completedAt != nil
+        self.set.completedAt != nil
     }
 
     private var isUpcoming: Bool {
