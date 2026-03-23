@@ -581,7 +581,7 @@ struct AddExerciseToWorkoutView: View {
     }
 }
 
-private struct StagedWorkoutExercise: Identifiable {
+private struct StagedWorkoutExercise: Identifiable, Equatable {
     var id: UUID { exercise.id }
     let exercise: Exercise
     var setsCount: Int
