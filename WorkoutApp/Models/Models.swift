@@ -265,30 +265,6 @@ struct UserProfile: Codable, Hashable, Sendable {
     )
 }
 
-extension UserProfile {
-    init(
-        sex: String,
-        age: Int,
-        weight: Double,
-        height: Double,
-        appLanguageCode: String?,
-        primaryGoal: TrainingGoal = .notSet,
-        experienceLevel: ExperienceLevel = .notSet,
-        weeklyWorkoutTarget: Int = 3,
-        targetBodyWeight: Double? = nil
-    ) {
-        self.sex = sex
-        self.age = age
-        self.weight = weight
-        self.height = height
-        self.appLanguageCode = appLanguageCode
-        self.primaryGoal = primaryGoal
-        self.experienceLevel = experienceLevel
-        self.weeklyWorkoutTarget = weeklyWorkoutTarget
-        self.targetBodyWeight = targetBodyWeight
-    }
-}
-
 extension TrainingGoal {
     init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
