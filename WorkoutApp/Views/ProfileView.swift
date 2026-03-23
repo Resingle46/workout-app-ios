@@ -730,8 +730,8 @@ private struct ProfileGraphiteCard<Content: View>: View {
                     .overlay {
                         RadialGradient(
                             colors: [
-                                Color(red: 1.0, green: 0.63, blue: 0.24).opacity(0.44),
-                                Color(red: 0.95, green: 0.44, blue: 0.2).opacity(0.16),
+                                Color(red: 0.78, green: 1.0, blue: 0.28).opacity(0.42),
+                                Color(red: 0.46, green: 0.88, blue: 0.22).opacity(0.18),
                                 Color.clear
                             ],
                             center: UnitPoint(x: 0.9, y: 0.16),
@@ -740,19 +740,8 @@ private struct ProfileGraphiteCard<Content: View>: View {
                         )
                         .blendMode(.screen)
                     }
-                    .overlay {
-                        RadialGradient(
-                            colors: [
-                                Color(red: 0.97, green: 0.76, blue: 0.44).opacity(0.2),
-                                Color.clear
-                            ],
-                            center: UnitPoint(x: 0.16, y: 0.88),
-                            startRadius: 0,
-                            endRadius: 220
-                        )
-                        .blendMode(.screen)
-                    }
             }
+            .clipShape(shape)
             .overlay {
                 shape
                     .stroke(
@@ -843,6 +832,7 @@ private struct ProfileAccentCard<Content: View>: View {
                         }
                 }
             }
+            .clipShape(shape)
             .overlay {
                 shape
                     .stroke(
