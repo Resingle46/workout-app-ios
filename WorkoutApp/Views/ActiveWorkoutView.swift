@@ -322,7 +322,9 @@ struct ActiveWorkoutView: View {
         DispatchQueue.main.async {
             guard let updatedSession = store.activeSession,
                   let target = currentSetPosition(in: updatedSession) else { return }
-            proxy.scrollTo(target, anchor: .center)
+            withAnimation(.easeInOut(duration: 0.32)) {
+                proxy.scrollTo(target, anchor: .center)
+            }
         }
     }
 }

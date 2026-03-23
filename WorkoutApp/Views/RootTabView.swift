@@ -154,6 +154,10 @@ struct RootTabView: View {
     @State private var launchRestoreRequest: BackupRestoreRequest?
     @State private var workoutTabsExpanded = false
 
+    init() {
+        UITabBar.appearance().isHidden = true
+    }
+
     private var tabBarPresentationMode: TabBarPresentationMode {
         RootTabBarPresentationResolver.resolve(
             selectedTab: store.selectedTab,
@@ -182,6 +186,7 @@ struct RootTabView: View {
                 .tag(RootTab.profile)
                 .tabItem { Label("tab.profile", systemImage: "person.crop.circle") }
         }
+        .background(SystemTabBarHider())
         .toolbar(.hidden, for: .tabBar)
         .environment(\.locale, store.locale)
         .onChange(of: store.shouldPromptForBackupSetup, initial: true) { _, newValue in
@@ -662,6 +667,38 @@ private struct AppCollapsedWorkoutTabBar: View {
                 )
                 .shadow(color: AppTheme.shadowSubtle, radius: 16, y: 10)
         )
+    }
+}
+
+private struct SystemTabBarHider: UIViewControllerRepresentable {
+    func makeUIViewController(context: Context) -> Controller {
+        Controller()
+    }
+
+    func updateUIViewController(_ uiViewController: Controller, context: Context) {}
+
+    final class Controller: UIViewController {
+        override func viewWillAppear(_ animated: Bool) {
+            super.viewWillAppear(animated)
+            hideTabBar()
+        }
+
+        override func viewDidAppear(_ animated: Bool) {
+            super.viewDidAppear(animated)
+            hideTabBar()
+        }
+
+        override func viewDidLayoutSubviews() {
+            super.viewDidLayoutSubviews()
+            hideTabBar()
+        }
+
+        private func hideTabBar() {
+            guard let tabBar = tabBarController?.tabBar else { return }
+            tabBar.isHidden = true
+            tabBar.alpha = 0
+            tabBar.isUserInteractionEnabled = false
+        }
     }
 }
 
