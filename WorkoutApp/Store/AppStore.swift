@@ -606,10 +606,17 @@ final class AppStore {
     }
 
     private static func normalizedSnapshot(from snapshot: AppSnapshot) -> AppSnapshot {
+        let normalizedPrograms = normalizedPrograms(snapshot.programs)
+        let normalizedHistory = snapshot.history.sorted { $0.startedAt > $1.startedAt }
+        let referencedExerciseIDs = referencedExerciseIDs(
+            programs: normalizedPrograms,
+            history: normalizedHistory
+        )
+
         AppSnapshot(
-            programs: normalizedPrograms(snapshot.programs),
-            exercises: normalizedExercises(snapshot.exercises),
-            history: snapshot.history.sorted { $0.startedAt > $1.startedAt },
+            programs: normalizedPrograms,
+            exercises: normalizedExercises(snapshot.exercises, referencedExerciseIDs: referencedExerciseIDs),
+            history: normalizedHistory,
             profile: Self.normalizedProfile(snapshot.profile)
         )
     }
@@ -665,11 +672,16 @@ final class AppStore {
         return isFirstLaunch && !backupStatus.hasSelectedFolder
     }
 
-    private static func normalizedExercises(_ exercises: [Exercise]) -> [Exercise] {
+    private static func normalizedExercises(_ exercises: [Exercise], referencedExerciseIDs: Set<UUID>) -> [Exercise] {
         var result: [Exercise] = []
         var includedSeedNames = Set<String>()
 
         for exercise in exercises {
+            if SeedData.isDeprecatedSeedExercise(named: exercise.name),
+               !referencedExerciseIDs.contains(exercise.id) {
+                continue
+            }
+
             guard let definition = SeedData.definition(forExerciseNamed: exercise.name) else {
                 result.append(exercise)
                 continue
@@ -680,7 +692,7 @@ final class AppStore {
             result.append(
                 Exercise(
                     id: exercise.id,
-                    name: exercise.name,
+                    name: definition.name,
                     categoryID: definition.categoryID,
                     equipment: definition.equipment,
                     notes: exercise.notes
@@ -699,6 +711,29 @@ final class AppStore {
         }
 
         return result
+    }
+
+    private static func referencedExerciseIDs(
+        programs: [WorkoutProgram],
+        history: [WorkoutSession]
+    ) -> Set<UUID> {
+        var referencedIDs = Set<UUID>()
+
+        for program in programs {
+            for workout in program.workouts {
+                for exercise in workout.exercises {
+                    referencedIDs.insert(exercise.exerciseID)
+                }
+            }
+        }
+
+        for session in history {
+            for exercise in session.exercises {
+                referencedIDs.insert(exercise.exerciseID)
+            }
+        }
+
+        return referencedIDs
     }
 
     private static func normalizedPrograms(_ programs: [WorkoutProgram]) -> [WorkoutProgram] {

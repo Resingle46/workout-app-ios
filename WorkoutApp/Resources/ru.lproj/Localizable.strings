@@ -90,6 +90,7 @@
 "workout.superset_round" = "Раунд %d";
 "workout.reps" = "Повторения: %d";
 "workout.reps_label" = "Повторения";
+"workout.reps_compact_label" = "Повт.";
 "workout.weight" = "Вес, кг";
 "workout.name" = "Название тренировки";
 "workout.focus" = "Фокус / группы мышц";
@@ -194,9 +195,11 @@
 "exercise.seed.dumbbell_bench_press" = "Жим гантелей лёжа";
 "exercise.seed.chin_up" = "Подтягивания обратным хватом";
 "exercise.seed.one_arm_dumbbell_row" = "Тяга гантели одной рукой";
-"exercise.seed.face_pull" = "Тяга к лицу";
+"exercise.seed.face_pull" = "Тяга блока к лицу";
+"exercise.seed.cable_face_pull" = "Тяга блока к лицу";
 "exercise.seed.straight_arm_pulldown" = "Пулдаун прямыми руками";
 "exercise.seed.deadlift" = "Становая тяга";
+"exercise.seed.bent_over_shrug" = "Шраги в наклоне стоя";
 "exercise.seed.front_squat" = "Фронтальный присед";
 "exercise.seed.bulgarian_split_squat" = "Болгарские сплит-приседания";
 "exercise.seed.leg_extension" = "Разгибания ног";

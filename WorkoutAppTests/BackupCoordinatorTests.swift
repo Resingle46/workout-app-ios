@@ -151,7 +151,33 @@ final class BackupCoordinatorTests: XCTestCase {
             store.exercises.filter { $0.name == "Barbell Bench Press" }.count,
             1
         )
-        XCTAssertNotNil(store.exercises.first(where: { $0.name == "Mountain Climber" }))
+        XCTAssertNotNil(store.exercises.first(where: { $0.name == "Bent Over Shrug" }))
+        XCTAssertNil(store.exercises.first(where: { $0.name == "Mountain Climber" }))
+        XCTAssertNotNil(store.exercises.first(where: { $0.name == "Close Grip Bench Press" }))
+    }
+
+    @MainActor
+    func testAppStoreApplyRenamesFacePullAndDropsDeprecatedUnreferencedSeedExercise() {
+        let facePullID = UUID(uuidString: "11111111-2222-3333-4444-555555555555")!
+        let deprecatedID = UUID(uuidString: "66666666-7777-8888-9999-AAAAAAAAAAAA")!
+        let snapshot = AppSnapshot(
+            programs: [],
+            exercises: [
+                Exercise(id: facePullID, name: "Face Pull", categoryID: SeedData.shouldersCategoryID, equipment: "Band", notes: ""),
+                Exercise(id: deprecatedID, name: "Walking Lunges", categoryID: SeedData.legsCategoryID, equipment: "Dumbbells", notes: "")
+            ],
+            history: [],
+            profile: UserProfile(sex: "M", age: 29, weight: 88, height: 182, appLanguageCode: "en")
+        )
+
+        let store = AppStore()
+        store.apply(snapshot: snapshot)
+
+        let migratedFacePull = try? XCTUnwrap(store.exercises.first(where: { $0.id == facePullID }))
+        XCTAssertEqual(migratedFacePull?.name, "Cable Face Pull")
+        XCTAssertEqual(migratedFacePull?.categoryID, SeedData.backCategoryID)
+        XCTAssertEqual(migratedFacePull?.equipment, "Cable / Rope")
+        XCTAssertNil(store.exercises.first(where: { $0.id == deprecatedID }))
     }
 
     @MainActor

@@ -102,7 +102,13 @@ struct WorkoutTemplateDetailView: View {
             VStack(alignment: .leading, spacing: 16) {
                 Text(workout.title)
                     .font(AppTypography.title(size: 30))
-                Text(workout.focus.isEmpty ? String(localized: "workout.focus_empty") : workout.focus)
+                Group {
+                    if workout.focus.isEmpty {
+                        Text("workout.focus_empty")
+                    } else {
+                        Text(workout.focus)
+                    }
+                }
                     .foregroundStyle(AppTheme.secondaryText)
                 Text(String(format: NSLocalizedString("program.exercise_count", comment: ""), workout.exercises.count))
                     .font(AppTypography.body(size: 17, weight: .medium, relativeTo: .subheadline))

@@ -90,6 +90,7 @@
 "workout.superset_round" = "Round %d";
 "workout.reps" = "Reps: %d";
 "workout.reps_label" = "Reps";
+"workout.reps_compact_label" = "Reps";
 "workout.weight" = "Weight, kg";
 "workout.name" = "Workout name";
 "workout.focus" = "Focus / muscle groups";
@@ -228,9 +229,11 @@
 "exercise.seed.dumbbell_bench_press" = "Dumbbell Bench Press";
 "exercise.seed.chin_up" = "Chin-Up";
 "exercise.seed.one_arm_dumbbell_row" = "One Arm Dumbbell Row";
-"exercise.seed.face_pull" = "Face Pull";
+"exercise.seed.face_pull" = "Cable Face Pull";
+"exercise.seed.cable_face_pull" = "Cable Face Pull";
 "exercise.seed.straight_arm_pulldown" = "Straight Arm Pulldown";
 "exercise.seed.deadlift" = "Deadlift";
+"exercise.seed.bent_over_shrug" = "Bent Over Shrug";
 "exercise.seed.front_squat" = "Front Squat";
 "exercise.seed.bulgarian_split_squat" = "Bulgarian Split Squat";
 "exercise.seed.leg_extension" = "Leg Extension";

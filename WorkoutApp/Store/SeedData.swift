@@ -23,16 +23,32 @@ enum SeedData {
         ExerciseCategory(id: coreCategoryID, nameKey: "muscle.core", symbol: "figure.core.training")
     ]
 
+    private static let legacySeedExerciseNameAliases: [String: String] = [
+        "Face Pull": "Cable Face Pull"
+    ]
+
+    private static let deprecatedSeedExerciseNames: Set<String> = [
+        "Walking Lunges",
+        "Russian Twist",
+        "Decline Bench Press",
+        "Pec Deck Fly",
+        "Straight Arm Pulldown",
+        "Step-Up",
+        "Reverse Pec Deck",
+        "Push Press",
+        "Bicycle Crunch",
+        "Dead Bug",
+        "Mountain Climber"
+    ]
+
     static let exerciseDefinitions: [ExerciseSeedDefinition] = [
         ExerciseSeedDefinition(name: "Barbell Bench Press", categoryID: chestCategoryID, equipment: "Barbell"),
         ExerciseSeedDefinition(name: "Incline Dumbbell Press", categoryID: chestCategoryID, equipment: "Dumbbells"),
         ExerciseSeedDefinition(name: "Chest Fly", categoryID: chestCategoryID, equipment: "Cable / Machine"),
         ExerciseSeedDefinition(name: "Push-Up", categoryID: chestCategoryID, equipment: "Bodyweight"),
         ExerciseSeedDefinition(name: "Incline Bench Press", categoryID: chestCategoryID, equipment: "Barbell / Bench"),
-        ExerciseSeedDefinition(name: "Decline Bench Press", categoryID: chestCategoryID, equipment: "Barbell / Bench"),
         ExerciseSeedDefinition(name: "Chest Dip", categoryID: chestCategoryID, equipment: "Bodyweight / Dip Bars"),
         ExerciseSeedDefinition(name: "Machine Chest Press", categoryID: chestCategoryID, equipment: "Machine"),
-        ExerciseSeedDefinition(name: "Pec Deck Fly", categoryID: chestCategoryID, equipment: "Machine"),
         ExerciseSeedDefinition(name: "Dumbbell Bench Press", categoryID: chestCategoryID, equipment: "Dumbbells / Bench"),
 
         ExerciseSeedDefinition(name: "Pull-Up", categoryID: backCategoryID, equipment: "Bodyweight"),
@@ -41,21 +57,19 @@ enum SeedData {
         ExerciseSeedDefinition(name: "Seated Cable Row", categoryID: backCategoryID, equipment: "Cable"),
         ExerciseSeedDefinition(name: "Chin-Up", categoryID: backCategoryID, equipment: "Bodyweight / Pull-up Bar"),
         ExerciseSeedDefinition(name: "One Arm Dumbbell Row", categoryID: backCategoryID, equipment: "Dumbbell / Bench"),
-        ExerciseSeedDefinition(name: "Face Pull", categoryID: backCategoryID, equipment: "Cable / Rope"),
-        ExerciseSeedDefinition(name: "Straight Arm Pulldown", categoryID: backCategoryID, equipment: "Cable"),
+        ExerciseSeedDefinition(name: "Cable Face Pull", categoryID: backCategoryID, equipment: "Cable / Rope"),
         ExerciseSeedDefinition(name: "Deadlift", categoryID: backCategoryID, equipment: "Barbell"),
+        ExerciseSeedDefinition(name: "Bent Over Shrug", categoryID: backCategoryID, equipment: "Barbell / Dumbbells"),
 
         ExerciseSeedDefinition(name: "Back Squat", categoryID: legsCategoryID, equipment: "Barbell"),
         ExerciseSeedDefinition(name: "Romanian Deadlift", categoryID: legsCategoryID, equipment: "Barbell"),
         ExerciseSeedDefinition(name: "Leg Press", categoryID: legsCategoryID, equipment: "Machine"),
-        ExerciseSeedDefinition(name: "Walking Lunges", categoryID: legsCategoryID, equipment: "Dumbbells"),
         ExerciseSeedDefinition(name: "Front Squat", categoryID: legsCategoryID, equipment: "Barbell"),
         ExerciseSeedDefinition(name: "Bulgarian Split Squat", categoryID: legsCategoryID, equipment: "Dumbbells / Bench"),
         ExerciseSeedDefinition(name: "Leg Extension", categoryID: legsCategoryID, equipment: "Machine"),
         ExerciseSeedDefinition(name: "Seated Leg Curl", categoryID: legsCategoryID, equipment: "Machine"),
         ExerciseSeedDefinition(name: "Standing Calf Raise", categoryID: legsCategoryID, equipment: "Machine"),
         ExerciseSeedDefinition(name: "Hip Thrust", categoryID: legsCategoryID, equipment: "Barbell / Bench"),
-        ExerciseSeedDefinition(name: "Step-Up", categoryID: legsCategoryID, equipment: "Dumbbells / Bench"),
 
         ExerciseSeedDefinition(name: "Overhead Press", categoryID: shouldersCategoryID, equipment: "Barbell"),
         ExerciseSeedDefinition(name: "Lateral Raise", categoryID: shouldersCategoryID, equipment: "Dumbbells"),
@@ -64,8 +78,6 @@ enum SeedData {
         ExerciseSeedDefinition(name: "Seated Dumbbell Press", categoryID: shouldersCategoryID, equipment: "Dumbbells / Bench"),
         ExerciseSeedDefinition(name: "Front Raise", categoryID: shouldersCategoryID, equipment: "Dumbbells"),
         ExerciseSeedDefinition(name: "Upright Row", categoryID: shouldersCategoryID, equipment: "Barbell"),
-        ExerciseSeedDefinition(name: "Reverse Pec Deck", categoryID: shouldersCategoryID, equipment: "Machine"),
-        ExerciseSeedDefinition(name: "Push Press", categoryID: shouldersCategoryID, equipment: "Barbell"),
         ExerciseSeedDefinition(name: "Cable Lateral Raise", categoryID: shouldersCategoryID, equipment: "Cable"),
 
         ExerciseSeedDefinition(name: "Barbell Curl", categoryID: armsCategoryID, equipment: "Barbell"),
@@ -83,18 +95,19 @@ enum SeedData {
         ExerciseSeedDefinition(name: "Plank", categoryID: coreCategoryID, equipment: "Bodyweight"),
         ExerciseSeedDefinition(name: "Cable Crunch", categoryID: coreCategoryID, equipment: "Cable"),
         ExerciseSeedDefinition(name: "Hanging Leg Raise", categoryID: coreCategoryID, equipment: "Bodyweight"),
-        ExerciseSeedDefinition(name: "Russian Twist", categoryID: coreCategoryID, equipment: "Bodyweight / Plate"),
         ExerciseSeedDefinition(name: "Crunch", categoryID: coreCategoryID, equipment: "Bodyweight"),
         ExerciseSeedDefinition(name: "Hanging Knee Raise", categoryID: coreCategoryID, equipment: "Bodyweight / Pull-up Bar"),
         ExerciseSeedDefinition(name: "Ab Wheel Rollout", categoryID: coreCategoryID, equipment: "Ab Wheel"),
-        ExerciseSeedDefinition(name: "Bicycle Crunch", categoryID: coreCategoryID, equipment: "Bodyweight"),
-        ExerciseSeedDefinition(name: "Sit-Up", categoryID: coreCategoryID, equipment: "Bodyweight"),
-        ExerciseSeedDefinition(name: "Dead Bug", categoryID: coreCategoryID, equipment: "Bodyweight"),
-        ExerciseSeedDefinition(name: "Mountain Climber", categoryID: coreCategoryID, equipment: "Bodyweight")
+        ExerciseSeedDefinition(name: "Sit-Up", categoryID: coreCategoryID, equipment: "Bodyweight")
     ]
 
     static func definition(forExerciseNamed name: String) -> ExerciseSeedDefinition? {
-        exerciseDefinitions.first { $0.name == name }
+        let canonicalName = legacySeedExerciseNameAliases[name] ?? name
+        return exerciseDefinitions.first { $0.name == canonicalName }
+    }
+
+    static func isDeprecatedSeedExercise(named name: String) -> Bool {
+        deprecatedSeedExerciseNames.contains(name)
     }
 
     static func make() -> (categories: [ExerciseCategory], exercises: [Exercise], programs: [WorkoutProgram]) {

@@ -562,10 +562,17 @@ private struct WorkoutSetRow: View {
             }
 
             HStack(spacing: 12) {
-                Text("workout.reps_label")
-                    .foregroundStyle(AppTheme.primaryText)
+                ViewThatFits(in: .horizontal) {
+                    Text("workout.reps_label")
+                    Text("workout.reps_compact_label")
+                }
+                .font(AppTypography.body(size: 16, relativeTo: .body))
+                .foregroundStyle(AppTheme.primaryText)
+                .lineLimit(1)
+                .minimumScaleFactor(0.78)
                 Spacer()
                 repsControl
+                    .fixedSize(horizontal: true, vertical: false)
             }
 
             HStack(spacing: 12) {
