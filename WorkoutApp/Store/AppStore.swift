@@ -38,12 +38,15 @@ final class AppStore {
     init() {
         let seed = SeedData.make()
         let storedSnapshot = persistence.loadStoredSnapshot()
-        let snapshot = storedSnapshot?.snapshot ?? AppSnapshot(
+        let baseSnapshot = storedSnapshot?.snapshot ?? AppSnapshot(
             programs: seed.programs,
             exercises: seed.exercises,
             history: [],
             profile: .empty
         )
+        let snapshot = AppStore.normalizedSnapshot(from: baseSnapshot)
+        let hasStoredSnapshot = storedSnapshot != nil
+        let didMigrateStoredSnapshot = storedSnapshot.map { $0.snapshot != snapshot } ?? false
 
         self.categories = seed.categories
         self.exercises = snapshot.exercises
@@ -55,10 +58,15 @@ final class AppStore {
         self.defaults = .standard
         self.backupCoordinator = BackupCoordinator()
         self.backupStatus = BackupStatus()
-        self.hasPersistedSnapshot = storedSnapshot != nil
+        self.hasPersistedSnapshot = hasStoredSnapshot
         self.localSnapshotModifiedAt = storedSnapshot?.modifiedAt
         Bundle.overrideLocalization(languageCode: selectedLanguageCode)
         self.backupStatus = BackupCoordinator.initialStatus()
+
+        if didMigrateStoredSnapshot {
+            self.localSnapshotModifiedAt = persistence.save(snapshot: snapshot)
+            self.hasPersistedSnapshot = true
+        }
     }
 
     func currentSnapshot() -> AppSnapshot {
@@ -71,7 +79,7 @@ final class AppStore {
     }
 
     func apply(snapshot: AppSnapshot) {
-        let normalizedSnapshot = normalizedSnapshot(from: snapshot)
+        let normalizedSnapshot = Self.normalizedSnapshot(from: snapshot)
         programs = normalizedSnapshot.programs
         exercises = normalizedSnapshot.exercises
         history = normalizedSnapshot.history.sorted { $0.startedAt > $1.startedAt }
@@ -540,10 +548,10 @@ final class AppStore {
         hasPersistedSnapshot = true
     }
 
-    private func normalizedSnapshot(from snapshot: AppSnapshot) -> AppSnapshot {
+    private static func normalizedSnapshot(from snapshot: AppSnapshot) -> AppSnapshot {
         AppSnapshot(
             programs: snapshot.programs,
-            exercises: snapshot.exercises,
+            exercises: normalizedExercises(snapshot.exercises),
             history: snapshot.history.sorted { $0.startedAt > $1.startedAt },
             profile: Self.normalizedProfile(snapshot.profile)
         )
@@ -598,6 +606,42 @@ final class AppStore {
     private static func shouldPromptForBackupSetup(defaults: UserDefaults, backupStatus: BackupStatus) -> Bool {
         let isFirstLaunch = defaults.object(forKey: PreferenceKey.didCompleteFirstLaunch) == nil
         return isFirstLaunch && !backupStatus.hasSelectedFolder
+    }
+
+    private static func normalizedExercises(_ exercises: [Exercise]) -> [Exercise] {
+        var result: [Exercise] = []
+        var includedSeedNames = Set<String>()
+
+        for exercise in exercises {
+            guard let definition = SeedData.definition(forExerciseNamed: exercise.name) else {
+                result.append(exercise)
+                continue
+            }
+
+            includedSeedNames.insert(definition.name)
+
+            result.append(
+                Exercise(
+                    id: exercise.id,
+                    name: exercise.name,
+                    categoryID: definition.categoryID,
+                    equipment: definition.equipment,
+                    notes: exercise.notes
+                )
+            )
+        }
+
+        for definition in SeedData.exerciseDefinitions where !includedSeedNames.contains(definition.name) {
+            result.append(
+                Exercise(
+                    name: definition.name,
+                    categoryID: definition.categoryID,
+                    equipment: definition.equipment
+                )
+            )
+        }
+
+        return result
     }
 
     private enum PreferenceKey {

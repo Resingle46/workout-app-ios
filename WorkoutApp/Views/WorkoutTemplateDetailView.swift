@@ -143,7 +143,7 @@ struct WorkoutTemplateDetailView: View {
                                     Text(exercise.localizedName)
                                         .font(AppTypography.heading(size: 21))
                                     if !exercise.equipment.isEmpty {
-                                        Text(exercise.equipment)
+                                        Text(exercise.localizedEquipment)
                                             .font(AppTypography.body(size: 16, relativeTo: .subheadline))
                                             .foregroundStyle(AppTheme.secondaryText)
                                     }
@@ -280,8 +280,7 @@ struct AddExerciseToWorkoutView: View {
 
     @State private var query = ""
     @State private var selectedCategoryID: UUID?
-    @State private var selectedExerciseIDs: [UUID] = []
-    @State private var isSuperset = false
+    @State private var addedExerciseIDs = Set<UUID>()
     @State private var showingCreateExercise = false
     @State private var pendingConfiguration: PendingExerciseConfiguration?
 
@@ -290,8 +289,7 @@ struct AddExerciseToWorkoutView: View {
             let matchesCategory = selectedCategoryID == nil || exercise.categoryID == selectedCategoryID
             let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
             let matchesQuery = normalizedQuery.isEmpty ||
-                exercise.searchableNames.contains(where: { $0.localizedCaseInsensitiveContains(normalizedQuery) }) ||
-                exercise.equipment.localizedCaseInsensitiveContains(normalizedQuery)
+                exercise.searchableTexts.contains(where: { $0.localizedCaseInsensitiveContains(normalizedQuery) })
             return matchesCategory && matchesQuery
         }
     }
@@ -314,21 +312,6 @@ struct AddExerciseToWorkoutView: View {
                             }
                             .pickerStyle(.menu)
 
-                            Toggle(isOn: $isSuperset) {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text("template.superset")
-                                        .font(AppTypography.body(size: 18, weight: .semibold, relativeTo: .headline))
-                                    Text(LocalizedStringKey(isSuperset ? "template.superset_hint_pair" : "template.superset_hint_single"))
-                                        .font(AppTypography.caption(size: 13, weight: .regular))
-                                        .foregroundStyle(AppTheme.secondaryText)
-                                }
-                            }
-                            .onChange(of: isSuperset) { _, newValue in
-                                if !newValue, selectedExerciseIDs.count > 1 {
-                                    selectedExerciseIDs = Array(selectedExerciseIDs.prefix(1))
-                                }
-                            }
-
                             Button {
                                 showingCreateExercise = true
                             } label: {
@@ -350,8 +333,8 @@ struct AddExerciseToWorkoutView: View {
                                     ExerciseSelectionCard(
                                         exercise: exercise,
                                         category: store.category(for: exercise.categoryID),
-                                        isSelected: selectedExerciseIDs.contains(exercise.id),
-                                        action: { toggleSelection(for: exercise.id) }
+                                        isSelected: addedExerciseIDs.contains(exercise.id),
+                                        action: { presentConfiguration(for: exercise) }
                                     )
                                 }
                             }
@@ -366,22 +349,15 @@ struct AddExerciseToWorkoutView: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("action.cancel") { dismiss() }
                 }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("action.done") { dismiss() }
+                }
             }
             .sheet(isPresented: $showingCreateExercise) {
                 CreateCustomExerciseView { name, equipment, notes, categoryID in
                     let exercise = store.addCustomExercise(name: name, categoryID: categoryID, equipment: equipment, notes: notes)
                     selectedCategoryID = categoryID
-                    if isSuperset {
-                        if selectedExerciseIDs.count == 1 {
-                            selectedExerciseIDs.append(exercise.id)
-                            presentConfigurationIfNeeded()
-                        } else {
-                            selectedExerciseIDs = [exercise.id]
-                        }
-                    } else {
-                        selectedExerciseIDs = [exercise.id]
-                        presentConfigurationIfNeeded()
-                    }
+                    presentConfiguration(for: exercise)
                 }
             }
             .sheet(item: $pendingConfiguration) { configuration in
@@ -392,37 +368,19 @@ struct AddExerciseToWorkoutView: View {
                     suggestedWeight: 0,
                     onCancel: {
                         pendingConfiguration = nil
-                        selectedExerciseIDs.removeAll()
                     },
                     onSave: { setsCount, reps, weight in
-                        if configuration.isSuperset {
-                            let groupID = UUID()
-                            for exerciseID in configuration.exerciseIDs {
-                                store.addExercise(
-                                    to: workoutID,
-                                    exerciseID: exerciseID,
-                                    reps: reps,
-                                    setsCount: setsCount,
-                                    suggestedWeight: weight,
-                                    groupKind: .superset,
-                                    groupID: groupID
-                                )
-                            }
-                        } else if let exerciseID = configuration.exerciseIDs.first {
-                            store.addExercise(
-                                to: workoutID,
-                                exerciseID: exerciseID,
-                                reps: reps,
-                                setsCount: setsCount,
-                                suggestedWeight: weight,
-                                groupKind: .regular,
-                                groupID: nil
-                            )
-                        }
-
+                        store.addExercise(
+                            to: workoutID,
+                            exerciseID: configuration.exerciseID,
+                            reps: reps,
+                            setsCount: setsCount,
+                            suggestedWeight: weight,
+                            groupKind: .regular,
+                            groupID: nil
+                        )
+                        addedExerciseIDs.insert(configuration.exerciseID)
                         pendingConfiguration = nil
-                        selectedExerciseIDs.removeAll()
-                        dismiss()
                     }
                 )
                 .presentationDetents([.height(380)])
@@ -433,46 +391,20 @@ struct AddExerciseToWorkoutView: View {
         }
     }
 
-    private func toggleSelection(for exerciseID: UUID) {
-        if let index = selectedExerciseIDs.firstIndex(of: exerciseID) {
-            selectedExerciseIDs.remove(at: index)
-            return
-        }
-
-        if isSuperset {
-            guard selectedExerciseIDs.count < 2 else { return }
-            selectedExerciseIDs.append(exerciseID)
-        } else {
-            selectedExerciseIDs = [exerciseID]
-        }
-
-        presentConfigurationIfNeeded()
-    }
-
-    private func presentConfigurationIfNeeded() {
+    private func presentConfiguration(for exercise: Exercise) {
         guard pendingConfiguration == nil else { return }
+        guard !addedExerciseIDs.contains(exercise.id) else { return }
 
-        if isSuperset, selectedExerciseIDs.count == 2 {
-            let names = selectedExerciseIDs.compactMap { store.exercise(for: $0)?.localizedName }
-            pendingConfiguration = PendingExerciseConfiguration(
-                exerciseIDs: selectedExerciseIDs,
-                isSuperset: true,
-                title: names.joined(separator: " + ")
-            )
-        } else if !isSuperset, let exerciseID = selectedExerciseIDs.first, let exercise = store.exercise(for: exerciseID) {
-            pendingConfiguration = PendingExerciseConfiguration(
-                exerciseIDs: [exerciseID],
-                isSuperset: false,
-                title: exercise.localizedName
-            )
-        }
+        pendingConfiguration = PendingExerciseConfiguration(
+            exerciseID: exercise.id,
+            title: exercise.localizedName
+        )
     }
 }
 
 private struct PendingExerciseConfiguration: Identifiable {
     let id = UUID()
-    let exerciseIDs: [UUID]
-    let isSuperset: Bool
+    let exerciseID: UUID
     let title: String
 }
 
@@ -509,7 +441,7 @@ private struct ExerciseSelectionCard: View {
                         .lineLimit(2)
 
                     if !exercise.equipment.isEmpty {
-                        Text(exercise.equipment)
+                        Text(exercise.localizedEquipment)
                             .font(AppTypography.caption(size: 13, weight: .regular))
                             .foregroundStyle(Color.white.opacity(0.74))
                             .lineLimit(1)

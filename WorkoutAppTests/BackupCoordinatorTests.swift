@@ -124,6 +124,58 @@ final class BackupCoordinatorTests: XCTestCase {
         XCTAssertEqual(store.profile, snapshot.profile)
     }
 
+    @MainActor
+    func testAppStoreApplyNormalizesSeedExerciseCategoriesAndAppendsMissingSeedCatalog() {
+        let legacyCategoryID = UUID(uuidString: "12345678-1234-1234-1234-123456789012")!
+        let benchID = UUID(uuidString: "ABCDEFAB-CDEF-CDEF-CDEF-ABCDEFABCDEF")!
+        let customID = UUID(uuidString: "FEDCBAFE-DCBA-DCBA-DCBA-FEDCBAFEDCBA")!
+
+        let snapshot = AppSnapshot(
+            programs: [],
+            exercises: [
+                Exercise(id: benchID, name: "Barbell Bench Press", categoryID: legacyCategoryID, equipment: "Something Old", notes: "seed"),
+                Exercise(id: customID, name: "My Custom Curl", categoryID: legacyCategoryID, equipment: "Band", notes: "custom")
+            ],
+            history: [],
+            profile: UserProfile(sex: "M", age: 29, weight: 88, height: 182, appLanguageCode: "en")
+        )
+
+        let store = AppStore()
+        store.apply(snapshot: snapshot)
+
+        let migratedBench = try? XCTUnwrap(store.exercises.first(where: { $0.id == benchID }))
+        XCTAssertEqual(migratedBench?.categoryID, SeedData.chestCategoryID)
+        XCTAssertEqual(migratedBench?.equipment, "Barbell")
+        XCTAssertEqual(store.exercises.first(where: { $0.id == customID })?.categoryID, legacyCategoryID)
+        XCTAssertEqual(
+            store.exercises.filter { $0.name == "Barbell Bench Press" }.count,
+            1
+        )
+        XCTAssertNotNil(store.exercises.first(where: { $0.name == "Mountain Climber" }))
+    }
+
+    @MainActor
+    func testLocalizedEquipmentUsesRussianTranslationsForSeedEquipment() {
+        let exercise = Exercise(
+            name: "My Custom Lift",
+            categoryID: SeedData.backCategoryID,
+            equipment: "Barbell / Bench",
+            notes: ""
+        )
+        let snapshot = AppSnapshot(
+            programs: [],
+            exercises: [exercise],
+            history: [],
+            profile: UserProfile(sex: "M", age: 29, weight: 88, height: 182, appLanguageCode: "ru")
+        )
+
+        let store = AppStore()
+        store.apply(snapshot: snapshot)
+
+        let localizedExercise = try? XCTUnwrap(store.exercises.first(where: { $0.name == "My Custom Lift" }))
+        XCTAssertEqual(localizedExercise?.localizedEquipment, "Штанга / Скамья")
+    }
+
     func testWorkoutDurationFormatterUsesMinuteSecondBelowOneHour() {
         XCTAssertEqual(WorkoutTimeTextFormatter.formatDuration(elapsedSeconds: 3_599), "59:59")
     }

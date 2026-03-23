@@ -188,8 +188,25 @@ extension Exercise {
         return Bundle.main.localizedString(forKey: localizationKey, value: name, table: nil)
     }
 
-    var searchableNames: [String] {
-        Array(Set([name, localizedName]))
+    var localizedEquipment: String {
+        let trimmed = equipment.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+
+        let parts = trimmed
+            .components(separatedBy: "/")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        let localizedParts = parts.map { part -> String in
+            guard let localizationKey = Self.equipmentLocalizationKeys[part] else { return part }
+            return Bundle.main.localizedString(forKey: localizationKey, value: part, table: nil)
+        }
+
+        return localizedParts.joined(separator: " / ")
+    }
+
+    var searchableTexts: [String] {
+        Array(Set([name, localizedName, equipment, localizedEquipment].filter { !$0.isEmpty }))
     }
 
     private static let seedLocalizationKeys: [String: String] = [
@@ -216,6 +233,60 @@ extension Exercise {
         "Plank": "exercise.seed.plank",
         "Cable Crunch": "exercise.seed.cable_crunch",
         "Hanging Leg Raise": "exercise.seed.hanging_leg_raise",
-        "Russian Twist": "exercise.seed.russian_twist"
+        "Russian Twist": "exercise.seed.russian_twist",
+        "Incline Bench Press": "exercise.seed.incline_bench_press",
+        "Decline Bench Press": "exercise.seed.decline_bench_press",
+        "Chest Dip": "exercise.seed.chest_dip",
+        "Machine Chest Press": "exercise.seed.machine_chest_press",
+        "Pec Deck Fly": "exercise.seed.pec_deck_fly",
+        "Dumbbell Bench Press": "exercise.seed.dumbbell_bench_press",
+        "Chin-Up": "exercise.seed.chin_up",
+        "One Arm Dumbbell Row": "exercise.seed.one_arm_dumbbell_row",
+        "Face Pull": "exercise.seed.face_pull",
+        "Straight Arm Pulldown": "exercise.seed.straight_arm_pulldown",
+        "Deadlift": "exercise.seed.deadlift",
+        "Front Squat": "exercise.seed.front_squat",
+        "Bulgarian Split Squat": "exercise.seed.bulgarian_split_squat",
+        "Leg Extension": "exercise.seed.leg_extension",
+        "Seated Leg Curl": "exercise.seed.seated_leg_curl",
+        "Standing Calf Raise": "exercise.seed.standing_calf_raise",
+        "Hip Thrust": "exercise.seed.hip_thrust",
+        "Step-Up": "exercise.seed.step_up",
+        "Seated Dumbbell Press": "exercise.seed.seated_dumbbell_press",
+        "Front Raise": "exercise.seed.front_raise",
+        "Upright Row": "exercise.seed.upright_row",
+        "Reverse Pec Deck": "exercise.seed.reverse_pec_deck",
+        "Push Press": "exercise.seed.push_press",
+        "Cable Lateral Raise": "exercise.seed.cable_lateral_raise",
+        "Incline Dumbbell Curl": "exercise.seed.incline_dumbbell_curl",
+        "Preacher Curl": "exercise.seed.preacher_curl",
+        "Concentration Curl": "exercise.seed.concentration_curl",
+        "Close Grip Bench Press": "exercise.seed.close_grip_bench_press",
+        "Overhead Dumbbell Triceps Extension": "exercise.seed.overhead_dumbbell_triceps_extension",
+        "Bench Dip": "exercise.seed.bench_dip",
+        "Cable Curl": "exercise.seed.cable_curl",
+        "Crunch": "exercise.seed.crunch",
+        "Hanging Knee Raise": "exercise.seed.hanging_knee_raise",
+        "Ab Wheel Rollout": "exercise.seed.ab_wheel_rollout",
+        "Bicycle Crunch": "exercise.seed.bicycle_crunch",
+        "Sit-Up": "exercise.seed.sit_up",
+        "Dead Bug": "exercise.seed.dead_bug",
+        "Mountain Climber": "exercise.seed.mountain_climber"
+    ]
+
+    private static let equipmentLocalizationKeys: [String: String] = [
+        "Ab Wheel": "equipment.ab_wheel",
+        "Barbell": "equipment.barbell",
+        "Bench": "equipment.bench",
+        "Bodyweight": "equipment.bodyweight",
+        "Cable": "equipment.cable",
+        "Dip Bars": "equipment.dip_bars",
+        "Dumbbell": "equipment.dumbbell",
+        "Dumbbells": "equipment.dumbbells",
+        "EZ-bar": "equipment.ez_bar",
+        "Machine": "equipment.machine",
+        "Plate": "equipment.plate",
+        "Pull-up Bar": "equipment.pull_up_bar",
+        "Rope": "equipment.rope"
     ]
 }
