@@ -87,16 +87,19 @@ struct StatisticsView: View {
         .appScreenBackground()
     }
 
+    @ViewBuilder
     private var weeklyStrengthSummaryText: some View {
-        Text(
-            String(
-                format: NSLocalizedString("stats.weekly_strength_summary", comment: ""),
-                formattedWeeklyStrengthChange
+        if weeklyStrengthSummary.percentChange != 0 {
+            Text(
+                String(
+                    format: NSLocalizedString("stats.weekly_strength_summary", comment: ""),
+                    formattedWeeklyStrengthChange
+                )
             )
-        )
-        .font(AppTypography.body(size: 18, weight: .semibold, relativeTo: .headline))
-        .foregroundStyle(weeklyStrengthSummary.isPositive ? AppTheme.success : AppTheme.destructive)
-        .frame(maxWidth: .infinity, alignment: .leading)
+            .font(AppTypography.body(size: 18, weight: .semibold, relativeTo: .headline))
+            .foregroundStyle(weeklyStrengthSummary.isPositive ? AppTheme.success : AppTheme.destructive)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 
     private var exerciseAnalyticsCard: some View {

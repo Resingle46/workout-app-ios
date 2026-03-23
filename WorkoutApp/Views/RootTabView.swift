@@ -244,7 +244,11 @@ struct RootTabView: View {
                 ProfileView()
             }
         }
-        .safeAreaPadding(.bottom, bottomRailInset)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            Color.clear
+                .frame(height: bottomRailInset)
+                .allowsHitTesting(false)
+        }
         .environment(\.appBottomRailInset, bottomRailInset)
         .opacity(isSelected ? 1 : 0)
         .allowsHitTesting(isSelected)
@@ -585,28 +589,30 @@ private struct AppExpandedTabBar: View {
     let onToggleWorkoutTabs: () -> Void
 
     var body: some View {
-        HStack(spacing: 10) {
-            HStack(spacing: 8) {
+        let usesCompactLabels = presentationMode == .expandedFromWorkout
+
+        return HStack(spacing: usesCompactLabels ? 8 : 10) {
+            HStack(spacing: usesCompactLabels ? 6 : 8) {
                 ForEach(RootTab.allCases, id: \.self) { tab in
                     Button {
                         onSelect(tab)
                     } label: {
-                        tabCell(for: tab)
+                        tabCell(for: tab, compact: usesCompactLabels)
                     }
                     .buttonStyle(.plain)
                 }
             }
-            .padding(8)
+            .padding(usesCompactLabels ? 6 : 8)
             .frame(maxWidth: .infinity)
             .background(tabBarBackground)
 
             if presentationMode == .expandedFromWorkout {
                 Button(action: onToggleWorkoutTabs) {
                     Text("tabbar.tabs")
-                        .font(AppTypography.label(size: 12, weight: .semibold))
+                        .font(AppTypography.label(size: 11, weight: .semibold))
                         .foregroundStyle(AppTheme.primaryText)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 14)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 13)
                 }
                 .buttonStyle(.plain)
                 .background(tabBarBackground)
@@ -624,20 +630,22 @@ private struct AppExpandedTabBar: View {
             .shadow(color: AppTheme.shadowSubtle, radius: 16, y: 10)
     }
 
-    private func tabCell(for tab: RootTab) -> some View {
+    private func tabCell(for tab: RootTab, compact: Bool) -> some View {
         let isSelected = selectedTab == tab
 
         return VStack(spacing: 6) {
             Image(systemName: tab.systemImage)
-                .font(AppTypography.icon(size: 18, weight: .semibold))
+                .font(AppTypography.icon(size: compact ? 17 : 18, weight: .semibold))
             Text(tab.titleKey)
-                .font(AppTypography.label(size: 11, weight: .semibold))
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
+                .font(AppTypography.label(size: compact ? 10 : 11, weight: .semibold))
+                .multilineTextAlignment(.center)
+                .lineLimit(compact ? 2 : 1)
+                .minimumScaleFactor(compact ? 0.68 : 0.8)
         }
         .foregroundStyle(isSelected ? AppTheme.primaryText : AppTheme.secondaryText)
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 12)
+        .padding(.horizontal, compact ? 4 : 0)
+        .padding(.vertical, compact ? 10 : 12)
         .background(
             Group {
                 if isSelected {
@@ -671,14 +679,17 @@ private struct AppCollapsedWorkoutTabBar: View {
 
                 VStack(alignment: .leading, spacing: 3) {
                     Text(RootTab.workout.titleKey)
-                        .font(AppTypography.body(size: 16, weight: .semibold))
+                        .font(AppTypography.body(size: 15, weight: .semibold))
                         .foregroundStyle(AppTheme.primaryText)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
                     Text(sessionTitle)
                         .font(AppTypography.caption(size: 13, weight: .medium))
                         .foregroundStyle(AppTheme.secondaryText)
                         .lineLimit(1)
                 }
             }
+            .layoutPriority(1)
 
             Spacer(minLength: 12)
 
