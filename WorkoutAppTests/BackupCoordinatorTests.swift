@@ -193,6 +193,199 @@ final class BackupCoordinatorTests: XCTestCase {
         XCTAssertEqual(store.exercises.first(where: { $0.id == exerciseID })?.name, "Tempo Row")
     }
 
+    @MainActor
+    func testAddExercisesPreservesSupersetGroupingAndOrder() {
+        let programID = UUID(uuidString: "ABABABAB-1111-1111-1111-ABABABABABAB")!
+        let workoutID = UUID(uuidString: "CDCDCDCD-2222-2222-2222-CDCDCDCDCDCD")!
+        let exerciseA = makeExercise(id: UUID(uuidString: "10101010-0000-0000-0000-000000000001")!, name: "Bench")
+        let exerciseB = makeExercise(id: UUID(uuidString: "10101010-0000-0000-0000-000000000002")!, name: "Fly")
+        let exerciseC = makeExercise(id: UUID(uuidString: "10101010-0000-0000-0000-000000000003")!, name: "Row")
+        let groupID = UUID(uuidString: "30303030-0000-0000-0000-000000000003")!
+
+        let store = AppStore()
+        store.apply(snapshot: makeProgramSnapshot(
+            programs: [
+                WorkoutProgram(
+                    id: programID,
+                    title: "Program",
+                    workouts: [WorkoutTemplate(id: workoutID, title: "Day", focus: "", exercises: [])]
+                )
+            ],
+            exercises: [exerciseA, exerciseB, exerciseC]
+        ))
+
+        store.addExercises(
+            to: workoutID,
+            drafts: [
+                WorkoutExerciseDraft(exerciseID: exerciseA.id, reps: 8, setsCount: 3, suggestedWeight: 80, groupKind: .regular, groupID: nil),
+                WorkoutExerciseDraft(exerciseID: exerciseB.id, reps: 12, setsCount: 3, suggestedWeight: 18, groupKind: .superset, groupID: groupID),
+                WorkoutExerciseDraft(exerciseID: exerciseC.id, reps: 10, setsCount: 3, suggestedWeight: 60, groupKind: .superset, groupID: groupID)
+            ]
+        )
+
+        let workout = store.workout(programID: programID, workoutID: workoutID)
+
+        XCTAssertEqual(workout?.exercises.map(\.exerciseID), [exerciseA.id, exerciseB.id, exerciseC.id])
+        XCTAssertEqual(workout?.exercises[0].groupKind, .regular)
+        XCTAssertEqual(workout?.exercises[1].groupKind, .superset)
+        XCTAssertEqual(workout?.exercises[2].groupKind, .superset)
+        XCTAssertEqual(workout?.exercises[1].groupID, groupID)
+        XCTAssertEqual(workout?.exercises[2].groupID, groupID)
+    }
+
+    @MainActor
+    func testUpdateTemplateExerciseSynchronizesSupersetSetCountAcrossGroup() {
+        let programID = UUID(uuidString: "40404040-0000-0000-0000-000000000004")!
+        let workoutID = UUID(uuidString: "50505050-0000-0000-0000-000000000005")!
+        let templateAID = UUID(uuidString: "60606060-0000-0000-0000-000000000006")!
+        let templateBID = UUID(uuidString: "70707070-0000-0000-0000-000000000007")!
+        let groupID = UUID(uuidString: "80808080-0000-0000-0000-000000000008")!
+        let exerciseA = makeExercise(id: UUID(uuidString: "90909090-0000-0000-0000-000000000009")!, name: "Bench")
+        let exerciseB = makeExercise(id: UUID(uuidString: "91919191-0000-0000-0000-000000000010")!, name: "Fly")
+
+        let workout = WorkoutTemplate(
+            id: workoutID,
+            title: "Push",
+            focus: "",
+            exercises: [
+                WorkoutExerciseTemplate(
+                    id: templateAID,
+                    exerciseID: exerciseA.id,
+                    sets: [WorkoutSetTemplate(reps: 8, suggestedWeight: 80), WorkoutSetTemplate(reps: 8, suggestedWeight: 80)],
+                    groupKind: .superset,
+                    groupID: groupID
+                ),
+                WorkoutExerciseTemplate(
+                    id: templateBID,
+                    exerciseID: exerciseB.id,
+                    sets: [WorkoutSetTemplate(reps: 12, suggestedWeight: 20), WorkoutSetTemplate(reps: 12, suggestedWeight: 20)],
+                    groupKind: .superset,
+                    groupID: groupID
+                )
+            ]
+        )
+
+        let store = AppStore()
+        store.apply(snapshot: makeProgramSnapshot(
+            programs: [WorkoutProgram(id: programID, title: "Program", workouts: [workout])],
+            exercises: [exerciseA, exerciseB]
+        ))
+
+        store.updateTemplateExercise(
+            programID: programID,
+            workoutID: workoutID,
+            templateExerciseID: templateAID,
+            reps: 6,
+            setsCount: 4,
+            suggestedWeight: 90
+        )
+
+        let updatedWorkout = store.workout(programID: programID, workoutID: workoutID)
+        XCTAssertEqual(updatedWorkout?.exercises[0].sets.count, 4)
+        XCTAssertEqual(updatedWorkout?.exercises[1].sets.count, 4)
+        XCTAssertEqual(updatedWorkout?.exercises[1].sets.first?.reps, 12)
+        XCTAssertEqual(updatedWorkout?.exercises[1].sets.first?.suggestedWeight, 20)
+    }
+
+    @MainActor
+    func testStartWorkoutNormalizesSupersetSetCountFromFirstExercise() {
+        let groupID = UUID(uuidString: "A0A0A0A0-0000-0000-0000-000000000011")!
+        let exerciseA = makeExercise(id: UUID(uuidString: "A1A1A1A1-0000-0000-0000-000000000012")!, name: "Bench")
+        let exerciseB = makeExercise(id: UUID(uuidString: "A2A2A2A2-0000-0000-0000-000000000013")!, name: "Fly")
+        let template = WorkoutTemplate(
+            title: "Push",
+            focus: "",
+            exercises: [
+                WorkoutExerciseTemplate(
+                    exerciseID: exerciseA.id,
+                    sets: [
+                        WorkoutSetTemplate(reps: 8, suggestedWeight: 80),
+                        WorkoutSetTemplate(reps: 8, suggestedWeight: 80),
+                        WorkoutSetTemplate(reps: 8, suggestedWeight: 80),
+                        WorkoutSetTemplate(reps: 8, suggestedWeight: 80)
+                    ],
+                    groupKind: .superset,
+                    groupID: groupID
+                ),
+                WorkoutExerciseTemplate(
+                    exerciseID: exerciseB.id,
+                    sets: [
+                        WorkoutSetTemplate(reps: 12, suggestedWeight: 20),
+                        WorkoutSetTemplate(reps: 12, suggestedWeight: 20)
+                    ],
+                    groupKind: .superset,
+                    groupID: groupID
+                )
+            ]
+        )
+
+        let store = AppStore()
+        store.apply(snapshot: makeProgramSnapshot(programs: [], exercises: [exerciseA, exerciseB]))
+
+        store.startWorkout(template: template)
+
+        XCTAssertEqual(store.activeSession?.exercises[0].sets.count, 4)
+        XCTAssertEqual(store.activeSession?.exercises[1].sets.count, 4)
+    }
+
+    func testActiveWorkoutDisplayResolverBuildsSupersetRoundsAndCurrentOrder() {
+        let exerciseA = makeExercise(id: UUID(uuidString: "B1B1B1B1-0000-0000-0000-000000000014")!, name: "Bench")
+        let exerciseB = makeExercise(id: UUID(uuidString: "B2B2B2B2-0000-0000-0000-000000000015")!, name: "Fly")
+        let groupID = UUID(uuidString: "B3B3B3B3-0000-0000-0000-000000000016")!
+        let session = makeSession(
+            startedAt: makeDate(year: 2024, month: 3, day: 20, hour: 10),
+            endedAt: nil,
+            exerciseLogs: [
+                makeExerciseLog(groupID: groupID, groupKind: .superset, exerciseID: exerciseA.id, sets: [(80, 8, true), (80, 8, false)]),
+                makeExerciseLog(groupID: groupID, groupKind: .superset, exerciseID: exerciseB.id, sets: [(20, 12, false), (20, 12, false)])
+            ]
+        )
+
+        let blocks = ActiveWorkoutDisplayResolver.buildBlocks(
+            session: session,
+            exercisesByID: [exerciseA.id: exerciseA, exerciseB.id: exerciseB]
+        )
+
+        guard let firstBlock = blocks.first, case .superset(let block) = firstBlock else {
+            return XCTFail("Expected superset block")
+        }
+
+        XCTAssertEqual(block.rounds.count, 2)
+        XCTAssertEqual(block.rounds[0].items.count, 2)
+        XCTAssertEqual(block.rounds[0].items.map(\.exercise.id), [exerciseA.id, exerciseB.id])
+        XCTAssertEqual(
+            ActiveWorkoutDisplayResolver.currentSetPosition(in: blocks),
+            CurrentWorkoutSetPosition(exerciseIndex: 1, setIndex: 0)
+        )
+    }
+
+    func testActiveWorkoutDisplayResolverProgressTreatsSupersetAsSingleLogicalStep() {
+        let exerciseA = makeExercise(id: UUID(uuidString: "C1C1C1C1-0000-0000-0000-000000000017")!, name: "Bench")
+        let exerciseB = makeExercise(id: UUID(uuidString: "C2C2C2C2-0000-0000-0000-000000000018")!, name: "Fly")
+        let exerciseC = makeExercise(id: UUID(uuidString: "C3C3C3C3-0000-0000-0000-000000000019")!, name: "Row")
+        let groupID = UUID(uuidString: "C4C4C4C4-0000-0000-0000-000000000020")!
+        let session = makeSession(
+            startedAt: makeDate(year: 2024, month: 3, day: 20, hour: 10),
+            endedAt: nil,
+            exerciseLogs: [
+                makeExerciseLog(exerciseID: exerciseA.id, sets: [(80, 8, true)]),
+                makeExerciseLog(groupID: groupID, groupKind: .superset, exerciseID: exerciseB.id, sets: [(20, 12, false)]),
+                makeExerciseLog(groupID: groupID, groupKind: .superset, exerciseID: exerciseC.id, sets: [(60, 10, false)])
+            ]
+        )
+
+        let blocks = ActiveWorkoutDisplayResolver.buildBlocks(
+            session: session,
+            exercisesByID: [exerciseA.id: exerciseA, exerciseB.id: exerciseB, exerciseC.id: exerciseC]
+        )
+        let progress = ActiveWorkoutDisplayResolver.progress(for: blocks)
+
+        XCTAssertEqual(progress.total, 2)
+        XCTAssertEqual(progress.completed, 1)
+        XCTAssertEqual(progress.remaining, 1)
+        XCTAssertEqual(progress.currentStep, 2)
+    }
+
     func testWorkoutDurationFormatterUsesMinuteSecondBelowOneHour() {
         XCTAssertEqual(WorkoutTimeTextFormatter.formatDuration(elapsedSeconds: 3_599), "59:59")
     }
@@ -543,6 +736,15 @@ final class BackupCoordinatorTests: XCTestCase {
         )
     }
 
+    private func makeProgramSnapshot(programs: [WorkoutProgram], exercises: [Exercise]) -> AppSnapshot {
+        AppSnapshot(
+            programs: programs,
+            exercises: exercises,
+            history: [],
+            profile: UserProfile(sex: "M", age: 29, weight: 88, height: 182, appLanguageCode: "en")
+        )
+    }
+
     private func makeExercise(id: UUID, name: String) -> Exercise {
         Exercise(
             id: id,
@@ -571,11 +773,20 @@ final class BackupCoordinatorTests: XCTestCase {
         exerciseID: UUID,
         sets: [(weight: Double, reps: Int, completed: Bool)]
     ) -> WorkoutExerciseLog {
+        makeExerciseLog(groupID: nil, groupKind: .regular, exerciseID: exerciseID, sets: sets)
+    }
+
+    private func makeExerciseLog(
+        groupID: UUID?,
+        groupKind: WorkoutExerciseTemplate.GroupKind,
+        exerciseID: UUID,
+        sets: [(weight: Double, reps: Int, completed: Bool)]
+    ) -> WorkoutExerciseLog {
         WorkoutExerciseLog(
             templateExerciseID: UUID(),
             exerciseID: exerciseID,
-            groupKind: .regular,
-            groupID: nil,
+            groupKind: groupKind,
+            groupID: groupID,
             sets: sets.enumerated().map { index, set in
                 WorkoutSetLog(
                     reps: set.reps,

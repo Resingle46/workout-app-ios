@@ -241,7 +241,8 @@ final class AppStore {
     }
 
     func startWorkout(template: WorkoutTemplate) {
-        let logs = template.exercises.map { item in
+        let normalizedExercises = Self.normalizedSupersetTemplateExercises(template.exercises)
+        let logs = normalizedExercises.map { item in
             WorkoutExerciseLog(
                 templateExerciseID: item.id,
                 exerciseID: item.exerciseID,
@@ -305,11 +306,43 @@ final class AppStore {
         groupKind: WorkoutExerciseTemplate.GroupKind = .regular,
         groupID: UUID? = nil
     ) {
+        addExercises(
+            to: workoutID,
+            drafts: [
+                WorkoutExerciseDraft(
+                    exerciseID: exerciseID,
+                    reps: reps,
+                    setsCount: setsCount,
+                    suggestedWeight: suggestedWeight,
+                    groupKind: groupKind,
+                    groupID: groupID
+                )
+            ]
+        )
+    }
+
+    func addExercises(to workoutID: UUID, drafts: [WorkoutExerciseDraft]) {
+        guard !drafts.isEmpty else { return }
+
         for programIndex in programs.indices {
             if let workoutIndex = programs[programIndex].workouts.firstIndex(where: { $0.id == workoutID }) {
-                let sets = Array(repeating: WorkoutSetTemplate(reps: reps, suggestedWeight: suggestedWeight), count: setsCount)
-                programs[programIndex].workouts[workoutIndex].exercises.append(
-                    WorkoutExerciseTemplate(exerciseID: exerciseID, sets: sets, groupKind: groupKind, groupID: groupID)
+                let newExercises = drafts.map { draft in
+                    WorkoutExerciseTemplate(
+                        exerciseID: draft.exerciseID,
+                        sets: (0..<draft.setsCount).map { _ in
+                            WorkoutSetTemplate(
+                                reps: draft.reps,
+                                suggestedWeight: draft.suggestedWeight
+                            )
+                        },
+                        groupKind: draft.groupKind,
+                        groupID: draft.groupID
+                    )
+                }
+
+                programs[programIndex].workouts[workoutIndex].exercises.append(contentsOf: newExercises)
+                programs[programIndex].workouts[workoutIndex].exercises = Self.normalizedSupersetTemplateExercises(
+                    programs[programIndex].workouts[workoutIndex].exercises
                 )
                 save()
                 return
@@ -333,7 +366,11 @@ final class AppStore {
         var updatedSets = templateExercise.sets
 
         if updatedSets.count < setsCount {
-            updatedSets.append(contentsOf: Array(repeating: WorkoutSetTemplate(reps: reps, suggestedWeight: suggestedWeight), count: setsCount - updatedSets.count))
+            updatedSets.append(
+                contentsOf: (0..<(setsCount - updatedSets.count)).map { _ in
+                    WorkoutSetTemplate(reps: reps, suggestedWeight: suggestedWeight)
+                }
+            )
         } else if updatedSets.count > setsCount {
             updatedSets.removeLast(updatedSets.count - setsCount)
         }
@@ -345,6 +382,20 @@ final class AppStore {
 
         templateExercise.sets = updatedSets
         programs[location.programIndex].workouts[location.workoutIndex].exercises[location.exerciseIndex] = templateExercise
+
+        if templateExercise.groupKind == .superset, let groupID = templateExercise.groupID {
+            synchronizeSupersetSetCounts(
+                programIndex: location.programIndex,
+                workoutIndex: location.workoutIndex,
+                groupID: groupID,
+                targetSetCount: updatedSets.count,
+                excludingTemplateExerciseID: templateExercise.id
+            )
+        }
+
+        programs[location.programIndex].workouts[location.workoutIndex].exercises = Self.normalizedSupersetTemplateExercises(
+            programs[location.programIndex].workouts[location.workoutIndex].exercises
+        )
         save()
     }
 
@@ -556,7 +607,7 @@ final class AppStore {
 
     private static func normalizedSnapshot(from snapshot: AppSnapshot) -> AppSnapshot {
         AppSnapshot(
-            programs: snapshot.programs,
+            programs: normalizedPrograms(snapshot.programs),
             exercises: normalizedExercises(snapshot.exercises),
             history: snapshot.history.sorted { $0.startedAt > $1.startedAt },
             profile: Self.normalizedProfile(snapshot.profile)
@@ -648,6 +699,105 @@ final class AppStore {
         }
 
         return result
+    }
+
+    private static func normalizedPrograms(_ programs: [WorkoutProgram]) -> [WorkoutProgram] {
+        programs.map { program in
+            var normalizedProgram = program
+            normalizedProgram.workouts = program.workouts.map { workout in
+                var normalizedWorkout = workout
+                normalizedWorkout.exercises = normalizedSupersetTemplateExercises(workout.exercises)
+                return normalizedWorkout
+            }
+            return normalizedProgram
+        }
+    }
+
+    private static func normalizedSupersetTemplateExercises(_ items: [WorkoutExerciseTemplate]) -> [WorkoutExerciseTemplate] {
+        var result: [WorkoutExerciseTemplate] = []
+        var handled = Set<UUID>()
+
+        for item in items {
+            guard !handled.contains(item.id) else { continue }
+
+            if item.groupKind == .superset, let groupID = item.groupID {
+                let groupItems = items.filter { $0.groupKind == .superset && $0.groupID == groupID }
+                groupItems.forEach { handled.insert($0.id) }
+
+                guard groupItems.count > 1 else {
+                    result.append(contentsOf: groupItems.map(Self.makeRegularTemplateExercise))
+                    continue
+                }
+
+                let targetSetCount = groupItems.first?.sets.count ?? 0
+                result.append(
+                    contentsOf: groupItems.map { groupItem in
+                        var normalizedItem = groupItem
+                        normalizedItem.sets = resizedTemplateSets(groupItem.sets, targetCount: targetSetCount)
+                        return normalizedItem
+                    }
+                )
+            } else {
+                handled.insert(item.id)
+                result.append(item)
+            }
+        }
+
+        return result
+    }
+
+    private static func resizedTemplateSets(_ sets: [WorkoutSetTemplate], targetCount: Int) -> [WorkoutSetTemplate] {
+        guard targetCount > 0 else { return [] }
+
+        var resized = sets
+
+        if resized.count > targetCount {
+            resized.removeLast(resized.count - targetCount)
+            return resized
+        }
+
+        let fallback = resized.last ?? WorkoutSetTemplate(reps: 12, suggestedWeight: 0)
+        if resized.count < targetCount {
+            resized.append(
+                contentsOf: (0..<(targetCount - resized.count)).map { _ in
+                    WorkoutSetTemplate(
+                        reps: fallback.reps,
+                        suggestedWeight: fallback.suggestedWeight
+                    )
+                }
+            )
+        }
+
+        return resized
+    }
+
+    private static func makeRegularTemplateExercise(_ item: WorkoutExerciseTemplate) -> WorkoutExerciseTemplate {
+        var regularItem = item
+        regularItem.groupKind = .regular
+        regularItem.groupID = nil
+        return regularItem
+    }
+
+    private func synchronizeSupersetSetCounts(
+        programIndex: Int,
+        workoutIndex: Int,
+        groupID: UUID,
+        targetSetCount: Int,
+        excludingTemplateExerciseID: UUID
+    ) {
+        let exerciseIndices = programs[programIndex].workouts[workoutIndex].exercises.indices.filter {
+            let item = programs[programIndex].workouts[workoutIndex].exercises[$0]
+            return item.groupKind == .superset &&
+                item.groupID == groupID &&
+                item.id != excludingTemplateExerciseID
+        }
+
+        for exerciseIndex in exerciseIndices {
+            programs[programIndex].workouts[workoutIndex].exercises[exerciseIndex].sets = Self.resizedTemplateSets(
+                programs[programIndex].workouts[workoutIndex].exercises[exerciseIndex].sets,
+                targetCount: targetSetCount
+            )
+        }
     }
 
     private enum PreferenceKey {

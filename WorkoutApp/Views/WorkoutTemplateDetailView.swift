@@ -282,6 +282,8 @@ struct AddExerciseToWorkoutView: View {
     @State private var selectedCategoryID: UUID?
     @State private var stagedCustomExercises: [Exercise] = []
     @State private var stagedExercises: [StagedWorkoutExercise] = []
+    @State private var isSupersetEnabled = false
+    @State private var currentSupersetGroupID: UUID?
     @State private var showingCreateExercise = false
     @State private var pendingConfiguration: PendingExerciseConfiguration?
 
@@ -297,6 +299,11 @@ struct AddExerciseToWorkoutView: View {
                 exercise.searchableTexts.contains(where: { $0.localizedCaseInsensitiveContains(normalizedQuery) })
             return matchesCategory && matchesQuery
         }
+    }
+
+    private var currentSupersetDraftCount: Int {
+        guard let currentSupersetGroupID else { return 0 }
+        return stagedExercises.filter { $0.groupKind == .superset && $0.groupID == currentSupersetGroupID }.count
     }
 
     var body: some View {
@@ -316,6 +323,25 @@ struct AddExerciseToWorkoutView: View {
                                 }
                             }
                             .pickerStyle(.menu)
+
+                            Toggle(isOn: Binding(
+                                get: { isSupersetEnabled },
+                                set: { handleSupersetToggleChange($0) }
+                            )) {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("template.superset")
+                                        .font(AppTypography.body(size: 18, weight: .semibold, relativeTo: .headline))
+                                    Text(
+                                        LocalizedStringKey(
+                                            currentSupersetDraftCount == 0
+                                                ? "template.superset_hint_single"
+                                                : "template.superset_hint_pair"
+                                        )
+                                    )
+                                    .font(AppTypography.caption(size: 13, weight: .regular))
+                                    .foregroundStyle(AppTheme.secondaryText)
+                                }
+                            }
 
                             Button {
                                 showingCreateExercise = true
@@ -363,6 +389,7 @@ struct AddExerciseToWorkoutView: View {
             .sheet(isPresented: $showingCreateExercise) {
                 CreateCustomExerciseView { name, equipment, notes, categoryID in
                     let exercise = Exercise(name: name, categoryID: categoryID, equipment: equipment, notes: notes)
+                    stagedCustomExercises.removeAll { $0.id == exercise.id }
                     stagedCustomExercises.insert(exercise, at: 0)
                     selectedCategoryID = categoryID
                     presentConfiguration(for: exercise)
@@ -379,7 +406,7 @@ struct AddExerciseToWorkoutView: View {
                     },
                     onSave: { setsCount, reps, weight in
                         stageExercise(
-                            exercise: configuration.exercise,
+                            configuration: configuration,
                             reps: reps,
                             setsCount: setsCount,
                             suggestedWeight: weight
@@ -399,58 +426,151 @@ struct AddExerciseToWorkoutView: View {
         guard pendingConfiguration == nil else { return }
 
         let stagedExercise = stagedExercises.first(where: { $0.exercise.id == exercise.id })
+        let groupContext = resolvedGroupContext(for: stagedExercise)
 
         pendingConfiguration = PendingExerciseConfiguration(
             exercise: exercise,
             title: exercise.localizedName,
             setsCount: stagedExercise?.setsCount ?? 4,
             reps: stagedExercise?.reps ?? 12,
-            suggestedWeight: stagedExercise?.suggestedWeight ?? 0
+            suggestedWeight: stagedExercise?.suggestedWeight ?? 0,
+            groupKind: groupContext.groupKind,
+            groupID: groupContext.groupID
         )
     }
 
-    private func stageExercise(exercise: Exercise, reps: Int, setsCount: Int, suggestedWeight: Double) {
+    private func stageExercise(
+        configuration: PendingExerciseConfiguration,
+        reps: Int,
+        setsCount: Int,
+        suggestedWeight: Double
+    ) {
         let stagedExercise = StagedWorkoutExercise(
-            exercise: exercise,
+            exercise: configuration.exercise,
             setsCount: setsCount,
             reps: reps,
-            suggestedWeight: suggestedWeight
+            suggestedWeight: suggestedWeight,
+            groupKind: configuration.groupKind,
+            groupID: configuration.groupID
         )
 
-        if let existingIndex = stagedExercises.firstIndex(where: { $0.exercise.id == exercise.id }) {
+        if let existingIndex = stagedExercises.firstIndex(where: { $0.exercise.id == configuration.exercise.id }) {
             stagedExercises[existingIndex] = stagedExercise
         } else {
             stagedExercises.append(stagedExercise)
         }
+
+        if stagedExercise.groupKind == .superset, let groupID = stagedExercise.groupID {
+            synchronizeStagedSupersetSetCounts(groupID: groupID, targetSetCount: setsCount, excludingExerciseID: stagedExercise.exercise.id)
+        }
     }
 
     private func commitStagedExercises() {
-        for stagedExercise in stagedExercises {
-            if store.exercise(for: stagedExercise.exercise.id) == nil {
-                store.addCustomExercise(stagedExercise.exercise)
-            }
+        let finalizedExercises = finalizedStagedExercisesForCommit()
+        let selectedCustomIDs = Set(finalizedExercises.map(\.exercise.id))
 
-            store.addExercise(
-                to: workoutID,
-                exerciseID: stagedExercise.exercise.id,
-                reps: stagedExercise.reps,
-                setsCount: stagedExercise.setsCount,
-                suggestedWeight: stagedExercise.suggestedWeight,
-                groupKind: .regular,
-                groupID: nil
-            )
+        for customExercise in stagedCustomExercises where selectedCustomIDs.contains(customExercise.id) {
+            if store.exercise(for: customExercise.id) == nil {
+                store.addCustomExercise(customExercise)
+            }
         }
 
+        store.addExercises(
+            to: workoutID,
+            drafts: finalizedExercises.map {
+                WorkoutExerciseDraft(
+                    exerciseID: $0.exercise.id,
+                    reps: $0.reps,
+                    setsCount: $0.setsCount,
+                    suggestedWeight: $0.suggestedWeight,
+                    groupKind: $0.groupKind,
+                    groupID: $0.groupID
+                )
+            }
+        )
+
         dismiss()
+    }
+
+    private func handleSupersetToggleChange(_ isEnabled: Bool) {
+        if isEnabled {
+            isSupersetEnabled = true
+            currentSupersetGroupID = currentSupersetGroupID ?? UUID()
+        } else {
+            finalizeCurrentSupersetDraftGroup()
+            isSupersetEnabled = false
+        }
+    }
+
+    private func resolvedGroupContext(for stagedExercise: StagedWorkoutExercise?) -> (groupKind: WorkoutExerciseTemplate.GroupKind, groupID: UUID?) {
+        if let stagedExercise {
+            return (stagedExercise.groupKind, stagedExercise.groupID)
+        }
+
+        guard isSupersetEnabled else {
+            return (.regular, nil)
+        }
+
+        let groupID = currentSupersetGroupID ?? UUID()
+        currentSupersetGroupID = groupID
+        return (.superset, groupID)
+    }
+
+    private func synchronizeStagedSupersetSetCounts(groupID: UUID, targetSetCount: Int, excludingExerciseID: UUID) {
+        for index in stagedExercises.indices {
+            guard stagedExercises[index].groupKind == .superset,
+                  stagedExercises[index].groupID == groupID,
+                  stagedExercises[index].exercise.id != excludingExerciseID else { continue }
+
+            stagedExercises[index].setsCount = targetSetCount
+        }
+    }
+
+    private func finalizeCurrentSupersetDraftGroup() {
+        guard let currentSupersetGroupID else {
+            self.currentSupersetGroupID = nil
+            return
+        }
+
+        let groupIndices = stagedExercises.indices.filter {
+            stagedExercises[$0].groupKind == .superset && stagedExercises[$0].groupID == currentSupersetGroupID
+        }
+
+        if groupIndices.count == 1 {
+            let index = groupIndices[0]
+            stagedExercises[index].groupKind = .regular
+            stagedExercises[index].groupID = nil
+        }
+
+        self.currentSupersetGroupID = nil
+    }
+
+    private func finalizedStagedExercisesForCommit() -> [StagedWorkoutExercise] {
+        var finalized = stagedExercises
+
+        let groupedSupersets = Dictionary(grouping: finalized.enumerated().filter {
+            $0.element.groupKind == .superset && $0.element.groupID != nil
+        }) { $0.element.groupID! }
+
+        for (_, entries) in groupedSupersets where entries.count < 2 {
+            for entry in entries {
+                finalized[entry.offset].groupKind = .regular
+                finalized[entry.offset].groupID = nil
+            }
+        }
+
+        return finalized
     }
 }
 
 private struct StagedWorkoutExercise: Identifiable {
     var id: UUID { exercise.id }
     let exercise: Exercise
-    let setsCount: Int
-    let reps: Int
-    let suggestedWeight: Double
+    var setsCount: Int
+    var reps: Int
+    var suggestedWeight: Double
+    var groupKind: WorkoutExerciseTemplate.GroupKind
+    var groupID: UUID?
 }
 
 private struct PendingExerciseConfiguration: Identifiable {
@@ -460,6 +580,8 @@ private struct PendingExerciseConfiguration: Identifiable {
     let setsCount: Int
     let reps: Int
     let suggestedWeight: Double
+    let groupKind: WorkoutExerciseTemplate.GroupKind
+    let groupID: UUID?
 }
 
 private struct ExerciseSelectionCard: View {

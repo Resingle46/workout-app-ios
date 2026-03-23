@@ -126,6 +126,15 @@ struct WorkoutExerciseLog: Identifiable, Codable, Hashable, Sendable {
     }
 }
 
+struct WorkoutExerciseDraft: Hashable, Sendable {
+    var exerciseID: UUID
+    var reps: Int
+    var setsCount: Int
+    var suggestedWeight: Double
+    var groupKind: WorkoutExerciseTemplate.GroupKind
+    var groupID: UUID?
+}
+
 struct WorkoutSession: Identifiable, Codable, Hashable, Sendable {
     let id: UUID
     var workoutTemplateID: UUID

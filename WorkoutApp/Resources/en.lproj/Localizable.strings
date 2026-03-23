@@ -31,6 +31,7 @@
 "action.finish_workout" = "Finish workout";
 "action.add_exercise" = "Add exercise";
 "action.add_set" = "Add set";
+"action.add_round" = "Add round";
 "action.mark_done" = "Mark done";
 "action.unmark_done" = "Undo completion";
 "action.cancel" = "Cancel";
@@ -57,8 +58,8 @@
 "template.reps" = "Reps: %d";
 "template.reps_summary" = "%@ reps";
 "template.superset" = "Add as superset";
-"template.superset_hint_single" = "Pick 1 exercise to continue.";
-"template.superset_hint_pair" = "Pick exactly 2 exercises for a superset.";
+"template.superset_hint_single" = "Pick exercises for the current superset.";
+"template.superset_hint_pair" = "The current superset is still open. Add more exercises or switch this off to finish the group.";
 "template.empty_title" = "Add exercises to this workout";
 "template.empty_description" = "Choose exercises and configure weight, sets, and reps in one flow.";
 "template.exercise_meta" = "%d sets • %d reps • %@ kg";
@@ -86,6 +87,7 @@
 "workout.empty_title" = "No active workout";
 "workout.empty_description" = "Start a workout from the Programs tab.";
 "workout.set_number" = "Set %d";
+"workout.superset_round" = "Round %d";
 "workout.reps" = "Reps: %d";
 "workout.reps_label" = "Reps";
 "workout.weight" = "Weight, kg";

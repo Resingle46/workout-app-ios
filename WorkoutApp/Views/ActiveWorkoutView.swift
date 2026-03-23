@@ -112,14 +112,22 @@ struct ActiveWorkoutView: View {
         currentSetPosition: CurrentWorkoutSetPosition?,
         onMarkedDone: @escaping () -> Void
     ) -> some View {
+        let blocks = displayBlocks(for: session)
+
         LazyVStack(spacing: 16) {
-            ForEach(Array(session.exercises.enumerated()), id: \.element.id) { exerciseIndex, item in
-                if let exercise = store.exercise(for: item.exerciseID) {
+            ForEach(blocks) { block in
+                switch block {
+                case .regular(let regularBlock):
                     exerciseCard(
-                        for: exercise,
-                        item: item,
+                        for: regularBlock,
                         session: session,
-                        exerciseIndex: exerciseIndex,
+                        currentSetPosition: currentSetPosition,
+                        onMarkedDone: onMarkedDone
+                    )
+                case .superset(let supersetBlock):
+                    supersetCard(
+                        for: supersetBlock,
+                        session: session,
                         currentSetPosition: currentSetPosition,
                         onMarkedDone: onMarkedDone
                     )
@@ -129,10 +137,8 @@ struct ActiveWorkoutView: View {
     }
 
     private func exerciseCard(
-        for exercise: Exercise,
-        item: WorkoutExerciseLog,
+        for block: ActiveWorkoutRegularBlock,
         session: WorkoutSession,
-        exerciseIndex: Int,
         currentSetPosition: CurrentWorkoutSetPosition?,
         onMarkedDone: @escaping () -> Void
     ) -> some View {
@@ -140,15 +146,15 @@ struct ActiveWorkoutView: View {
             VStack(alignment: .leading, spacing: 16) {
                 HStack(alignment: .top, spacing: 12) {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text(exercise.localizedName)
+                        Text(block.exercise.localizedName)
                             .font(AppTypography.heading(size: 21))
 
                         WorkoutExerciseInfoRow(
-                            targetWeightText: targetWeightText(for: item, session: session),
-                            previousWeightText: previousWeightText(for: item)
+                            targetWeightText: targetWeightText(for: block.item, session: session),
+                            previousWeightText: previousWeightText(for: block.item)
                         )
 
-                        if item.groupKind == .superset {
+                        if block.item.groupKind == .superset {
                             Label("label.superset", systemImage: "bolt.fill")
                                 .font(AppTypography.caption(size: 13, weight: .semibold))
                                 .padding(.horizontal, 10)
@@ -161,15 +167,21 @@ struct ActiveWorkoutView: View {
                 }
 
                 setRows(
-                    for: item,
-                    exerciseIndex: exerciseIndex,
+                    for: block.item,
+                    exerciseIndex: block.exerciseIndex,
                     currentSetPosition: currentSetPosition,
                     onMarkedDone: onMarkedDone
                 )
 
                 Button {
                     store.updateActiveSession { current in
-                        current.exercises[exerciseIndex].sets.append(WorkoutSetLog(reps: 10, weight: 0))
+                        let fallbackSet = current.exercises[block.exerciseIndex].sets.last
+                        current.exercises[block.exerciseIndex].sets.append(
+                            WorkoutSetLog(
+                                reps: fallbackSet?.reps ?? 10,
+                                weight: fallbackSet?.weight ?? 0
+                            )
+                        )
                     }
                 } label: {
                     Label("action.add_set", systemImage: "plus")
@@ -177,8 +189,8 @@ struct ActiveWorkoutView: View {
                 .buttonStyle(AppSecondaryButtonStyle())
 
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(restSummary(for: item))
-                    if let previousSetRest = previousSetRest(for: item) {
+                    Text(restSummary(for: block.item))
+                    if let previousSetRest = previousSetRest(for: block.item) {
                         Text(String(format: NSLocalizedString("workout.previous_rest", comment: ""), previousSetRest))
                     }
                 }
@@ -186,6 +198,104 @@ struct ActiveWorkoutView: View {
                 .foregroundStyle(AppTheme.secondaryText)
             }
         }
+    }
+
+    private func supersetCard(
+        for block: ActiveWorkoutSupersetBlock,
+        session: WorkoutSession,
+        currentSetPosition: CurrentWorkoutSetPosition?,
+        onMarkedDone: @escaping () -> Void
+    ) -> some View {
+        AppCard {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack(alignment: .top, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Label("label.superset", systemImage: "bolt.fill")
+                            .font(AppTypography.caption(size: 13, weight: .semibold))
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(AppTheme.accentMuted, in: Capsule())
+
+                        Text(block.items.map(\.exercise.localizedName).joined(separator: " • "))
+                            .font(AppTypography.heading(size: 21))
+                    }
+
+                    Spacer()
+                }
+
+                ForEach(block.rounds) { round in
+                    supersetRoundCard(
+                        round,
+                        session: session,
+                        currentSetPosition: currentSetPosition,
+                        onMarkedDone: onMarkedDone
+                    )
+                }
+
+                Button {
+                    addRound(to: block)
+                } label: {
+                    Label("action.add_round", systemImage: "plus")
+                }
+                .buttonStyle(AppSecondaryButtonStyle())
+            }
+        }
+    }
+
+    private func supersetRoundCard(
+        _ round: ActiveWorkoutSupersetRound,
+        session: WorkoutSession,
+        currentSetPosition: CurrentWorkoutSetPosition?,
+        onMarkedDone: @escaping () -> Void
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text(String(format: NSLocalizedString("workout.superset_round", comment: ""), round.roundIndex + 1))
+                    .font(AppTypography.body(size: 16, weight: .semibold, relativeTo: .subheadline))
+                Spacer()
+                if round.isCompleted {
+                    Label("workout.done_badge", systemImage: "checkmark.circle.fill")
+                        .font(AppTypography.caption(size: 13, weight: .bold))
+                        .foregroundStyle(AppTheme.success)
+                }
+            }
+
+            ForEach(Array(round.items.enumerated()), id: \.element.id) { index, roundItem in
+                VStack(alignment: .leading, spacing: 12) {
+                    Text(roundItem.exercise.localizedName)
+                        .font(AppTypography.body(size: 18, weight: .semibold, relativeTo: .headline))
+
+                    WorkoutExerciseInfoRow(
+                        targetWeightText: targetWeightText(for: roundItem.item, session: session),
+                        previousWeightText: previousWeightText(for: roundItem.item)
+                    )
+
+                    WorkoutSetRow(
+                        exerciseIndex: roundItem.exerciseIndex,
+                        setIndex: roundItem.setIndex,
+                        set: roundItem.set,
+                        isCurrent: isCurrentSet(
+                            currentSetPosition,
+                            exerciseIndex: roundItem.exerciseIndex,
+                            setIndex: roundItem.setIndex
+                        ),
+                        focusedField: $focusedField,
+                        onMarkedDone: onMarkedDone
+                    )
+                }
+
+                if index < round.items.count - 1 {
+                    Divider()
+                        .overlay(AppTheme.stroke)
+                }
+            }
+        }
+        .padding(16)
+        .background(AppTheme.surfaceElevated, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .stroke(AppTheme.stroke, lineWidth: 1)
+        )
     }
 
     private func setRows(
@@ -208,6 +318,21 @@ struct ActiveWorkoutView: View {
                 onMarkedDone: onMarkedDone
             )
             .id(CurrentWorkoutSetPosition(exerciseIndex: exerciseIndex, setIndex: setIndex))
+        }
+    }
+
+    private func addRound(to block: ActiveWorkoutSupersetBlock) {
+        store.updateActiveSession { current in
+            for item in block.items {
+                guard current.exercises.indices.contains(item.exerciseIndex) else { continue }
+                let fallbackSet = current.exercises[item.exerciseIndex].sets.last
+                current.exercises[item.exerciseIndex].sets.append(
+                    WorkoutSetLog(
+                        reps: fallbackSet?.reps ?? 10,
+                        weight: fallbackSet?.weight ?? 0
+                    )
+                )
+            }
         }
     }
 
@@ -272,19 +397,7 @@ struct ActiveWorkoutView: View {
     }
 
     private func workoutProgress(for session: WorkoutSession) -> WorkoutExerciseProgress {
-        let totalExercises = max(session.exercises.count, 1)
-        let completedExercises = session.exercises.filter { exercise in
-            !exercise.sets.isEmpty && exercise.sets.allSatisfy { $0.completedAt != nil }
-        }.count
-        let remainingExercises = max(session.exercises.count - completedExercises, 0)
-        let currentStep = session.exercises.isEmpty ? 0 : min(completedExercises + (remainingExercises > 0 ? 1 : 0), totalExercises)
-
-        return WorkoutExerciseProgress(
-            total: totalExercises,
-            completed: completedExercises,
-            remaining: remainingExercises,
-            currentStep: currentStep
-        )
+        ActiveWorkoutDisplayResolver.progress(for: displayBlocks(for: session))
     }
 
     private func targetWeightText(for item: WorkoutExerciseLog, session: WorkoutSession) -> String {
@@ -310,13 +423,7 @@ struct ActiveWorkoutView: View {
     }
 
     private func currentSetPosition(in session: WorkoutSession) -> CurrentWorkoutSetPosition? {
-        for (exerciseIndex, exercise) in session.exercises.enumerated() {
-            if let setIndex = exercise.sets.firstIndex(where: { $0.completedAt == nil }) {
-                return CurrentWorkoutSetPosition(exerciseIndex: exerciseIndex, setIndex: setIndex)
-            }
-        }
-
-        return nil
+        ActiveWorkoutDisplayResolver.currentSetPosition(in: displayBlocks(for: session))
     }
 
     private func scrollToCurrentSet(using proxy: ScrollViewProxy) {
@@ -327,6 +434,11 @@ struct ActiveWorkoutView: View {
                 proxy.scrollTo(target, anchor: .center)
             }
         }
+    }
+
+    private func displayBlocks(for session: WorkoutSession) -> [ActiveWorkoutDisplayBlock] {
+        let exercisesByID = Dictionary(uniqueKeysWithValues: store.exercises.map { ($0.id, $0) })
+        return ActiveWorkoutDisplayResolver.buildBlocks(session: session, exercisesByID: exercisesByID)
     }
 }
 
@@ -375,7 +487,7 @@ private struct WorkoutLiveRestText: View {
     }
 }
 
-private struct CurrentWorkoutSetPosition: Hashable {
+struct CurrentWorkoutSetPosition: Hashable, Sendable {
     let exerciseIndex: Int
     let setIndex: Int
 }
@@ -784,7 +896,7 @@ private struct WorkoutMetricPanel<Content: View>: View {
     }
 }
 
-private struct WorkoutExerciseProgress {
+struct WorkoutExerciseProgress {
     let total: Int
     let completed: Int
     let remaining: Int
@@ -908,6 +1020,179 @@ private struct WorkoutExerciseProgressCard: View {
             }
             .padding(.horizontal, edgeInset)
         }
+    }
+}
+
+enum ActiveWorkoutDisplayBlock: Hashable, Identifiable {
+    case regular(ActiveWorkoutRegularBlock)
+    case superset(ActiveWorkoutSupersetBlock)
+
+    var id: UUID {
+        switch self {
+        case .regular(let block):
+            return block.id
+        case .superset(let block):
+            return block.id
+        }
+    }
+
+    var isCompleted: Bool {
+        switch self {
+        case .regular(let block):
+            return block.isCompleted
+        case .superset(let block):
+            return block.isCompleted
+        }
+    }
+}
+
+struct ActiveWorkoutRegularBlock: Hashable, Identifiable {
+    let exerciseIndex: Int
+    let exercise: Exercise
+    let item: WorkoutExerciseLog
+
+    var id: UUID { item.id }
+
+    var isCompleted: Bool {
+        !item.sets.isEmpty && item.sets.allSatisfy { $0.completedAt != nil }
+    }
+}
+
+struct ActiveWorkoutSupersetBlock: Hashable, Identifiable {
+    let id: UUID
+    let items: [ActiveWorkoutSupersetExercise]
+    let rounds: [ActiveWorkoutSupersetRound]
+
+    var isCompleted: Bool {
+        !rounds.isEmpty && rounds.allSatisfy(\.isCompleted)
+    }
+}
+
+struct ActiveWorkoutSupersetExercise: Hashable, Identifiable {
+    let exerciseIndex: Int
+    let exercise: Exercise
+    let item: WorkoutExerciseLog
+
+    var id: UUID { item.id }
+}
+
+struct ActiveWorkoutSupersetRound: Hashable, Identifiable {
+    let groupID: UUID
+    let roundIndex: Int
+    let items: [ActiveWorkoutSupersetRoundItem]
+
+    var id: String { "\(groupID.uuidString)-\(roundIndex)" }
+
+    var isCompleted: Bool {
+        items.allSatisfy(\.isCompleted)
+    }
+}
+
+struct ActiveWorkoutSupersetRoundItem: Hashable, Identifiable {
+    let exerciseIndex: Int
+    let setIndex: Int
+    let exercise: Exercise
+    let item: WorkoutExerciseLog
+    let set: WorkoutSetLog
+
+    var id: CurrentWorkoutSetPosition {
+        CurrentWorkoutSetPosition(exerciseIndex: exerciseIndex, setIndex: setIndex)
+    }
+
+    var isCompleted: Bool {
+        set.completedAt != nil
+    }
+}
+
+enum ActiveWorkoutDisplayResolver {
+    static func buildBlocks(session: WorkoutSession, exercisesByID: [UUID: Exercise]) -> [ActiveWorkoutDisplayBlock] {
+        var result: [ActiveWorkoutDisplayBlock] = []
+        var handledExerciseIndices = Set<Int>()
+
+        for (exerciseIndex, item) in session.exercises.enumerated() {
+            guard !handledExerciseIndices.contains(exerciseIndex),
+                  let exercise = exercisesByID[item.exerciseID] else {
+                continue
+            }
+
+            if item.groupKind == .superset, let groupID = item.groupID {
+                let groupItems = session.exercises.enumerated().compactMap { index, groupItem -> ActiveWorkoutSupersetExercise? in
+                    guard groupItem.groupKind == .superset,
+                          groupItem.groupID == groupID,
+                          let groupExercise = exercisesByID[groupItem.exerciseID] else {
+                        return nil
+                    }
+
+                    return ActiveWorkoutSupersetExercise(
+                        exerciseIndex: index,
+                        exercise: groupExercise,
+                        item: groupItem
+                    )
+                }
+
+                groupItems.forEach { handledExerciseIndices.insert($0.exerciseIndex) }
+
+                if groupItems.count > 1 {
+                    let targetRoundCount = groupItems.first?.item.sets.count ?? 0
+                    let rounds = (0..<targetRoundCount).compactMap { roundIndex -> ActiveWorkoutSupersetRound? in
+                        let roundItems = groupItems.compactMap { groupEntry -> ActiveWorkoutSupersetRoundItem? in
+                            guard groupEntry.item.sets.indices.contains(roundIndex) else { return nil }
+                            return ActiveWorkoutSupersetRoundItem(
+                                exerciseIndex: groupEntry.exerciseIndex,
+                                setIndex: roundIndex,
+                                exercise: groupEntry.exercise,
+                                item: groupEntry.item,
+                                set: groupEntry.item.sets[roundIndex]
+                            )
+                        }
+
+                        guard !roundItems.isEmpty else { return nil }
+                        return ActiveWorkoutSupersetRound(groupID: groupID, roundIndex: roundIndex, items: roundItems)
+                    }
+
+                    result.append(.superset(ActiveWorkoutSupersetBlock(id: groupID, items: groupItems, rounds: rounds)))
+                    continue
+                }
+            }
+
+            handledExerciseIndices.insert(exerciseIndex)
+            result.append(.regular(ActiveWorkoutRegularBlock(exerciseIndex: exerciseIndex, exercise: exercise, item: item)))
+        }
+
+        return result
+    }
+
+    static func currentSetPosition(in blocks: [ActiveWorkoutDisplayBlock]) -> CurrentWorkoutSetPosition? {
+        for block in blocks {
+            switch block {
+            case .regular(let regularBlock):
+                if let setIndex = regularBlock.item.sets.firstIndex(where: { $0.completedAt == nil }) {
+                    return CurrentWorkoutSetPosition(exerciseIndex: regularBlock.exerciseIndex, setIndex: setIndex)
+                }
+            case .superset(let supersetBlock):
+                for round in supersetBlock.rounds {
+                    if let roundItem = round.items.first(where: { !$0.isCompleted }) {
+                        return CurrentWorkoutSetPosition(exerciseIndex: roundItem.exerciseIndex, setIndex: roundItem.setIndex)
+                    }
+                }
+            }
+        }
+
+        return nil
+    }
+
+    static func progress(for blocks: [ActiveWorkoutDisplayBlock]) -> WorkoutExerciseProgress {
+        let totalBlocks = max(blocks.count, 1)
+        let completedBlocks = blocks.filter { $0.isCompleted }.count
+        let remainingBlocks = max(blocks.count - completedBlocks, 0)
+        let currentStep = blocks.isEmpty ? 0 : min(completedBlocks + (remainingBlocks > 0 ? 1 : 0), totalBlocks)
+
+        return WorkoutExerciseProgress(
+            total: totalBlocks,
+            completed: completedBlocks,
+            remaining: remainingBlocks,
+            currentStep: currentStep
+        )
     }
 }
 
