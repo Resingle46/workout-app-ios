@@ -1100,7 +1100,7 @@ struct ActiveWorkoutSupersetRoundItem: Hashable, Identifiable {
     }
 
     var isCompleted: Bool {
-        set.completedAt != nil
+        self.set.completedAt != nil
     }
 }
 
