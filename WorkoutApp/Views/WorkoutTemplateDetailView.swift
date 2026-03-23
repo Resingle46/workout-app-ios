@@ -301,6 +301,25 @@ struct AddExerciseToWorkoutView: View {
         return stagedExercises.filter { $0.groupKind == .superset && $0.groupID == currentSupersetGroupID }.count
     }
 
+    private var catalogRebuildToken: CatalogRebuildToken {
+        CatalogRebuildToken(
+            languageCode: store.selectedLanguageCode,
+            categorySignatures: store.categories.map {
+                CatalogCategorySignature(id: $0.id, nameKey: $0.nameKey, symbol: $0.symbol)
+            },
+            exerciseSignatures: store.exercises.map {
+                CatalogExerciseSignature(id: $0.id, name: $0.name, categoryID: $0.categoryID, equipment: $0.equipment)
+            },
+            customExerciseSignatures: stagedCustomExercises.map {
+                CatalogExerciseSignature(id: $0.id, name: $0.name, categoryID: $0.categoryID, equipment: $0.equipment)
+            }
+        )
+    }
+
+    private var catalogFilterToken: CatalogFilterToken {
+        CatalogFilterToken(query: query, selectedCategoryID: selectedCategoryID)
+    }
+
     private var supersetEnabledBinding: Binding<Bool> {
         Binding(
             get: { isSupersetEnabled },
@@ -318,28 +337,14 @@ struct AddExerciseToWorkoutView: View {
             .sheet(item: $pendingConfiguration) { configuration in
                 configurationSheet(for: configuration)
             }
-            .onAppear {
-                rebuildCatalogIndex()
-            }
-            .onChange(of: store.selectedLanguageCode) { _, _ in
-                rebuildCatalogIndex()
-            }
-            .onChange(of: store.categories) { _, _ in
-                rebuildCatalogIndex()
-            }
-            .onChange(of: store.exercises) { _, _ in
-                rebuildCatalogIndex()
-            }
-            .onChange(of: stagedCustomExercises) { _, _ in
+            .onAppear(perform: rebuildCatalogIndex)
+            .onChange(of: catalogRebuildToken) { _, _ in
                 rebuildCatalogIndex()
             }
             .onChange(of: stagedExercises) { _, _ in
                 refreshSelectedExerciseIDs()
             }
-            .onChange(of: query) { _, _ in
-                refreshFilteredCatalogRows()
-            }
-            .onChange(of: selectedCategoryID) { _, _ in
+            .onChange(of: catalogFilterToken) { _, _ in
                 refreshFilteredCatalogRows()
             }
             .appScreenBackground()
@@ -584,6 +589,31 @@ private struct StagedWorkoutExercise: Identifiable {
     var suggestedWeight: Double
     var groupKind: WorkoutExerciseTemplate.GroupKind
     var groupID: UUID?
+}
+
+private struct CatalogFilterToken: Hashable {
+    let query: String
+    let selectedCategoryID: UUID?
+}
+
+private struct CatalogRebuildToken: Hashable {
+    let languageCode: String
+    let categorySignatures: [CatalogCategorySignature]
+    let exerciseSignatures: [CatalogExerciseSignature]
+    let customExerciseSignatures: [CatalogExerciseSignature]
+}
+
+private struct CatalogCategorySignature: Hashable {
+    let id: UUID
+    let nameKey: String
+    let symbol: String
+}
+
+private struct CatalogExerciseSignature: Hashable {
+    let id: UUID
+    let name: String
+    let categoryID: UUID
+    let equipment: String
 }
 
 private struct PendingExerciseConfiguration: Identifiable {
