@@ -114,7 +114,7 @@ struct ActiveWorkoutView: View {
     ) -> some View {
         let blocks = displayBlocks(for: session)
 
-        LazyVStack(spacing: 16) {
+        return LazyVStack(spacing: 16) {
             ForEach(blocks) { block in
                 switch block {
                 case .regular(let regularBlock):
