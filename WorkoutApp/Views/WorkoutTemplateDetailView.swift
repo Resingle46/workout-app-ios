@@ -21,7 +21,7 @@ struct WorkoutTemplateDetailView: View {
                         header(for: workout)
 
                         if workout.exercises.isEmpty {
-                            AppCard(glowStyle: .programs) {
+                            AppCard {
                                 VStack(alignment: .leading, spacing: 14) {
                                     Text("template.empty_title")
                                         .font(AppTypography.heading(size: 24))
@@ -97,7 +97,7 @@ struct WorkoutTemplateDetailView: View {
     }
 
     private func header(for workout: WorkoutTemplate) -> some View {
-        AppCard(glowStyle: .programs) {
+        AppCard {
             VStack(alignment: .leading, spacing: 16) {
                 Text(workout.title)
                     .font(AppTypography.title(size: 30))
@@ -120,7 +120,7 @@ struct WorkoutTemplateDetailView: View {
     }
 
     private func exerciseGroupCard(_ group: WorkoutExerciseTemplateGroup) -> some View {
-        AppCard(glowStyle: .programs) {
+        AppCard {
             VStack(alignment: .leading, spacing: 16) {
                 if group.isSuperset {
                     HStack {
@@ -299,7 +299,7 @@ struct AddExerciseToWorkoutView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    AppCard(glowStyle: .programs) {
+                    AppCard {
                         VStack(alignment: .leading, spacing: 16) {
                             AppSectionTitle(titleKey: "catalog.search")
 
@@ -337,7 +337,7 @@ struct AddExerciseToWorkoutView: View {
                         }
                     }
 
-                    AppCard(glowStyle: .programs) {
+                    AppCard {
                         VStack(alignment: .leading, spacing: 14) {
                             AppSectionTitle(titleKey: "catalog.results")
 
@@ -608,7 +608,7 @@ struct CreateCustomExerciseView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    AppCard(glowStyle: .programs) {
+                    AppCard {
                         VStack(alignment: .leading, spacing: 16) {
                             AppSectionTitle(titleKey: "exercise.name")
                             TemplateEditorTextField(titleKey: "exercise.name", text: $name)

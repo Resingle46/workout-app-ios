@@ -2,27 +2,39 @@ import SwiftUI
 import UIKit
 
 enum AppTheme {
-    static let background = Color(red: 0.03, green: 0.03, blue: 0.05)
-    static let surface = Color(red: 0.1, green: 0.1, blue: 0.12)
-    static let surfaceElevated = Color(red: 0.14, green: 0.14, blue: 0.17)
-    static let stroke = Color.white.opacity(0.08)
-    static let accent = Color(red: 0.16, green: 0.85, blue: 0.67)
-    static let accentMuted = Color(red: 0.24, green: 0.39, blue: 0.36)
+    static let background = Color(red: 0.02, green: 0.02, blue: 0.03)
+    static let backgroundRaised = Color(red: 0.035, green: 0.035, blue: 0.045)
+    static let surface = Color(red: 0.08, green: 0.08, blue: 0.1)
+    static let surfaceElevated = Color(red: 0.11, green: 0.11, blue: 0.14)
+    static let surfacePressed = Color(red: 0.13, green: 0.13, blue: 0.16)
+    static let border = Color.white.opacity(0.08)
+    static let stroke = border
+    static let accent = Color(red: 0.29, green: 0.58, blue: 0.98)
+    static let accentMuted = Color(red: 0.16, green: 0.21, blue: 0.32)
+    static let success = Color(red: 0.36, green: 0.8, blue: 0.56)
+    static let warning = Color(red: 0.98, green: 0.57, blue: 0.29)
+    static let destructive = Color(red: 0.89, green: 0.3, blue: 0.28)
     static let primaryText = Color.white
-    static let secondaryText = Color.white.opacity(0.65)
-    static let neonBlue = Color(red: 0.21, green: 0.36, blue: 1.0)
-    static let neonViolet = Color(red: 0.55, green: 0.2, blue: 1.0)
-    static let neonCyan = Color(red: 0.22, green: 0.88, blue: 0.96)
-    static let neonLime = Color(red: 0.73, green: 1.0, blue: 0.25)
-    static let neonOrange = Color(red: 0.98, green: 0.48, blue: 0.26)
-    static let cardCornerRadius: CGFloat = 24
+    static let secondaryText = Color.white.opacity(0.68)
+    static let tertiaryText = Color.white.opacity(0.42)
+    static let shadowSubtle = Color.black.opacity(0.3)
+    static let screenGlow = Color(red: 0.22, green: 0.43, blue: 0.76).opacity(0.18)
+    static let cardCornerRadius: CGFloat = 26
+    static let railCornerRadius: CGFloat = 30
+
+    // Compatibility aliases for screens outside the first refactor wave.
+    static let neonBlue = accent
+    static let neonViolet = Color(red: 0.37, green: 0.46, blue: 0.86)
+    static let neonCyan = Color(red: 0.41, green: 0.68, blue: 0.98)
+    static let neonLime = success
+    static let neonOrange = warning
 }
 
 enum AppTypography {
     private static let onestPostScriptName = "Onest-Regular"
 
-    static func pageHeaderTitle(size: CGFloat = 25) -> Font {
-        .custom("PlayfairDisplaySC-Regular", size: size, relativeTo: .title2)
+    static func pageHeaderTitle(size: CGFloat = 30) -> Font {
+        onest(size: size, weight: .heavy, relativeTo: .largeTitle)
     }
 
     static func body(size: CGFloat = 17, weight: AppFontWeight = .regular, relativeTo textStyle: Font.TextStyle = .body) -> Font {
@@ -65,8 +77,22 @@ enum AppTypography {
         let segmented = UISegmentedControl.appearance()
         let normalFont = UIFont(name: onestPostScriptName, size: 14) ?? .systemFont(ofSize: 14, weight: .medium)
         let selectedFont = UIFont(name: onestPostScriptName, size: 14) ?? .systemFont(ofSize: 14, weight: .semibold)
-        segmented.setTitleTextAttributes([.font: normalFont], for: .normal)
-        segmented.setTitleTextAttributes([.font: selectedFont], for: .selected)
+        segmented.backgroundColor = UIColor(red: 0.08, green: 0.08, blue: 0.1, alpha: 1)
+        segmented.selectedSegmentTintColor = UIColor(red: 0.11, green: 0.11, blue: 0.14, alpha: 1)
+        segmented.setTitleTextAttributes(
+            [
+                .font: normalFont,
+                .foregroundColor: UIColor(white: 1, alpha: 0.68)
+            ],
+            for: .normal
+        )
+        segmented.setTitleTextAttributes(
+            [
+                .font: selectedFont,
+                .foregroundColor: UIColor.white
+            ],
+            for: .selected
+        )
     }
 
     private static func onest(size: CGFloat, weight: AppFontWeight, relativeTo textStyle: Font.TextStyle) -> Font {
@@ -100,12 +126,24 @@ enum AppFontWeight {
     }
 }
 
-enum AppCardGlowStyle {
-    case neutral
-    case programs
-    case workout
-    case statistics
-    case profile
+enum TabBarPresentationMode: Equatable {
+    case expanded
+    case collapsedWorkout
+    case expandedFromWorkout
+}
+
+struct RootTabBarPresentationResolver {
+    static func resolve(
+        selectedTab: RootTab,
+        hasActiveWorkout: Bool,
+        workoutTabsExpanded: Bool
+    ) -> TabBarPresentationMode {
+        guard hasActiveWorkout, selectedTab == .workout else {
+            return .expanded
+        }
+
+        return workoutTabsExpanded ? .expandedFromWorkout : .collapsedWorkout
+    }
 }
 
 @MainActor
@@ -114,6 +152,15 @@ struct RootTabView: View {
     @State private var showBackupSetupPrompt = false
     @State private var launchBackupPickerMode: BackupDocumentPickerMode?
     @State private var launchRestoreRequest: BackupRestoreRequest?
+    @State private var workoutTabsExpanded = false
+
+    private var tabBarPresentationMode: TabBarPresentationMode {
+        RootTabBarPresentationResolver.resolve(
+            selectedTab: store.selectedTab,
+            hasActiveWorkout: store.activeSession != nil,
+            workoutTabsExpanded: workoutTabsExpanded
+        )
+    }
 
     var body: some View {
         @Bindable var store = store
@@ -135,13 +182,23 @@ struct RootTabView: View {
                 .tag(RootTab.profile)
                 .tabItem { Label("tab.profile", systemImage: "person.crop.circle") }
         }
-        .tint(.white)
+        .toolbar(.hidden, for: .tabBar)
         .environment(\.locale, store.locale)
-        .toolbarColorScheme(.dark, for: .tabBar)
-        .toolbarBackground(.visible, for: .tabBar)
-        .toolbarBackground(AppTheme.surface, for: .tabBar)
         .onChange(of: store.shouldPromptForBackupSetup, initial: true) { _, newValue in
             showBackupSetupPrompt = newValue
+        }
+        .onChange(of: store.selectedTab) { _, newValue in
+            if newValue != .workout {
+                workoutTabsExpanded = false
+            }
+        }
+        .onChange(of: store.activeSession?.id) { _, newValue in
+            if newValue == nil {
+                workoutTabsExpanded = false
+            }
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            bottomRail
         }
         .confirmationDialog("backup.setup.title", isPresented: $showBackupSetupPrompt, titleVisibility: .visible) {
             Button("backup.setup.choose_folder") {
@@ -180,29 +237,63 @@ struct RootTabView: View {
             )
         }
     }
+
+    @ViewBuilder
+    private var bottomRail: some View {
+        switch tabBarPresentationMode {
+        case .collapsedWorkout:
+            AppCollapsedWorkoutTabBar(
+                sessionTitle: store.activeSession?.title ?? NSLocalizedString("header.workout.subtitle", comment: "")
+            ) {
+                workoutTabsExpanded = true
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+            .padding(.bottom, 10)
+
+        case .expanded, .expandedFromWorkout:
+            AppExpandedTabBar(
+                selectedTab: store.selectedTab,
+                presentationMode: tabBarPresentationMode,
+                onSelect: { tab in
+                    if tab != .workout {
+                        workoutTabsExpanded = false
+                    }
+                    store.selectedTab = tab
+                },
+                onToggleWorkoutTabs: {
+                    workoutTabsExpanded.toggle()
+                }
+            )
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+            .padding(.bottom, 10)
+        }
+    }
 }
 
 struct AppCard<Content: View>: View {
-    let glowStyle: AppCardGlowStyle
+    let padding: CGFloat
     let content: Content
 
-    init(glowStyle: AppCardGlowStyle = .neutral, @ViewBuilder content: () -> Content) {
-        self.glowStyle = glowStyle
+    init(padding: CGFloat = 20, @ViewBuilder content: () -> Content) {
+        self.padding = padding
         self.content = content()
     }
 
     var body: some View {
         content
             .font(AppTypography.body())
-            .appLiquidGlassCard(glowStyle: glowStyle)
+            .appSurfaceCard(padding: padding)
     }
 }
 
 struct AppSectionTitle: View {
     let titleKey: LocalizedStringKey
+
     var body: some View {
         Text(titleKey)
-            .font(AppTypography.label())
+            .font(AppTypography.label(size: 11, weight: .semibold))
             .foregroundStyle(AppTheme.secondaryText)
             .textCase(.uppercase)
             .tracking(1.2)
@@ -210,122 +301,52 @@ struct AppSectionTitle: View {
 }
 
 struct AppPageHeaderModule: View {
-    @Environment(\.locale) private var locale
-
     let titleKey: LocalizedStringKey
     let subtitleKey: LocalizedStringKey?
-
-    private var headerBarHeight: CGFloat {
-        subtitleKey == nil ? 46 : 54
-    }
-
-    private var headerFadeHeight: CGFloat {
-        subtitleKey == nil ? 26 : 38
-    }
-
-    private var titleFontSize: CGFloat {
-        subtitleKey == nil ? 21 : 22
-    }
-
-    private var titleTopPadding: CGFloat {
-        subtitleKey == nil ? 7 : 1
-    }
-
-    private var contentSpacing: CGFloat {
-        subtitleKey == nil ? 0 : 4
-    }
-
-    private var bottomOverlap: CGFloat {
-        subtitleKey == nil ? -6 : -12
-    }
-
-    private var usesRussianHeaderMetrics: Bool {
-        locale.identifier.lowercased().hasPrefix("ru")
-    }
-
-    private var titleTracking: CGFloat {
-        usesRussianHeaderMetrics ? 1.6 : 2.8
-    }
-
-    private var subtitleTracking: CGFloat {
-        usesRussianHeaderMetrics ? 2.2 : 3.8
-    }
-
-    private var subtitleFontSize: CGFloat {
-        usesRussianHeaderMetrics ? 10 : 10.5
-    }
+    private let trailingAction: AnyView?
 
     init(titleKey: LocalizedStringKey, subtitleKey: LocalizedStringKey? = nil) {
         self.titleKey = titleKey
         self.subtitleKey = subtitleKey
+        self.trailingAction = nil
+    }
+
+    init<Trailing: View>(
+        titleKey: LocalizedStringKey,
+        subtitleKey: LocalizedStringKey? = nil,
+        @ViewBuilder trailing: () -> Trailing
+    ) {
+        self.titleKey = titleKey
+        self.subtitleKey = subtitleKey
+        self.trailingAction = AnyView(trailing())
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            Color.black
-                .frame(height: headerBarHeight)
-                .overlay(alignment: .top) {
-                    VStack(spacing: contentSpacing) {
-                        Text(titleKey)
-                            .font(AppTypography.pageHeaderTitle(size: titleFontSize))
-                            .foregroundStyle(AppTheme.primaryText)
-                            .multilineTextAlignment(.center)
-                            .tracking(titleTracking)
-                            .textCase(.uppercase)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.84)
-                            .allowsTightening(true)
+        HStack(alignment: .top, spacing: 16) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(titleKey)
+                    .font(AppTypography.pageHeaderTitle())
+                    .foregroundStyle(AppTheme.primaryText)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.82)
 
-                        if let subtitleKey {
-                            Text(subtitleKey)
-                                .font(.system(size: subtitleFontSize, weight: .medium, design: .rounded))
-                                .foregroundStyle(AppTheme.secondaryText)
-                                .multilineTextAlignment(.center)
-                                .tracking(subtitleTracking)
-                                .textCase(.uppercase)
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.8)
-                                .allowsTightening(true)
-
-                            Rectangle()
-                                .fill(
-                                    LinearGradient(
-                                        colors: [
-                                            AppTheme.neonViolet.opacity(0),
-                                            AppTheme.neonViolet.opacity(0.32),
-                                            AppTheme.neonBlue.opacity(0.28),
-                                            AppTheme.neonCyan.opacity(0.24),
-                                            AppTheme.neonLime.opacity(0)
-                                        ],
-                                        startPoint: .leading,
-                                        endPoint: .trailing
-                                    )
-                                )
-                                .frame(width: 132, height: 1.4)
-                                .clipShape(Capsule())
-                                .opacity(0.62)
-                                .padding(.top, 1)
-                        }
-                    }
-                    .padding(.top, titleTopPadding)
+                if let subtitleKey {
+                    Text(subtitleKey)
+                        .font(AppTypography.body(size: 15, weight: .medium, relativeTo: .subheadline))
+                        .foregroundStyle(AppTheme.secondaryText)
+                        .lineLimit(2)
                 }
+            }
 
-            LinearGradient(
-                colors: [
-                    Color.black,
-                    Color.black.opacity(0.86),
-                    Color.black.opacity(0.62),
-                    AppTheme.background.opacity(0.28),
-                    AppTheme.background.opacity(0)
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .frame(height: headerFadeHeight)
+            Spacer(minLength: 12)
+
+            if let trailingAction {
+                trailingAction
+            }
         }
-        .padding(.horizontal, -20)
-        .padding(.bottom, bottomOverlap)
-        .frame(maxWidth: .infinity, alignment: .top)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.top, 6)
+        .padding(.bottom, 6)
     }
 }
 
@@ -333,12 +354,13 @@ struct AppPrimaryButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(AppTypography.button())
-            .foregroundStyle(Color.black)
+            .foregroundStyle(Color.white)
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 18)
-            .background(Color.white.opacity(configuration.isPressed ? 0.82 : 1), in: Capsule())
-            .scaleEffect(configuration.isPressed ? 0.99 : 1)
-            .animation(.easeOut(duration: 0.16), value: configuration.isPressed)
+            .padding(.vertical, 17)
+            .background(
+                configuration.isPressed ? AppTheme.accent.opacity(0.86) : AppTheme.accent,
+                in: Capsule()
+            )
     }
 }
 
@@ -349,13 +371,14 @@ struct AppSecondaryButtonStyle: ButtonStyle {
             .foregroundStyle(AppTheme.primaryText)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 16)
-            .background(AppTheme.surfaceElevated.opacity(configuration.isPressed ? 0.8 : 1), in: Capsule())
+            .background(
+                configuration.isPressed ? AppTheme.surfacePressed : AppTheme.surfaceElevated,
+                in: Capsule()
+            )
             .overlay(
                 Capsule()
-                    .stroke(Color.white.opacity(0.14), lineWidth: 1)
+                    .stroke(AppTheme.border, lineWidth: 1)
             )
-            .scaleEffect(configuration.isPressed ? 0.99 : 1)
-            .animation(.easeOut(duration: 0.16), value: configuration.isPressed)
     }
 }
 
@@ -366,29 +389,26 @@ struct AppOutlinedButtonStyle: ButtonStyle {
             .foregroundStyle(AppTheme.primaryText)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 18)
-            .background(AppTheme.surface.opacity(configuration.isPressed ? 0.75 : 1), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .background(
+                configuration.isPressed ? AppTheme.surfacePressed : AppTheme.surface,
+                in: RoundedRectangle(cornerRadius: 22, style: .continuous)
+            )
             .overlay(
                 RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .stroke(Color.white.opacity(0.28), lineWidth: 2)
+                    .stroke(Color.white.opacity(0.18), lineWidth: 1)
             )
-            .scaleEffect(configuration.isPressed ? 0.99 : 1)
-            .animation(.easeOut(duration: 0.16), value: configuration.isPressed)
     }
 }
 
 extension View {
-    func appLiquidGlassCard(
-        glowStyle: AppCardGlowStyle = .neutral,
-        padding: CGFloat = 18,
-        cornerRadius: CGFloat = AppTheme.cardCornerRadius,
-        shadowColor: Color = Color.black.opacity(0.26)
+    func appSurfaceCard(
+        padding: CGFloat = 20,
+        cornerRadius: CGFloat = AppTheme.cardCornerRadius
     ) -> some View {
         modifier(
-            AppLiquidGlassCardModifier(
-                glowStyle: glowStyle,
+            AppSurfaceCardModifier(
                 padding: padding,
-                cornerRadius: cornerRadius,
-                shadowColor: shadowColor
+                cornerRadius: cornerRadius
             )
         )
     }
@@ -398,191 +418,9 @@ extension View {
     }
 }
 
-private struct AppLiquidGlassCardModifier: ViewModifier {
-    let glowStyle: AppCardGlowStyle
+private struct AppSurfaceCardModifier: ViewModifier {
     let padding: CGFloat
     let cornerRadius: CGFloat
-    let shadowColor: Color
-
-    private var borderPalette: AppLiquidGlassBorderPalette {
-        switch glowStyle {
-        case .neutral:
-            AppLiquidGlassBorderPalette(
-                rimColors: [
-                    Color.white.opacity(0.42),
-                    AppTheme.neonBlue.opacity(0.22),
-                    Color.white.opacity(0.1),
-                    AppTheme.neonViolet.opacity(0.18),
-                    Color.white.opacity(0.38)
-                ],
-                edgeGlowColors: [
-                    Color.white.opacity(0.06),
-                    AppTheme.neonBlue.opacity(0.08),
-                    Color.clear,
-                    AppTheme.neonViolet.opacity(0.08),
-                    Color.white.opacity(0.05)
-                ],
-                highlightColors: [
-                    Color.white.opacity(0.22),
-                    Color.white.opacity(0.03),
-                    Color.clear
-                ],
-                rimStart: UnitPoint(x: 0.04, y: 0.06),
-                rimEnd: UnitPoint(x: 0.94, y: 0.92),
-                edgeStart: UnitPoint(x: 0.84, y: 0.04),
-                edgeEnd: UnitPoint(x: 0.1, y: 0.96),
-                highlightStart: UnitPoint(x: 0.12, y: 0.04),
-                highlightEnd: UnitPoint(x: 0.9, y: 0.94)
-            )
-        case .programs:
-            AppLiquidGlassBorderPalette(
-                rimColors: [
-                    Color.white.opacity(0.5),
-                    AppTheme.neonCyan.opacity(0.28),
-                    AppTheme.neonLime.opacity(0.1),
-                    Color.white.opacity(0.08),
-                    AppTheme.neonBlue.opacity(0.16),
-                    Color.white.opacity(0.44)
-                ],
-                edgeGlowColors: [
-                    Color.white.opacity(0.08),
-                    AppTheme.neonCyan.opacity(0.1),
-                    AppTheme.neonLime.opacity(0.04),
-                    Color.clear,
-                    Color.white.opacity(0.05)
-                ],
-                highlightColors: [
-                    Color.white.opacity(0.26),
-                    AppTheme.neonCyan.opacity(0.05),
-                    Color.clear
-                ],
-                rimStart: UnitPoint(x: 0.02, y: 0.1),
-                rimEnd: UnitPoint(x: 0.94, y: 0.88),
-                edgeStart: UnitPoint(x: 0.9, y: 0.08),
-                edgeEnd: UnitPoint(x: 0.08, y: 0.94),
-                highlightStart: UnitPoint(x: 0.05, y: 0.08),
-                highlightEnd: UnitPoint(x: 0.86, y: 0.94)
-            )
-        case .workout:
-            AppLiquidGlassBorderPalette(
-                rimColors: [
-                    Color.white.opacity(0.42),
-                    AppTheme.neonBlue.opacity(0.22),
-                    AppTheme.neonCyan.opacity(0.16),
-                    Color.white.opacity(0.08),
-                    AppTheme.neonViolet.opacity(0.24),
-                    Color.white.opacity(0.44)
-                ],
-                edgeGlowColors: [
-                    Color.white.opacity(0.05),
-                    AppTheme.neonBlue.opacity(0.1),
-                    AppTheme.neonCyan.opacity(0.06),
-                    Color.clear,
-                    AppTheme.neonViolet.opacity(0.07)
-                ],
-                highlightColors: [
-                    Color.clear,
-                    Color.white.opacity(0.08),
-                    AppTheme.neonBlue.opacity(0.14),
-                    Color.white.opacity(0.08),
-                    Color.clear
-                ],
-                rimStart: UnitPoint(x: 0.08, y: 0.02),
-                rimEnd: UnitPoint(x: 0.96, y: 0.96),
-                edgeStart: UnitPoint(x: 0.92, y: 0.06),
-                edgeEnd: UnitPoint(x: 0.18, y: 0.98),
-                highlightStart: UnitPoint(x: 0.42, y: 0.02),
-                highlightEnd: UnitPoint(x: 1.0, y: 0.92)
-            )
-        case .statistics:
-            AppLiquidGlassBorderPalette(
-                rimColors: [
-                    Color.white.opacity(0.42),
-                    AppTheme.neonViolet.opacity(0.24),
-                    AppTheme.neonBlue.opacity(0.16),
-                    Color.white.opacity(0.08),
-                    AppTheme.neonCyan.opacity(0.14),
-                    Color.white.opacity(0.42)
-                ],
-                edgeGlowColors: [
-                    Color.white.opacity(0.05),
-                    AppTheme.neonViolet.opacity(0.1),
-                    AppTheme.neonBlue.opacity(0.07),
-                    Color.clear,
-                    AppTheme.neonCyan.opacity(0.05)
-                ],
-                highlightColors: [
-                    Color.white.opacity(0.18),
-                    AppTheme.neonViolet.opacity(0.06),
-                    Color.clear
-                ],
-                rimStart: UnitPoint(x: 0.1, y: 0.04),
-                rimEnd: UnitPoint(x: 0.92, y: 0.94),
-                edgeStart: UnitPoint(x: 0.88, y: 0.06),
-                edgeEnd: UnitPoint(x: 0.14, y: 0.94),
-                highlightStart: UnitPoint(x: 0.18, y: 0.02),
-                highlightEnd: UnitPoint(x: 0.96, y: 0.92)
-            )
-        case .profile:
-            AppLiquidGlassBorderPalette(
-                rimColors: [
-                    Color.white.opacity(0.46),
-                    Color.white.opacity(0.1),
-                    AppTheme.neonCyan.opacity(0.16),
-                    AppTheme.neonBlue.opacity(0.08),
-                    Color.white.opacity(0.42)
-                ],
-                edgeGlowColors: [
-                    Color.white.opacity(0.06),
-                    AppTheme.neonCyan.opacity(0.08),
-                    Color.clear,
-                    AppTheme.neonBlue.opacity(0.04),
-                    Color.white.opacity(0.05)
-                ],
-                highlightColors: [
-                    Color.white.opacity(0.24),
-                    Color.white.opacity(0.04),
-                    Color.clear
-                ],
-                rimStart: UnitPoint(x: 0.06, y: 0.04),
-                rimEnd: UnitPoint(x: 0.9, y: 0.96),
-                edgeStart: UnitPoint(x: 0.82, y: 0.08),
-                edgeEnd: UnitPoint(x: 0.08, y: 0.92),
-                highlightStart: UnitPoint(x: 0.1, y: 0.04),
-                highlightEnd: UnitPoint(x: 0.84, y: 0.96)
-            )
-        }
-    }
-
-    private var primaryGlowColors: [Color] {
-        switch glowStyle {
-        case .neutral:
-            [Color.white.opacity(0.05), AppTheme.neonBlue.opacity(0.05), .clear]
-        case .programs:
-            [AppTheme.neonCyan.opacity(0.08), AppTheme.neonLime.opacity(0.04), .clear]
-        case .workout:
-            [AppTheme.neonBlue.opacity(0.08), AppTheme.neonCyan.opacity(0.05), .clear]
-        case .statistics:
-            [AppTheme.neonViolet.opacity(0.08), AppTheme.neonBlue.opacity(0.04), .clear]
-        case .profile:
-            [Color.white.opacity(0.05), AppTheme.neonCyan.opacity(0.035), .clear]
-        }
-    }
-
-    private var secondaryGlowColors: [Color] {
-        switch glowStyle {
-        case .neutral:
-            [Color.clear, Color.white.opacity(0.03), Color.black.opacity(0.12)]
-        case .programs:
-            [Color.clear, AppTheme.neonBlue.opacity(0.025), Color.black.opacity(0.12)]
-        case .workout:
-            [Color.clear, AppTheme.neonViolet.opacity(0.03), Color.black.opacity(0.14)]
-        case .statistics:
-            [Color.clear, AppTheme.neonCyan.opacity(0.02), Color.black.opacity(0.12)]
-        case .profile:
-            [Color.clear, Color.white.opacity(0.025), Color.black.opacity(0.12)]
-        }
-    }
 
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
@@ -595,9 +433,8 @@ private struct AppLiquidGlassCardModifier: ViewModifier {
                     .fill(
                         LinearGradient(
                             colors: [
-                                AppTheme.surfaceElevated.opacity(0.7),
-                                AppTheme.surface.opacity(0.92),
-                                Color.black.opacity(0.86)
+                                AppTheme.surfaceElevated,
+                                AppTheme.surface
                             ],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
@@ -608,135 +445,44 @@ private struct AppLiquidGlassCardModifier: ViewModifier {
                             .fill(
                                 LinearGradient(
                                     colors: [
-                                        Color.white.opacity(0.012),
+                                        Color.white.opacity(0.03),
                                         Color.clear,
-                                        Color.black.opacity(0.18)
+                                        Color.black.opacity(0.12)
                                     ],
                                     startPoint: .topLeading,
                                     endPoint: .bottomTrailing
                                 )
                             )
                     }
-                    .overlay {
-                        shape
-                            .fill(
-                                RadialGradient(
-                                    colors: primaryGlowColors,
-                                    center: .topLeading,
-                                    startRadius: 4,
-                                    endRadius: 220
-                                )
-                            )
-                            .blendMode(.screen)
-                    }
-                    .overlay {
-                        shape
-                            .fill(
-                                LinearGradient(
-                                    colors: secondaryGlowColors,
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                )
-                            )
-                            .blendMode(.screen)
-                    }
             }
             .overlay {
                 shape
-                    .strokeBorder(
-                        LinearGradient(
-                            colors: borderPalette.rimColors,
-                            startPoint: borderPalette.rimStart,
-                            endPoint: borderPalette.rimEnd
-                        ),
-                        lineWidth: 0.95
-                    )
-                    .overlay {
-                        shape
-                            .strokeBorder(
-                                LinearGradient(
-                                    colors: borderPalette.highlightColors,
-                                    startPoint: borderPalette.highlightStart,
-                                    endPoint: borderPalette.highlightEnd
-                                ),
-                                lineWidth: 0.75
-                            )
-                            .blendMode(.screen)
-                            .opacity(0.78)
-                    }
-                    .overlay {
-                        shape
-                            .strokeBorder(
-                                LinearGradient(
-                                    colors: borderPalette.edgeGlowColors,
-                                    startPoint: borderPalette.edgeStart,
-                                    endPoint: borderPalette.edgeEnd
-                                ),
-                                lineWidth: 1.2
-                            )
-                            .opacity(0.5)
-                    }
+                    .stroke(AppTheme.border, lineWidth: 1)
             }
-            .shadow(color: shadowColor, radius: 16, y: 8)
+            .shadow(color: AppTheme.shadowSubtle, radius: 14, y: 8)
     }
 }
 
-private struct AppLiquidGlassBorderPalette {
-    let rimColors: [Color]
-    let edgeGlowColors: [Color]
-    let highlightColors: [Color]
-    let rimStart: UnitPoint
-    let rimEnd: UnitPoint
-    let edgeStart: UnitPoint
-    let edgeEnd: UnitPoint
-    let highlightStart: UnitPoint
-    let highlightEnd: UnitPoint
-}
-
 struct AppInteractiveCardButtonStyle: ButtonStyle {
-    var pressedScale: CGFloat = 0.985
+    var pressedOpacity: Double = 0.94
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .scaleEffect(configuration.isPressed ? pressedScale : 1)
+            .opacity(configuration.isPressed ? pressedOpacity : 1)
             .overlay {
                 RoundedRectangle(
                     cornerRadius: AppTheme.cardCornerRadius + 2,
                     style: .continuous
                 )
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            Color.white.opacity(configuration.isPressed ? 0.05 : 0),
-                            Color.white.opacity(configuration.isPressed ? 0.018 : 0),
-                            Color.clear
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
+                .fill(Color.white.opacity(configuration.isPressed ? 0.02 : 0))
             }
-            .overlay {
-                RoundedRectangle(
-                    cornerRadius: AppTheme.cardCornerRadius + 2,
-                    style: .continuous
-                )
-                .stroke(
-                    Color.white.opacity(configuration.isPressed ? 0.12 : 0),
-                    lineWidth: 1
-                )
-            }
-            .animation(
-                .spring(response: 0.24, dampingFraction: 0.84),
-                value: configuration.isPressed
-            )
     }
 }
 
 private struct AppScreenBackgroundModifier: ViewModifier {
     func body(content: Content) -> some View {
         ZStack {
-            AppAmbientBackground()
+            AppStaticScreenBackground()
             content
         }
         .foregroundStyle(AppTheme.primaryText)
@@ -744,7 +490,7 @@ private struct AppScreenBackgroundModifier: ViewModifier {
     }
 }
 
-private struct AppAmbientBackground: View {
+private struct AppStaticScreenBackground: View {
     var body: some View {
         GeometryReader { proxy in
             let width = proxy.size.width
@@ -755,156 +501,195 @@ private struct AppAmbientBackground: View {
                     colors: [
                         Color.black,
                         AppTheme.background,
-                        Color(red: 0.02, green: 0.02, blue: 0.04)
+                        AppTheme.backgroundRaised
                     ],
                     startPoint: .top,
                     endPoint: .bottom
                 )
 
-                ambientBlob(
+                RadialGradient(
                     colors: [
-                        AppTheme.neonOrange.opacity(0.2),
-                        AppTheme.neonViolet.opacity(0.1),
+                        AppTheme.screenGlow,
                         Color.clear
                     ],
-                    size: CGSize(width: width * 0.58, height: height * 0.2),
-                    offset: settledOffset(
-                        from: CGSize(width: -width * 0.34, height: -height * 0.08),
-                        to: CGSize(width: -width * 0.12, height: height * 0.06)
-                    ),
-                    blur: 84
+                    center: UnitPoint(x: 0.5, y: 0.34),
+                    startRadius: 0,
+                    endRadius: max(width, height) * 0.62
                 )
-
-                ambientBlob(
-                    colors: [
-                        AppTheme.neonBlue.opacity(0.16),
-                        AppTheme.neonCyan.opacity(0.12),
-                        Color.clear
-                    ],
-                    size: CGSize(width: width * 0.52, height: height * 0.18),
-                    offset: settledOffset(
-                        from: CGSize(width: width * 0.34, height: -height * 0.06),
-                        to: CGSize(width: width * 0.16, height: height * 0.1)
-                    ),
-                    blur: 78
-                )
-
-                ambientBlob(
-                    colors: [
-                        AppTheme.neonViolet.opacity(0.16),
-                        AppTheme.neonBlue.opacity(0.1),
-                        Color.clear
-                    ],
-                    size: CGSize(width: width * 0.44, height: height * 0.2),
-                    offset: settledOffset(
-                        from: CGSize(width: -width * 0.2, height: height * 0.38),
-                        to: CGSize(width: -width * 0.06, height: height * 0.24)
-                    ),
-                    blur: 82
-                )
-
-                ambientBlob(
-                    colors: [
-                        AppTheme.neonLime.opacity(0.14),
-                        AppTheme.neonCyan.opacity(0.08),
-                        Color.clear
-                    ],
-                    size: CGSize(width: width * 0.46, height: height * 0.19),
-                    offset: settledOffset(
-                        from: CGSize(width: width * 0.28, height: height * 0.34),
-                        to: CGSize(width: width * 0.12, height: height * 0.18)
-                    ),
-                    blur: 76
-                )
-
-                ambientBlob(
-                    colors: [
-                        AppTheme.neonCyan.opacity(0.14),
-                        AppTheme.neonBlue.opacity(0.1),
-                        Color.clear
-                    ],
-                    size: CGSize(width: width * 0.44, height: height * 0.18),
-                    offset: settledOffset(
-                        from: CGSize(width: -width * 0.28, height: height * 0.14),
-                        to: CGSize(width: -width * 0.08, height: height * 0.02)
-                    ),
-                    blur: 72
-                )
-
-                ambientBlob(
-                    colors: [
-                        AppTheme.neonViolet.opacity(0.1),
-                        AppTheme.neonOrange.opacity(0.08),
-                        Color.clear
-                    ],
-                    size: CGSize(width: width * 0.4, height: height * 0.16),
-                    offset: settledOffset(
-                        from: CGSize(width: width * 0.08, height: height * 0.58),
-                        to: CGSize(width: width * 0.18, height: height * 0.42)
-                    ),
-                    blur: 70
-                )
+                .scaleEffect(x: 1.25, y: 0.78)
 
                 LinearGradient(
                     colors: [
-                        Color.black.opacity(0.04),
-                        AppTheme.background.opacity(0.12),
-                        Color.black.opacity(0.08)
+                        Color.black.opacity(0.2),
+                        Color.clear,
+                        Color.black.opacity(0.26)
                     ],
                     startPoint: .top,
                     endPoint: .bottom
                 )
-
-                VStack(spacing: 0) {
-                    LinearGradient(
-                        colors: [
-                            Color.black,
-                            Color.black,
-                            Color.black.opacity(0.94),
-                            AppTheme.background.opacity(0.55),
-                            Color.clear
-                        ],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                    .frame(height: min(height * 0.28, 220))
-
-                    Spacer()
-                }
-
-                Color.black.opacity(0.015)
             }
             .ignoresSafeArea()
         }
         .allowsHitTesting(false)
     }
+}
 
-    private func settledOffset(from start: CGSize, to end: CGSize) -> CGSize {
-        CGSize(
-            width: (start.width + end.width) / 2,
-            height: (start.height + end.height) / 2
-        )
+private struct AppExpandedTabBar: View {
+    let selectedTab: RootTab
+    let presentationMode: TabBarPresentationMode
+    let onSelect: (RootTab) -> Void
+    let onToggleWorkoutTabs: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            HStack(spacing: 8) {
+                ForEach(RootTab.allCases, id: \.self) { tab in
+                    Button {
+                        onSelect(tab)
+                    } label: {
+                        tabCell(for: tab)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(8)
+            .frame(maxWidth: .infinity)
+            .background(tabBarBackground)
+
+            if presentationMode == .expandedFromWorkout {
+                Button(action: onToggleWorkoutTabs) {
+                    Text("tabbar.tabs")
+                        .font(AppTypography.label(size: 12, weight: .semibold))
+                        .foregroundStyle(AppTheme.primaryText)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 14)
+                }
+                .buttonStyle(.plain)
+                .background(tabBarBackground)
+            }
+        }
     }
 
-    private func ambientBlob(
-        colors: [Color],
-        size: CGSize,
-        offset: CGSize,
-        blur: CGFloat
-    ) -> some View {
-        Ellipse()
-            .fill(
-                RadialGradient(
-                    colors: colors,
-                    center: .center,
-                    startRadius: 12,
-                    endRadius: max(size.width, size.height) * 0.52
-                )
+    private var tabBarBackground: some View {
+        RoundedRectangle(cornerRadius: AppTheme.railCornerRadius, style: .continuous)
+            .fill(AppTheme.backgroundRaised.opacity(0.98))
+            .overlay(
+                RoundedRectangle(cornerRadius: AppTheme.railCornerRadius, style: .continuous)
+                    .stroke(AppTheme.border, lineWidth: 1)
             )
-            .frame(width: size.width, height: size.height)
-            .offset(offset)
-            .blur(radius: blur)
-            .blendMode(.screen)
+            .shadow(color: AppTheme.shadowSubtle, radius: 16, y: 10)
+    }
+
+    private func tabCell(for tab: RootTab) -> some View {
+        let isSelected = selectedTab == tab
+
+        return VStack(spacing: 6) {
+            Image(systemName: tab.systemImage)
+                .font(AppTypography.icon(size: 18, weight: .semibold))
+            Text(tab.titleKey)
+                .font(AppTypography.label(size: 11, weight: .semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+        }
+        .foregroundStyle(isSelected ? AppTheme.primaryText : AppTheme.secondaryText)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 12)
+        .background(
+            Group {
+                if isSelected {
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .fill(AppTheme.accent.opacity(0.26))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                                .stroke(AppTheme.accent.opacity(0.55), lineWidth: 1)
+                        )
+                } else {
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .fill(Color.clear)
+                }
+            }
+        )
+    }
+}
+
+private struct AppCollapsedWorkoutTabBar: View {
+    let sessionTitle: String
+    let onShowTabs: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            HStack(spacing: 12) {
+                Image(systemName: RootTab.workout.systemImage)
+                    .font(AppTypography.icon(size: 18, weight: .semibold))
+                    .foregroundStyle(AppTheme.accent)
+                    .frame(width: 38, height: 38)
+                    .background(AppTheme.accent.opacity(0.14), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(RootTab.workout.titleKey)
+                        .font(AppTypography.body(size: 16, weight: .semibold))
+                        .foregroundStyle(AppTheme.primaryText)
+                    Text(sessionTitle)
+                        .font(AppTypography.caption(size: 13, weight: .medium))
+                        .foregroundStyle(AppTheme.secondaryText)
+                        .lineLimit(1)
+                }
+            }
+
+            Spacer(minLength: 12)
+
+            Button(action: onShowTabs) {
+                Text("tabbar.tabs")
+                    .font(AppTypography.label(size: 12, weight: .semibold))
+                    .foregroundStyle(AppTheme.primaryText)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    .background(AppTheme.surfaceElevated, in: Capsule())
+                    .overlay(
+                        Capsule()
+                            .stroke(AppTheme.border, lineWidth: 1)
+                    )
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: AppTheme.railCornerRadius, style: .continuous)
+                .fill(AppTheme.backgroundRaised.opacity(0.98))
+                .overlay(
+                    RoundedRectangle(cornerRadius: AppTheme.railCornerRadius, style: .continuous)
+                        .stroke(AppTheme.border, lineWidth: 1)
+                )
+                .shadow(color: AppTheme.shadowSubtle, radius: 16, y: 10)
+        )
+    }
+}
+
+private extension RootTab {
+    var systemImage: String {
+        switch self {
+        case .programs:
+            return "list.clipboard"
+        case .workout:
+            return "timer"
+        case .statistics:
+            return "chart.line.uptrend.xyaxis"
+        case .profile:
+            return "person.crop.circle"
+        }
+    }
+
+    var titleKey: LocalizedStringKey {
+        switch self {
+        case .programs:
+            return "tab.programs"
+        case .workout:
+            return "tab.workout"
+        case .statistics:
+            return "tab.statistics"
+        case .profile:
+            return "tab.profile"
+        }
     }
 }
 
@@ -913,6 +698,7 @@ extension Double {
         if truncatingRemainder(dividingBy: 1) == 0 {
             return String(Int(self))
         }
+
         return String(format: "%.1f", self)
     }
 }

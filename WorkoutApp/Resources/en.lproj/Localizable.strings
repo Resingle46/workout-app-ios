@@ -2,6 +2,7 @@
 "tab.workout" = "Workout";
 "tab.statistics" = "Statistics";
 "tab.profile" = "Profile";
+"tabbar.tabs" = "Tabs";
 
 "header.programs.title" = "Programs";
 "header.programs.subtitle" = "Training Archive";

@@ -1,6 +1,6 @@
 import Foundation
 
-enum RootTab: Hashable, Sendable {
+enum RootTab: CaseIterable, Hashable, Sendable {
     case programs
     case workout
     case statistics

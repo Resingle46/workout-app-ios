@@ -59,7 +59,7 @@ struct ActiveWorkoutView: View {
             VStack(alignment: .leading, spacing: 18) {
                 AppPageHeaderModule(titleKey: "header.workout.title", subtitleKey: "header.workout.subtitle")
 
-                AppCard(glowStyle: .workout) {
+                AppCard {
                     VStack(alignment: .leading, spacing: 12) {
                         Text("workout.empty_title")
                             .font(AppTypography.heading(size: 24))
@@ -135,7 +135,7 @@ struct ActiveWorkoutView: View {
         currentSetPosition: CurrentWorkoutSetPosition?,
         onMarkedDone: @escaping () -> Void
     ) -> some View {
-        AppCard(glowStyle: .workout) {
+        AppCard {
             VStack(alignment: .leading, spacing: 16) {
                 HStack(alignment: .top, spacing: 12) {
                     VStack(alignment: .leading, spacing: 8) {
@@ -322,9 +322,7 @@ struct ActiveWorkoutView: View {
         DispatchQueue.main.async {
             guard let updatedSession = store.activeSession,
                   let target = currentSetPosition(in: updatedSession) else { return }
-            withAnimation(.easeInOut(duration: 0.32)) {
-                proxy.scrollTo(target, anchor: .center)
-            }
+            proxy.scrollTo(target, anchor: .center)
         }
     }
 }
@@ -338,11 +336,7 @@ private struct WorkoutHeroCard<Content: View>: View {
 
     var body: some View {
         content
-            .appLiquidGlassCard(
-                glowStyle: .workout,
-                padding: 20,
-                shadowColor: AppTheme.neonBlue.opacity(0.1)
-            )
+            .appSurfaceCard(padding: 22, cornerRadius: 28)
     }
 }
 
@@ -423,7 +417,6 @@ private struct WorkoutExerciseInfoRow: View {
 
 private struct WorkoutSetRow: View {
     @Environment(AppStore.self) private var store
-    @State private var currentPulseProgress: CGFloat = 0
 
     let exerciseIndex: Int
     let setIndex: Int
@@ -433,7 +426,7 @@ private struct WorkoutSetRow: View {
     var onMarkedDone: () -> Void = {}
 
     private var isCompleted: Bool {
-        return set.completedAt != nil
+        set.completedAt != nil
     }
 
     private var isUpcoming: Bool {
@@ -446,10 +439,10 @@ private struct WorkoutSetRow: View {
                 Text(String(format: NSLocalizedString("workout.set_number", comment: ""), setIndex + 1))
                     .font(AppTypography.body(size: 16, weight: .semibold, relativeTo: .subheadline))
                 Spacer()
-                if set.completedAt != nil {
+                if isCompleted {
                     Label("workout.done_badge", systemImage: "checkmark.circle.fill")
                         .font(AppTypography.caption(size: 13, weight: .bold))
-                        .foregroundStyle(AppTheme.accent)
+                        .foregroundStyle(AppTheme.success)
                 }
             }
 
@@ -477,7 +470,7 @@ private struct WorkoutSetRow: View {
                 .background(AppTheme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .overlay(
                     RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .stroke(AppTheme.stroke, lineWidth: 1)
+                        .stroke(AppTheme.border, lineWidth: 1)
                 )
             }
 
@@ -510,38 +503,13 @@ private struct WorkoutSetRow: View {
             }
         }
         .opacity(contentOpacity)
-        .saturation(contentSaturation)
         .padding(16)
-        .background(alignment: .bottom) {
-            if isCurrent {
-                WorkoutCurrentSetBottomGlow(pulseProgress: currentPulseProgress)
-                    .offset(y: 18)
-            }
-        }
         .background(cardBackground, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .stroke(cardStroke, lineWidth: 1)
+                .stroke(cardStroke, lineWidth: isCurrent ? 1.2 : 1)
         )
-        .overlay {
-            if isCurrent {
-                WorkoutCurrentSetHighlight(pulseProgress: currentPulseProgress)
-            }
-        }
-        .shadow(color: activeCardShadowColor, radius: 16, y: 8)
-        .animation(.easeOut(duration: 0.2), value: isCurrent)
-        .animation(.easeOut(duration: 0.2), value: isCompleted)
-        .onAppear {
-            guard isCurrent else { return }
-            triggerCurrentPulse()
-        }
-        .onChange(of: isCurrent) { newValue in
-            guard newValue else {
-                currentPulseProgress = 0
-                return
-            }
-            triggerCurrentPulse()
-        }
+        .shadow(color: cardShadowColor, radius: isCurrent ? 12 : 0, y: isCurrent ? 6 : 0)
     }
 
     private var repsControl: some View {
@@ -595,19 +563,16 @@ private struct WorkoutSetRow: View {
         .background(AppTheme.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                .stroke(AppTheme.border, lineWidth: 1)
         )
     }
 
     private var cardBackground: LinearGradient {
-        let pulse = Double(currentPulseProgress)
-
         if isCompleted {
             return LinearGradient(
                 colors: [
-                    Color(red: 0.08, green: 0.16, blue: 0.12),
-                    Color(red: 0.07, green: 0.2, blue: 0.15),
-                    Color(red: 0.08, green: 0.12, blue: 0.1)
+                    Color(red: 0.08, green: 0.12, blue: 0.1),
+                    Color(red: 0.08, green: 0.14, blue: 0.12)
                 ],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
@@ -617,21 +582,8 @@ private struct WorkoutSetRow: View {
         if isCurrent {
             return LinearGradient(
                 colors: [
-                    Color(
-                        red: 0.14 + (0.025 * pulse),
-                        green: 0.15 + (0.02 * pulse),
-                        blue: 0.2 + (0.03 * pulse)
-                    ),
-                    Color(
-                        red: 0.11 + (0.02 * pulse),
-                        green: 0.15 + (0.03 * pulse),
-                        blue: 0.24 + (0.035 * pulse)
-                    ),
-                    Color(
-                        red: 0.1 + (0.012 * pulse),
-                        green: 0.11 + (0.015 * pulse),
-                        blue: 0.16 + (0.022 * pulse)
-                    )
+                    AppTheme.surfacePressed,
+                    AppTheme.surfaceElevated
                 ],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
@@ -640,8 +592,8 @@ private struct WorkoutSetRow: View {
 
         return LinearGradient(
             colors: [
-                Color(red: 0.08, green: 0.08, blue: 0.11),
-                Color(red: 0.1, green: 0.1, blue: 0.13)
+                AppTheme.surfaceElevated,
+                AppTheme.surface
             ],
             startPoint: .topLeading,
             endPoint: .bottomTrailing
@@ -650,34 +602,18 @@ private struct WorkoutSetRow: View {
 
     private var cardStroke: Color {
         if isCompleted {
-            return Color(red: 0.22, green: 0.42, blue: 0.33).opacity(0.55)
+            return AppTheme.success.opacity(0.5)
         }
 
-        return isCurrent
-            ? Color.white.opacity(0.14 + (0.1 * Double(currentPulseProgress)))
-            : Color.white.opacity(0.05)
+        return isCurrent ? AppTheme.accent.opacity(0.6) : AppTheme.border
     }
 
     private var contentOpacity: Double {
-        isUpcoming ? 0.7 : 1
-    }
-
-    private var contentSaturation: Double {
         isUpcoming ? 0.82 : 1
     }
 
-    private var activeCardShadowColor: Color {
-        isCurrent ? AppTheme.neonCyan.opacity(0.08 + (0.08 * Double(currentPulseProgress))) : .clear
-    }
-
-    private func triggerCurrentPulse() {
-        currentPulseProgress = 1
-
-        DispatchQueue.main.async {
-            withAnimation(.easeOut(duration: 0.42)) {
-                currentPulseProgress = 0
-            }
-        }
+    private var cardShadowColor: Color {
+        isCurrent ? AppTheme.accent.opacity(0.14) : .clear
     }
 
     private func updateSet(_ change: (inout WorkoutSetLog) -> Void) {
@@ -751,25 +687,23 @@ private struct WorkoutSetActionButtonStyle: ButtonStyle {
             .font(AppTypography.label(size: 12, weight: .semibold))
             .foregroundStyle(AppTheme.primaryText)
             .padding(.horizontal, 10)
-            .padding(.vertical, 4)
+            .padding(.vertical, 6)
             .background(background(configuration: configuration), in: Capsule())
             .overlay(
                 Capsule()
                     .stroke(borderColor.opacity(configuration.isPressed ? 0.65 : 1), lineWidth: 1)
             )
-            .scaleEffect(configuration.isPressed ? 0.99 : 1)
-            .animation(.easeOut(duration: 0.16), value: configuration.isPressed)
     }
 
     private func background(configuration: Configuration) -> LinearGradient {
         let baseColors: [Color] = isCompleted
             ? [
-                Color(red: 0.1, green: 0.22, blue: 0.16),
-                Color(red: 0.08, green: 0.3, blue: 0.2)
+                AppTheme.success.opacity(0.26),
+                AppTheme.success.opacity(0.18)
             ]
             : [
-                Color(red: 0.16, green: 0.13, blue: 0.3),
-                Color(red: 0.12, green: 0.18, blue: 0.34)
+                AppTheme.accent.opacity(0.26),
+                AppTheme.accent.opacity(0.18)
             ]
 
         let adjusted = baseColors.map { color in
@@ -780,7 +714,7 @@ private struct WorkoutSetActionButtonStyle: ButtonStyle {
     }
 
     private var borderColor: Color {
-        isCompleted ? Color(red: 0.35, green: 0.65, blue: 0.48) : Color.white.opacity(0.12)
+        isCompleted ? AppTheme.success.opacity(0.7) : AppTheme.accent.opacity(0.45)
     }
 }
 
@@ -790,22 +724,13 @@ private struct WorkoutSetIconButtonStyle: ButtonStyle {
             .foregroundStyle(AppTheme.primaryText)
             .frame(width: 44, height: 44)
             .background(
-                LinearGradient(
-                    colors: [
-                        Color(red: 0.18, green: 0.14, blue: 0.3).opacity(configuration.isPressed ? 0.82 : 1),
-                        Color(red: 0.13, green: 0.16, blue: 0.28).opacity(configuration.isPressed ? 0.82 : 1)
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                ),
+                configuration.isPressed ? AppTheme.surfacePressed : AppTheme.surfaceElevated,
                 in: RoundedRectangle(cornerRadius: 20, style: .continuous)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .stroke(Color.white.opacity(0.1), lineWidth: 1)
+                    .stroke(AppTheme.border, lineWidth: 1)
             )
-            .scaleEffect(configuration.isPressed ? 0.98 : 1)
-            .animation(.easeOut(duration: 0.16), value: configuration.isPressed)
     }
 }
 
@@ -817,24 +742,14 @@ private struct WorkoutFinishButtonStyle: ButtonStyle {
             .frame(maxWidth: .infinity)
             .padding(.vertical, 18)
             .background(
-                LinearGradient(
-                    colors: [
-                        Color(red: 0.55, green: 0.08, blue: 0.12).opacity(configuration.isPressed ? 0.84 : 1),
-                        Color(red: 0.78, green: 0.14, blue: 0.16).opacity(configuration.isPressed ? 0.84 : 1),
-                        Color(red: 0.95, green: 0.22, blue: 0.18).opacity(configuration.isPressed ? 0.84 : 1)
-                    ],
-                    startPoint: .leading,
-                    endPoint: .trailing
-                ),
+                configuration.isPressed ? AppTheme.destructive.opacity(0.84) : AppTheme.destructive,
                 in: RoundedRectangle(cornerRadius: 24, style: .continuous)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .stroke(Color.white.opacity(0.14), lineWidth: 1)
+                    .stroke(Color.white.opacity(0.1), lineWidth: 1)
             )
-            .shadow(color: Color.red.opacity(0.18), radius: 14, y: 8)
-            .scaleEffect(configuration.isPressed ? 0.99 : 1)
-            .animation(.easeOut(duration: 0.16), value: configuration.isPressed)
+            .shadow(color: AppTheme.destructive.opacity(0.16), radius: 12, y: 8)
     }
 }
 
@@ -902,16 +817,11 @@ private struct WorkoutExerciseProgressCard: View {
                 let edgeInset = bubbleSize / 2
                 let usableWidth = max(proxy.size.width - bubbleSize, 1)
                 let bubbleOffset = progress.total > 1 ? usableWidth * normalizedProgress : usableWidth / 2
+                let progressFillWidth = min(max(bubbleOffset + (bubbleSize / 2), bubbleSize / 2), proxy.size.width)
 
                 ZStack(alignment: .leading) {
                     Capsule()
-                        .fill(progressGradient)
-                        .frame(height: trackHeight)
-                        .blur(radius: 5)
-                        .opacity(0.18)
-
-                    Capsule()
-                        .fill(progressGradient)
+                        .fill(Color.white.opacity(0.08))
                         .frame(height: trackHeight)
                         .overlay {
                             markerRow(edgeInset: edgeInset)
@@ -921,11 +831,14 @@ private struct WorkoutExerciseProgressCard: View {
                                 .stroke(Color.white.opacity(0.18), lineWidth: 1)
                         )
 
+                    Capsule()
+                        .fill(progressGradient)
+                        .frame(width: progressFillWidth, height: trackHeight)
+
                     progressBubble
                         .frame(width: bubbleSize, height: bubbleSize)
                         .offset(x: bubbleOffset)
                 }
-                .animation(.spring(response: 0.28, dampingFraction: 0.84), value: progress.currentStep)
             }
             .frame(height: 56)
         }
@@ -939,7 +852,7 @@ private struct WorkoutExerciseProgressCard: View {
 
     private var progressGradient: LinearGradient {
         LinearGradient(
-            colors: [AppTheme.neonViolet, AppTheme.neonBlue, AppTheme.neonCyan, AppTheme.neonLime],
+            colors: [AppTheme.accent, AppTheme.accent.opacity(0.72)],
             startPoint: .leading,
             endPoint: .trailing
         )
@@ -960,37 +873,14 @@ private struct WorkoutExerciseProgressCard: View {
     private var progressBubble: some View {
         ZStack {
             Circle()
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            Color.white.opacity(0.18),
-                            AppTheme.neonCyan.opacity(0.22),
-                            Color(red: 0.14, green: 0.17, blue: 0.24)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
+                .fill(AppTheme.accent)
                 .overlay(
                     Circle()
-                        .fill(
-                            RadialGradient(
-                                colors: [Color.white.opacity(0.18), AppTheme.neonBlue.opacity(0.14), Color.clear],
-                                center: .topLeading,
-                                startRadius: 4,
-                                endRadius: 38
-                            )
-                        )
+                        .stroke(Color.white.opacity(0.16), lineWidth: 1)
                 )
-                .overlay(
-                    Circle()
-                        .stroke(Color.white.opacity(0.24), lineWidth: 1)
-                )
-                .shadow(color: AppTheme.neonBlue.opacity(0.18), radius: 8, y: 4)
-                .shadow(color: Color.black.opacity(0.18), radius: 10, y: 6)
 
             Text("\(progress.currentStep)")
-                .font(AppTypography.metric(size: 28))
+                .font(AppTypography.metric(size: 24))
                 .foregroundStyle(Color.white.opacity(0.94))
         }
     }
@@ -1015,82 +905,6 @@ private struct WorkoutExerciseProgressCard: View {
             }
             .padding(.horizontal, edgeInset)
         }
-    }
-}
-
-private struct WorkoutCurrentSetHighlight: View {
-    let pulseProgress: CGFloat
-
-    var body: some View {
-        let pulse = Double(pulseProgress)
-
-        RoundedRectangle(cornerRadius: 22, style: .continuous)
-            .strokeBorder(
-                LinearGradient(
-                    colors: [
-                        Color.white.opacity(0.24 + (0.08 * pulse)),
-                        AppTheme.neonCyan.opacity(0.12 + (0.18 * pulse)),
-                        AppTheme.neonBlue.opacity(0.08 + (0.12 * pulse)),
-                        Color.white.opacity(0.08)
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                ),
-                lineWidth: 1.5 + (0.45 * pulseProgress)
-            )
-            .overlay {
-                RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .strokeBorder(
-                        LinearGradient(
-                            colors: [
-                                Color.clear,
-                                Color.white.opacity(0.1 + (0.18 * pulse)),
-                                Color.clear
-                            ],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        ),
-                        lineWidth: 3
-                    )
-                    .opacity(0.32 + (0.32 * pulse))
-            }
-            .scaleEffect(1 + (0.01 * pulseProgress))
-            .shadow(color: AppTheme.neonCyan.opacity(0.08 + (0.12 * pulse)), radius: 9 + (4 * pulseProgress))
-            .allowsHitTesting(false)
-    }
-}
-
-private struct WorkoutCurrentSetBottomGlow: View {
-    let pulseProgress: CGFloat
-
-    var body: some View {
-        let pulse = Double(pulseProgress)
-
-        ZStack {
-            Capsule()
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            AppTheme.neonBlue.opacity(0.08),
-                            AppTheme.neonCyan.opacity(0.16),
-                            AppTheme.neonLime.opacity(0.08),
-                            Color.clear
-                        ],
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
-                )
-                .frame(width: 180, height: 14)
-                .blur(radius: 10 + (4 * pulseProgress))
-                .opacity(0.75 + (0.2 * pulse))
-
-            Capsule()
-                .fill(AppTheme.neonCyan.opacity(0.12 + (0.08 * pulse)))
-                .frame(width: 110, height: 8)
-                .blur(radius: 8 + (2 * pulseProgress))
-        }
-        .frame(maxWidth: .infinity)
-        .allowsHitTesting(false)
     }
 }
 

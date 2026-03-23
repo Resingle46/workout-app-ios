@@ -143,6 +143,50 @@ final class BackupCoordinatorTests: XCTestCase {
         )
     }
 
+    func testTabBarPresentationResolverReturnsExpandedOutsideWorkoutTab() {
+        XCTAssertEqual(
+            RootTabBarPresentationResolver.resolve(
+                selectedTab: .programs,
+                hasActiveWorkout: true,
+                workoutTabsExpanded: false
+            ),
+            .expanded
+        )
+    }
+
+    func testTabBarPresentationResolverReturnsExpandedWhenNoActiveWorkout() {
+        XCTAssertEqual(
+            RootTabBarPresentationResolver.resolve(
+                selectedTab: .workout,
+                hasActiveWorkout: false,
+                workoutTabsExpanded: false
+            ),
+            .expanded
+        )
+    }
+
+    func testTabBarPresentationResolverReturnsCollapsedWorkoutByDefault() {
+        XCTAssertEqual(
+            RootTabBarPresentationResolver.resolve(
+                selectedTab: .workout,
+                hasActiveWorkout: true,
+                workoutTabsExpanded: false
+            ),
+            .collapsedWorkout
+        )
+    }
+
+    func testTabBarPresentationResolverReturnsExpandedFromWorkoutAfterToggle() {
+        XCTAssertEqual(
+            RootTabBarPresentationResolver.resolve(
+                selectedTab: .workout,
+                hasActiveWorkout: true,
+                workoutTabsExpanded: true
+            ),
+            .expandedFromWorkout
+        )
+    }
+
     private func backupFiles(in folderURL: URL) throws -> [URL] {
         try FileManager.default.contentsOfDirectory(
             at: folderURL,

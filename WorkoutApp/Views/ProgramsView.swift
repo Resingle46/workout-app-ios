@@ -6,7 +6,7 @@ struct ProgramsView: View {
 
     var body: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 22) {
+            LazyVStack(alignment: .leading, spacing: 20) {
                 header
 
                 if store.programs.isEmpty {
@@ -34,25 +34,21 @@ struct ProgramsView: View {
     }
 
     private var header: some View {
-        ZStack(alignment: .topTrailing) {
-            AppPageHeaderModule(titleKey: "header.programs.title", subtitleKey: "header.programs.subtitle")
-
+        AppPageHeaderModule(titleKey: "header.programs.title", subtitleKey: "header.programs.subtitle") {
             Button {
                 showingCreateProgram = true
             } label: {
                 Image(systemName: "plus")
                     .font(AppTypography.icon(size: 20, weight: .medium))
                     .foregroundStyle(AppTheme.primaryText)
-                    .frame(width: 36, height: 36)
-                    .background(Color.white.opacity(0.05), in: Circle())
+                    .frame(width: 42, height: 42)
+                    .background(AppTheme.surfaceElevated, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                     .overlay(
-                        Circle()
-                            .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .stroke(AppTheme.border, lineWidth: 1)
                     )
             }
             .buttonStyle(.plain)
-            .padding(.top, 8)
-            .padding(.trailing, 4)
         }
     }
 
@@ -132,7 +128,7 @@ private struct ProgramsCompactCard<Content: View>: View {
     var body: some View {
         content
             .font(AppTypography.body())
-            .appLiquidGlassCard(glowStyle: .programs)
+            .appSurfaceCard(padding: 18)
     }
 }
 
@@ -152,7 +148,7 @@ struct ProgramDetailView: View {
             if let program {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 20) {
-                        AppCard(glowStyle: .programs) {
+                        AppCard {
                             VStack(alignment: .leading, spacing: 16) {
                                 Text(program.title)
                                     .font(AppTypography.title(size: 30))
@@ -172,7 +168,7 @@ struct ProgramDetailView: View {
                         }
 
                         if program.workouts.isEmpty {
-                            AppCard(glowStyle: .programs) {
+                            AppCard {
                                 VStack(alignment: .leading, spacing: 12) {
                                     AppSectionTitle(titleKey: "program.no_workouts_label")
                                     Text("program.no_workouts_description")
@@ -182,7 +178,7 @@ struct ProgramDetailView: View {
                             }
                         } else {
                             ForEach(program.workouts) { workout in
-                                AppCard(glowStyle: .programs) {
+                                AppCard {
                                     VStack(alignment: .leading, spacing: 16) {
                                         HStack(alignment: .top, spacing: 12) {
                                             VStack(alignment: .leading, spacing: 8) {
@@ -276,7 +272,7 @@ struct CreateProgramView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    AppCard(glowStyle: .programs) {
+                    AppCard {
                         VStack(alignment: .leading, spacing: 16) {
                             AppSectionTitle(titleKey: "program.name")
                             AppInputField(titleKey: "program.name", text: $title)
@@ -318,7 +314,7 @@ struct CreateWorkoutView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    AppCard(glowStyle: .programs) {
+                    AppCard {
                         VStack(alignment: .leading, spacing: 16) {
                             AppSectionTitle(titleKey: "workout.name")
                             AppInputField(titleKey: "workout.name", text: $title)

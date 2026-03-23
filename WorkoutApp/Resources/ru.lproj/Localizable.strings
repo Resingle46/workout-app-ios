@@ -2,6 +2,7 @@
 "tab.workout" = "Тренировка";
 "tab.statistics" = "Статистика";
 "tab.profile" = "Профиль";
+"tabbar.tabs" = "Вкладки";
 
 "header.programs.title" = "Программы";
 "header.programs.subtitle" = "Архив тренировок";

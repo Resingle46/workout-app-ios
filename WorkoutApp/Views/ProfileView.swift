@@ -14,7 +14,7 @@ struct ProfileView: View {
             LazyVStack(alignment: .leading, spacing: 20) {
                 AppPageHeaderModule(titleKey: "header.profile.title", subtitleKey: "header.profile.subtitle")
 
-                AppCard(glowStyle: .profile) {
+                AppCard {
                     VStack(alignment: .leading, spacing: 16) {
                         AppSectionTitle(titleKey: "profile.personal")
 
@@ -36,7 +36,7 @@ struct ProfileView: View {
                     }
                 }
 
-                AppCard(glowStyle: .profile) {
+                AppCard {
                     VStack(alignment: .leading, spacing: 16) {
                         AppSectionTitle(titleKey: "profile.language")
 
@@ -48,6 +48,7 @@ struct ProfileView: View {
                             Text("profile.language.russian").tag("ru")
                         }
                         .pickerStyle(.segmented)
+                        .tint(AppTheme.accent)
                     }
                 }
 
@@ -69,7 +70,7 @@ struct ProfileView: View {
             )
             .presentationDetents([.height(312)])
             .presentationDragIndicator(.hidden)
-            .presentationBackground(AppTheme.surface)
+            .presentationBackground(AppTheme.surfaceElevated)
         }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .navigationBar)
@@ -103,7 +104,7 @@ private struct BackupControlsCard: View {
     @State private var pendingRestoreRequest: BackupRestoreRequest?
 
     var body: some View {
-        AppCard(glowStyle: .profile) {
+        AppCard {
             VStack(alignment: .leading, spacing: 16) {
                 AppSectionTitle(titleKey: "backup.section")
 
@@ -139,7 +140,7 @@ private struct BackupControlsCard: View {
                 if let errorDescription = store.backupStatus.lastErrorDescription, !errorDescription.isEmpty {
                     Text(errorDescription)
                         .font(AppTypography.caption(size: 13, weight: .medium))
-                        .foregroundStyle(AppTheme.neonOrange)
+                        .foregroundStyle(AppTheme.warning)
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
