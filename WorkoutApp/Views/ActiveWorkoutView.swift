@@ -561,16 +561,16 @@ private struct WorkoutSetRow: View {
                 }
             }
 
-            HStack(spacing: 12) {
-                ViewThatFits(in: .horizontal) {
-                    Text("workout.reps_label")
-                    Text("workout.reps_compact_label")
-                }
-                .font(AppTypography.body(size: 16, relativeTo: .body))
+            HStack(spacing: 10) {
+                Text("workout.reps_label")
+                .font(AppTypography.body(size: 15, relativeTo: .body))
                 .foregroundStyle(AppTheme.primaryText)
                 .lineLimit(1)
-                .minimumScaleFactor(0.78)
-                Spacer()
+                .minimumScaleFactor(0.72)
+                .layoutPriority(1)
+
+                Spacer(minLength: 8)
+
                 repsControl
                     .fixedSize(horizontal: true, vertical: false)
             }
@@ -644,7 +644,7 @@ private struct WorkoutSetRow: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .contentShape(Rectangle())
             }
-            .frame(width: 42, height: 42)
+            .frame(width: 40, height: 42)
             .contentShape(Rectangle())
             .buttonStyle(.plain)
 
@@ -662,7 +662,7 @@ private struct WorkoutSetRow: View {
             .keyboardType(.numberPad)
             .multilineTextAlignment(.center)
             .focused(focusedField, equals: .reps(exerciseIndex, setIndex))
-            .frame(width: 56)
+            .frame(width: 52)
 
             Rectangle()
                 .fill(Color.white.opacity(0.08))
@@ -676,7 +676,7 @@ private struct WorkoutSetRow: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .contentShape(Rectangle())
             }
-            .frame(width: 42, height: 42)
+            .frame(width: 40, height: 42)
             .contentShape(Rectangle())
             .buttonStyle(.plain)
         }
