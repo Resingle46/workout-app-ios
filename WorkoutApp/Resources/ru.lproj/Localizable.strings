@@ -141,8 +141,8 @@
 "profile.training_preferences" = "Тренировочные настройки";
 "profile.goal" = "Цель";
 "profile.experience" = "Уровень";
-"profile.weekly_target" = "Цель на неделю";
-"profile.weekly_target_value" = "%d / нед";
+"profile.weekly_target" = "Цель тренировок в неделю";
+"profile.weekly_target_value" = "%d трен./нед.";
 "profile.target_weight" = "Целевой вес";
 "profile.settings.title" = "Настройки";
 "profile.settings.preferences" = "Предпочтения";
@@ -163,7 +163,9 @@
 "profile.card.progress.title" = "Снимок прогресса";
 "profile.card.progress.subtitle" = "Ваши последние 30 дней";
 "profile.card.progress.total_workouts" = "Тренировки";
-"profile.card.progress.volume_30d" = "Объём, 30д";
+"profile.card.progress.total_workouts_inline" = "тренировок";
+"profile.card.progress.exercises" = "Упражнений";
+"profile.card.progress.volume_30d" = "Объём";
 "profile.card.progress.avg_duration_30d" = "Средняя длительность";
 "profile.card.progress.last_workout" = "Последняя тренировка";
 "profile.card.prs.eyebrow" = "Импульс";
@@ -171,7 +173,9 @@
 "profile.card.prs.empty" = "Проведите несколько прогрессирующих тренировок, и здесь появятся последние обновления рекордов.";
 "profile.card.prs.delta_format" = "+%@ кг";
 "profile.card.consistency.eyebrow" = "Ритм";
-"profile.card.consistency.title" = "Стабильность по неделям";
+"profile.card.consistency.title" = "Стабильность";
+"profile.card.consistency.goal_met" = "Цель выполнена (%d из %d)";
+"profile.card.consistency.goal_not_met" = "Цель не выполнена (%d из %d)";
 "profile.card.consistency.this_week" = "на этой неделе";
 "profile.card.consistency.streak" = "Серия";
 "profile.card.consistency.favorite_day" = "Любимый день";

@@ -258,20 +258,13 @@ private struct ProfileHeroCard: View {
 
     var body: some View {
         ProfileGraphiteCard {
-            VStack(alignment: .leading, spacing: 18) {
-                HStack(alignment: .top, spacing: 16) {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .center, spacing: 12) {
                     ProfileCardBadge(systemImage: "person.crop.circle.fill")
 
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("profile.hero.title")
-                            .font(AppTypography.metric(size: 34))
-                            .foregroundStyle(AppTheme.primaryText)
-
-                        Text("profile.hero.subtitle")
-                            .font(AppTypography.body(size: 16, weight: .medium, relativeTo: .subheadline))
-                            .foregroundStyle(AppTheme.secondaryText)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+                    Text("header.profile.title")
+                        .font(AppTypography.heading(size: 22))
+                        .foregroundStyle(AppTheme.primaryText)
 
                     Spacer(minLength: 12)
 
@@ -280,16 +273,13 @@ private struct ProfileHeroCard: View {
                         .foregroundStyle(AppTheme.secondaryText)
                 }
 
-                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
-                    ProfileMetricTile(titleKey: "profile.sex", value: profile.localizedSexValue)
-                    ProfileMetricTile(titleKey: "profile.age", value: "\(profile.age)")
-                    ProfileMetricTile(titleKey: "profile.weight", value: "\(profile.weight.appNumberText) kg")
-                    ProfileMetricTile(titleKey: "profile.height", value: "\(Int(profile.height)) cm")
-                }
-
-                HStack(spacing: 10) {
-                    ProfilePill(value: profile.primaryGoal.localizedTitle)
-                    ProfilePill(value: profile.weeklyTargetValue)
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+                    ProfileMetricTile(titleKey: "profile.sex", value: profile.localizedSexValue, compact: true)
+                    ProfileMetricTile(titleKey: "profile.age", value: "\(profile.age)", compact: true)
+                    ProfileMetricTile(titleKey: "profile.weight", value: "\(profile.weight.appNumberText) kg", compact: true)
+                    ProfileMetricTile(titleKey: "profile.height", value: "\(Int(profile.height)) cm", compact: true)
+                    ProfileMetricTile(titleKey: "profile.goal", value: profile.primaryGoal.localizedTitle, compact: true)
+                    ProfileMetricTile(titleKey: "profile.weekly_target", value: profile.weeklyTargetValue, compact: true)
                 }
             }
         }
@@ -309,9 +299,15 @@ private struct ProfileProgressSnapshotCard: View {
                     systemImage: "chart.xyaxis.line"
                 )
 
-                Text("\(summary.totalFinishedWorkouts)")
-                    .font(AppTypography.metric(size: 46))
-                    .foregroundStyle(AppTheme.primaryText)
+                HStack(alignment: .lastTextBaseline, spacing: 10) {
+                    Text("\(summary.totalFinishedWorkouts)")
+                        .font(AppTypography.metric(size: 46))
+                        .foregroundStyle(AppTheme.primaryText)
+
+                    Text("profile.card.progress.total_workouts_inline")
+                        .font(AppTypography.body(size: 20, weight: .semibold, relativeTo: .headline))
+                        .foregroundStyle(AppTheme.primaryText.opacity(0.92))
+                }
 
                 Text("profile.card.progress.subtitle")
                     .font(AppTypography.body(size: 16, weight: .medium, relativeTo: .subheadline))
@@ -319,8 +315,8 @@ private struct ProfileProgressSnapshotCard: View {
 
                 LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
                     ProfileMetricTile(
-                        titleKey: "profile.card.progress.total_workouts",
-                        value: "\(summary.totalFinishedWorkouts)",
+                        titleKey: "profile.card.progress.exercises",
+                        value: "\(summary.recentExercisesCount)",
                         accent: .cyan
                     )
                     ProfileMetricTile(
@@ -442,15 +438,10 @@ private struct ProfileConsistencyCard: View {
                     showsChevron: false
                 )
 
-                HStack(alignment: .lastTextBaseline, spacing: 12) {
-                    Text("\(summary.workoutsThisWeek) / \(summary.weeklyTarget)")
-                        .font(AppTypography.metric(size: 40))
-                        .foregroundStyle(AppTheme.primaryText)
-
-                    Text("profile.card.consistency.this_week")
-                        .font(AppTypography.body(size: 16, weight: .medium, relativeTo: .subheadline))
-                        .foregroundStyle(DashboardCardAccent.mint.secondaryText)
-                }
+                Text(summary.weeklyStatusText)
+                    .font(AppTypography.heading(size: 29))
+                    .foregroundStyle(AppTheme.primaryText)
+                    .fixedSize(horizontal: false, vertical: true)
 
                 HStack(spacing: 12) {
                     ProfileMetricTile(
@@ -480,6 +471,15 @@ private struct ProfileConsistencyCard: View {
 private struct ProfileGoalStatusCard: View {
     let summary: ProfileGoalSummary
 
+    private var accent: DashboardCardAccent {
+        switch summary.primaryGoal {
+        case .generalFitness:
+            return .orange
+        default:
+            return .aqua
+        }
+    }
+
     private var deltaText: String {
         guard let delta = summary.remainingWeightDelta else {
             return localizedString("profile.card.goal.no_target")
@@ -493,7 +493,7 @@ private struct ProfileGoalStatusCard: View {
     }
 
     var body: some View {
-        ProfileAccentCard(accent: .aqua) {
+        ProfileAccentCard(accent: accent) {
             VStack(alignment: .leading, spacing: 18) {
                 ProfileCardHeader(
                     eyebrowKey: "profile.card.goal.eyebrow",
@@ -508,19 +508,19 @@ private struct ProfileGoalStatusCard: View {
 
                 Text(deltaText)
                     .font(AppTypography.body(size: 16, weight: .medium, relativeTo: .subheadline))
-                    .foregroundStyle(DashboardCardAccent.aqua.secondaryText)
+                    .foregroundStyle(accent.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
 
                 HStack(spacing: 12) {
                     ProfileMetricTile(
                         titleKey: "profile.card.goal.current_weight",
                         value: "\(summary.currentWeight.appNumberText) kg",
-                        accent: .aqua
+                        accent: accent
                     )
                     ProfileMetricTile(
                         titleKey: "profile.card.goal.target_weight",
                         value: summary.targetBodyWeight.map { "\($0.appNumberText) kg" } ?? localizedString("profile.value.not_set"),
-                        accent: .aqua
+                        accent: accent
                     )
                 }
             }
@@ -610,23 +610,27 @@ private struct ProfileMetricTile: View {
     let titleKey: LocalizedStringKey
     let value: String
     var accent: DashboardCardAccent? = nil
+    var compact = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(titleKey)
-                .font(AppTypography.caption(size: 12, weight: .semibold))
+                .font(AppTypography.caption(size: compact ? 11 : 12, weight: .semibold))
                 .foregroundStyle((accent?.secondaryText ?? AppTheme.secondaryText).opacity(0.95))
                 .textCase(.uppercase)
                 .tracking(0.8)
+                .lineLimit(2)
+                .minimumScaleFactor(0.8)
 
             Text(value)
-                .font(AppTypography.value(size: 20, weight: .bold))
+                .font(AppTypography.value(size: compact ? 16 : 20, weight: .bold))
                 .foregroundStyle(AppTheme.primaryText)
-                .lineLimit(2)
+                .lineLimit(compact ? 3 : 2)
                 .minimumScaleFactor(0.82)
         }
-        .padding(14)
+        .padding(compact ? 12 : 14)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(minHeight: compact ? 82 : 100, alignment: .topLeading)
         .background(
             RoundedRectangle(cornerRadius: 22, style: .continuous)
                 .fill(Color.white.opacity(accent == nil ? 0.04 : 0.06))
@@ -722,6 +726,31 @@ private struct ProfileGraphiteCard<Content: View>: View {
                                     endPoint: .bottomTrailing
                                 )
                             )
+                    }
+                    .overlay {
+                        RadialGradient(
+                            colors: [
+                                Color(red: 1.0, green: 0.63, blue: 0.24).opacity(0.44),
+                                Color(red: 0.95, green: 0.44, blue: 0.2).opacity(0.16),
+                                Color.clear
+                            ],
+                            center: UnitPoint(x: 0.9, y: 0.16),
+                            startRadius: 0,
+                            endRadius: 260
+                        )
+                        .blendMode(.screen)
+                    }
+                    .overlay {
+                        RadialGradient(
+                            colors: [
+                                Color(red: 0.97, green: 0.76, blue: 0.44).opacity(0.2),
+                                Color.clear
+                            ],
+                            center: UnitPoint(x: 0.16, y: 0.88),
+                            startRadius: 0,
+                            endRadius: 220
+                        )
+                        .blendMode(.screen)
                     }
             }
             .overlay {
@@ -1403,18 +1432,24 @@ private extension Double {
     }
 }
 
+private extension ProfileConsistencySummary {
+    var weeklyStatusText: String {
+        let key = workoutsThisWeek >= weeklyTarget
+            ? "profile.card.consistency.goal_met"
+            : "profile.card.consistency.goal_not_met"
+        return String(format: localizedString(key), workoutsThisWeek, weeklyTarget)
+    }
+}
+
 private func formattedProfileDate(_ date: Date?, locale: Locale) -> String {
     guard let date else {
         return localizedString("common.no_data")
     }
 
-    return date.formatted(
-        .dateTime
-            .day()
-            .month(.abbreviated)
-            .year()
-            .locale(locale)
-    )
+    let formatter = DateFormatter()
+    formatter.locale = locale
+    formatter.dateFormat = "dd.MM.yyyy"
+    return formatter.string(from: date)
 }
 
 private func formattedProfileDuration(_ duration: TimeInterval?) -> String {

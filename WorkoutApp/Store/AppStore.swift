@@ -556,6 +556,11 @@ final class AppStore {
                 }
             }
         }
+        let recentExercisesCount = recentSessions.reduce(into: 0) { result, session in
+            result += session.exercises.reduce(0) { exerciseResult, exerciseLog in
+                exerciseResult + (exerciseLog.sets.contains { $0.completedAt != nil } ? 1 : 0)
+            }
+        }
         let durations = recentSessions.compactMap { session -> TimeInterval? in
             guard let endedAt = session.endedAt else { return nil }
             let duration = endedAt.timeIntervalSince(session.startedAt)
@@ -564,6 +569,7 @@ final class AppStore {
 
         return ProfileProgressSummary(
             totalFinishedWorkouts: finishedSessions.count,
+            recentExercisesCount: recentExercisesCount,
             recentVolume: recentVolume,
             averageDuration: durations.isEmpty ? nil : durations.reduce(0, +) / Double(durations.count),
             lastWorkoutDate: finishedSessions.first.map(finishedSessionDate)

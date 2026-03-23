@@ -198,6 +198,7 @@ enum ExperienceLevel: String, Codable, CaseIterable, Hashable, Sendable {
 
 struct ProfileProgressSummary: Hashable, Sendable {
     var totalFinishedWorkouts: Int
+    var recentExercisesCount: Int
     var recentVolume: Double
     var averageDuration: TimeInterval?
     var lastWorkoutDate: Date?

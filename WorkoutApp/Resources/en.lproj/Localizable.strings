@@ -141,8 +141,8 @@
 "profile.training_preferences" = "Training preferences";
 "profile.goal" = "Goal";
 "profile.experience" = "Experience";
-"profile.weekly_target" = "Weekly target";
-"profile.weekly_target_value" = "%d / week";
+"profile.weekly_target" = "Workouts per week";
+"profile.weekly_target_value" = "%d workouts/week";
 "profile.target_weight" = "Target weight";
 "profile.settings.title" = "Settings";
 "profile.settings.preferences" = "Preferences";
@@ -163,7 +163,9 @@
 "profile.card.progress.title" = "Progress snapshot";
 "profile.card.progress.subtitle" = "Your last 30 days";
 "profile.card.progress.total_workouts" = "Workouts";
-"profile.card.progress.volume_30d" = "Volume, 30d";
+"profile.card.progress.total_workouts_inline" = "workouts";
+"profile.card.progress.exercises" = "Exercises";
+"profile.card.progress.volume_30d" = "Volume";
 "profile.card.progress.avg_duration_30d" = "Avg duration";
 "profile.card.progress.last_workout" = "Last workout";
 "profile.card.prs.eyebrow" = "Momentum";
@@ -171,7 +173,9 @@
 "profile.card.prs.empty" = "Log a few improving sessions and your latest record jumps will appear here.";
 "profile.card.prs.delta_format" = "+%@ kg";
 "profile.card.consistency.eyebrow" = "Consistency";
-"profile.card.consistency.title" = "Show up every week";
+"profile.card.consistency.title" = "Consistency";
+"profile.card.consistency.goal_met" = "Goal completed (%d of %d)";
+"profile.card.consistency.goal_not_met" = "Goal not completed (%d of %d)";
 "profile.card.consistency.this_week" = "this week";
 "profile.card.consistency.streak" = "Streak";
 "profile.card.consistency.favorite_day" = "Favorite day";
