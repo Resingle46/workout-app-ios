@@ -301,73 +301,22 @@ struct AddExerciseToWorkoutView: View {
         return stagedExercises.filter { $0.groupKind == .superset && $0.groupID == currentSupersetGroupID }.count
     }
 
+    private var supersetEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { isSupersetEnabled },
+            set: { handleSupersetToggleChange($0) }
+        )
+    }
+
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    ExerciseCatalogControlsCard(
-                        query: $query,
-                        selectedCategoryID: $selectedCategoryID,
-                        isSupersetEnabled: Binding(
-                            get: { isSupersetEnabled },
-                            set: { handleSupersetToggleChange($0) }
-                        ),
-                        currentSupersetDraftCount: currentSupersetDraftCount,
-                        categories: store.categories,
-                        onCreateCustom: { showingCreateExercise = true }
-                    )
-
-                    ExerciseCatalogResultsCard(
-                        rows: filteredCatalogRows,
-                        selectedExerciseIDs: selectedExerciseIDSet,
-                        onSelect: { presentConfiguration(for: $0) }
-                    )
-                }
-                .padding(20)
-            }
+            catalogScrollContent
             .navigationTitle("action.add_exercise")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("action.cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("action.done") {
-                        commitStagedExercises()
-                    }
-                }
-            }
-            .sheet(isPresented: $showingCreateExercise) {
-                CreateCustomExerciseView { name, equipment, notes, categoryID in
-                    let exercise = Exercise(name: name, categoryID: categoryID, equipment: equipment, notes: notes)
-                    stagedCustomExercises.removeAll { $0.id == exercise.id }
-                    stagedCustomExercises.insert(exercise, at: 0)
-                    selectedCategoryID = categoryID
-                    presentConfiguration(for: exercise)
-                }
-            }
+            .toolbar { navigationToolbar }
+            .sheet(isPresented: $showingCreateExercise) { createCustomExerciseSheet }
             .sheet(item: $pendingConfiguration) { configuration in
-                TemplateExerciseConfigSheet(
-                    title: configuration.title,
-                    setsCount: configuration.setsCount,
-                    reps: configuration.reps,
-                    suggestedWeight: configuration.suggestedWeight,
-                    onCancel: {
-                        pendingConfiguration = nil
-                    },
-                    onSave: { setsCount, reps, weight in
-                        stageExercise(
-                            configuration: configuration,
-                            reps: reps,
-                            setsCount: setsCount,
-                            suggestedWeight: weight
-                        )
-                        pendingConfiguration = nil
-                    }
-                )
-                .presentationDetents([.height(380)])
-                .presentationDragIndicator(.hidden)
-                .presentationBackground(AppTheme.surface)
+                configurationSheet(for: configuration)
             }
             .onAppear {
                 rebuildCatalogIndex()
@@ -395,6 +344,74 @@ struct AddExerciseToWorkoutView: View {
             }
             .appScreenBackground()
         }
+    }
+
+    private var catalogScrollContent: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                ExerciseCatalogControlsCard(
+                    query: $query,
+                    selectedCategoryID: $selectedCategoryID,
+                    isSupersetEnabled: supersetEnabledBinding,
+                    currentSupersetDraftCount: currentSupersetDraftCount,
+                    categories: store.categories,
+                    onCreateCustom: { showingCreateExercise = true }
+                )
+
+                ExerciseCatalogResultsCard(
+                    rows: filteredCatalogRows,
+                    selectedExerciseIDs: selectedExerciseIDSet,
+                    onSelect: { presentConfiguration(for: $0) }
+                )
+            }
+            .padding(20)
+        }
+    }
+
+    @ToolbarContentBuilder
+    private var navigationToolbar: some ToolbarContent {
+        ToolbarItem(placement: .cancellationAction) {
+            Button("action.cancel") { dismiss() }
+        }
+        ToolbarItem(placement: .confirmationAction) {
+            Button("action.done") {
+                commitStagedExercises()
+            }
+        }
+    }
+
+    private var createCustomExerciseSheet: some View {
+        CreateCustomExerciseView { name, equipment, notes, categoryID in
+            let exercise = Exercise(name: name, categoryID: categoryID, equipment: equipment, notes: notes)
+            stagedCustomExercises.removeAll { $0.id == exercise.id }
+            stagedCustomExercises.insert(exercise, at: 0)
+            selectedCategoryID = categoryID
+            presentConfiguration(for: exercise)
+        }
+    }
+
+    private func configurationSheet(for configuration: PendingExerciseConfiguration) -> some View {
+        TemplateExerciseConfigSheet(
+            title: configuration.title,
+            setsCount: configuration.setsCount,
+            reps: configuration.reps,
+            suggestedWeight: configuration.suggestedWeight,
+            onCancel: {
+                pendingConfiguration = nil
+            },
+            onSave: { setsCount, reps, weight in
+                stageExercise(
+                    configuration: configuration,
+                    reps: reps,
+                    setsCount: setsCount,
+                    suggestedWeight: weight
+                )
+                pendingConfiguration = nil
+            }
+        )
+        .presentationDetents([.height(380)])
+        .presentationDragIndicator(.hidden)
+        .presentationBackground(AppTheme.surface)
     }
 
     private func presentConfiguration(for exercise: Exercise) {
