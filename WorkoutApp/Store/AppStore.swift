@@ -537,6 +537,156 @@ final class AppStore {
             .map { $0 }
     }
 
+    func profileProgressSummary(
+        referenceDate: Date = .now,
+        calendar: Calendar? = nil
+    ) -> ProfileProgressSummary {
+        let calendar = calendar ?? Self.statisticsCalendar(locale: locale)
+        let finishedSessions = finishedSessionsSortedDescending()
+        let startDate = calendar.date(byAdding: .day, value: -30, to: referenceDate) ?? referenceDate.addingTimeInterval(-(30 * 24 * 60 * 60))
+        let recentSessions = finishedSessions.filter { session in
+            let sessionDate = finishedSessionDate(session)
+            return sessionDate >= startDate && sessionDate <= referenceDate
+        }
+        let recentVolume = recentSessions.reduce(into: 0.0) { result, session in
+            for exerciseLog in session.exercises {
+                let completedSets = exerciseLog.sets.filter { $0.completedAt != nil }
+                result += completedSets.reduce(0.0) { partialResult, set in
+                    partialResult + (set.weight * Double(set.reps))
+                }
+            }
+        }
+        let durations = recentSessions.compactMap { session -> TimeInterval? in
+            guard let endedAt = session.endedAt else { return nil }
+            let duration = endedAt.timeIntervalSince(session.startedAt)
+            return duration > 0 ? duration : nil
+        }
+
+        return ProfileProgressSummary(
+            totalFinishedWorkouts: finishedSessions.count,
+            recentVolume: recentVolume,
+            averageDuration: durations.isEmpty ? nil : durations.reduce(0, +) / Double(durations.count),
+            lastWorkoutDate: finishedSessions.first.map(finishedSessionDate)
+        )
+    }
+
+    func recentPersonalRecords(limit: Int = 3) -> [ProfilePRItem] {
+        guard limit > 0 else { return [] }
+
+        let sessions = finishedSessionsSortedAscending()
+        var previousBests: [UUID: Double] = [:]
+        var records: [ProfilePRItem] = []
+
+        for session in sessions {
+            let exerciseGroups = Dictionary(grouping: session.exercises, by: \.exerciseID)
+
+            for (exerciseID, exerciseLogs) in exerciseGroups {
+                let completedSets = exerciseLogs
+                    .flatMap(\.sets)
+                    .filter { $0.completedAt != nil && $0.weight > 0 }
+
+                guard let currentBest = completedSets.map(\.weight).max() else {
+                    continue
+                }
+
+                let previousBest = previousBests[exerciseID] ?? 0
+                if previousBest > 0, currentBest > previousBest {
+                    let achievedAt = completedSets.compactMap(\.completedAt).max() ?? finishedSessionDate(session)
+                    records.append(
+                        ProfilePRItem(
+                            id: "\(session.id.uuidString)-\(exerciseID.uuidString)-\(currentBest)",
+                            exerciseID: exerciseID,
+                            exerciseName: exercise(for: exerciseID)?.localizedName ?? exerciseID.uuidString,
+                            achievedAt: achievedAt,
+                            weight: currentBest,
+                            previousWeight: previousBest
+                        )
+                    )
+                }
+
+                previousBests[exerciseID] = max(previousBest, currentBest)
+            }
+        }
+
+        return Array(records.sorted { $0.achievedAt > $1.achievedAt }.prefix(limit))
+    }
+
+    func profileConsistencySummary(
+        referenceDate: Date = .now,
+        calendar: Calendar? = nil
+    ) -> ProfileConsistencySummary {
+        let calendar = calendar ?? Self.statisticsCalendar(locale: locale)
+        let target = max(profile.weeklyWorkoutTarget, 1)
+        let currentWeek = weekInterval(containing: referenceDate, calendar: calendar)
+        let workoutsThisWeek = finishedSessionsCount(in: currentWeek)
+
+        var streakWeeks = 0
+        var intervalStart = currentWeek.start
+
+        while true {
+            let intervalEnd = calendar.date(byAdding: .weekOfYear, value: 1, to: intervalStart) ?? currentWeek.end
+            let interval = DateInterval(start: intervalStart, end: intervalEnd)
+
+            if finishedSessionsCount(in: interval) >= target {
+                streakWeeks += 1
+
+                guard let previousStart = calendar.date(byAdding: .weekOfYear, value: -1, to: intervalStart) else {
+                    break
+                }
+                intervalStart = previousStart
+            } else {
+                break
+            }
+        }
+
+        let recentWeeklyActivity = stride(from: 3, through: 0, by: -1).compactMap { offset -> ProfileWeeklyActivity? in
+            guard let weekStart = calendar.date(byAdding: .weekOfYear, value: -offset, to: currentWeek.start) else {
+                return nil
+            }
+
+            let weekEnd = calendar.date(byAdding: .weekOfYear, value: 1, to: weekStart) ?? currentWeek.end
+            let interval = DateInterval(start: weekStart, end: weekEnd)
+            let workoutsCount = finishedSessionsCount(in: interval)
+            return ProfileWeeklyActivity(
+                weekStart: weekStart,
+                workoutsCount: workoutsCount,
+                meetsTarget: workoutsCount >= target
+            )
+        }
+
+        let weekdayWindowStart = calendar.date(byAdding: .weekOfYear, value: -7, to: currentWeek.start) ?? currentWeek.start
+        let weekdayWindow = DateInterval(start: weekdayWindowStart, end: currentWeek.end)
+        let weekdayCounts = finishedSessionsSortedDescending().reduce(into: [Int: Int]()) { result, session in
+            let sessionDate = finishedSessionDate(session)
+            guard weekdayWindow.contains(sessionDate) else { return }
+            let weekday = calendar.component(.weekday, from: sessionDate)
+            result[weekday, default: 0] += 1
+        }
+        let mostFrequentWeekday = weekdayCounts.max { lhs, rhs in
+            if lhs.value == rhs.value {
+                return lhs.key > rhs.key
+            }
+            return lhs.value < rhs.value
+        }?.key
+
+        return ProfileConsistencySummary(
+            workoutsThisWeek: workoutsThisWeek,
+            weeklyTarget: target,
+            streakWeeks: streakWeeks,
+            recentWeeklyActivity: recentWeeklyActivity,
+            mostFrequentWeekday: mostFrequentWeekday
+        )
+    }
+
+    func profileGoalSummary() -> ProfileGoalSummary {
+        ProfileGoalSummary(
+            primaryGoal: profile.primaryGoal,
+            currentWeight: profile.weight,
+            targetBodyWeight: profile.targetBodyWeight,
+            weeklyWorkoutTarget: profile.weeklyWorkoutTarget
+        )
+    }
+
     func targetWeights(
         workoutTemplateID: UUID,
         templateExerciseIDs: Set<UUID>
@@ -670,12 +820,18 @@ final class AppStore {
         let normalizedWeight = normalizedHalfStep(min(max(profile.weight, 30), 250))
         let normalizedHeight = min(max(profile.height, 120), 230)
         let normalizedLanguageCode = normalizedLanguageCode(profile.appLanguageCode)
+        let normalizedWeeklyWorkoutTarget = min(max(profile.weeklyWorkoutTarget, 1), 14)
+        let normalizedTargetBodyWeight = profile.targetBodyWeight.map { normalizedHalfStep(min(max($0, 30), 250)) }
         return UserProfile(
             sex: normalizedSex,
             age: normalizedAge,
             weight: normalizedWeight,
             height: normalizedHeight,
-            appLanguageCode: normalizedLanguageCode
+            appLanguageCode: normalizedLanguageCode,
+            primaryGoal: profile.primaryGoal,
+            experienceLevel: profile.experienceLevel,
+            weeklyWorkoutTarget: normalizedWeeklyWorkoutTarget,
+            targetBodyWeight: normalizedTargetBodyWeight
         )
     }
 
@@ -871,6 +1027,24 @@ final class AppStore {
     private func weekInterval(containing date: Date, calendar: Calendar) -> DateInterval {
         calendar.dateInterval(of: .weekOfYear, for: date)
             ?? DateInterval(start: date, duration: 7 * 24 * 60 * 60)
+    }
+
+    private func finishedSessionsSortedDescending() -> [WorkoutSession] {
+        history.filter(\.isFinished).sorted { finishedSessionDate($0) > finishedSessionDate($1) }
+    }
+
+    private func finishedSessionsSortedAscending() -> [WorkoutSession] {
+        history.filter(\.isFinished).sorted { finishedSessionDate($0) < finishedSessionDate($1) }
+    }
+
+    private func finishedSessionDate(_ session: WorkoutSession) -> Date {
+        session.endedAt ?? session.startedAt
+    }
+
+    private func finishedSessionsCount(in interval: DateInterval) -> Int {
+        history.filter(\.isFinished).reduce(0) { result, session in
+            result + (interval.contains(finishedSessionDate(session)) ? 1 : 0)
+        }
     }
 
     private func weeklyExerciseVolumes(in interval: DateInterval) -> [UUID: Double] {

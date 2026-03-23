@@ -6,40 +6,109 @@ import UIKit
 struct ProfileView: View {
     @Environment(AppStore.self) private var store
     @Environment(\.appBottomRailInset) private var bottomRailInset
-    @State private var activePicker: ProfilePickerField?
+    @State private var showingProfileEditor = false
+
+    private var progressSummary: ProfileProgressSummary {
+        store.profileProgressSummary()
+    }
+
+    private var recentPersonalRecords: [ProfilePRItem] {
+        store.recentPersonalRecords()
+    }
+
+    private var consistencySummary: ProfileConsistencySummary {
+        store.profileConsistencySummary()
+    }
+
+    private var goalSummary: ProfileGoalSummary {
+        store.profileGoalSummary()
+    }
 
     var body: some View {
-        @Bindable var store = store
-
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 20) {
-                AppPageHeaderModule(titleKey: "header.profile.title", subtitleKey: "header.profile.subtitle")
-
-                AppCard {
-                    VStack(alignment: .leading, spacing: 16) {
-                        AppSectionTitle(titleKey: "profile.personal")
-
-                        profileRow(titleKey: "profile.sex", value: store.profile.sex) {
-                            activePicker = .sex
-                        }
-
-                        profileRow(titleKey: "profile.age", value: "\(store.profile.age)") {
-                            activePicker = .age
-                        }
-
-                        profileRow(titleKey: "profile.weight", value: "\(store.profile.weight.appNumberText) kg") {
-                            activePicker = .weight
-                        }
-
-                        profileRow(titleKey: "profile.height", value: "\(Int(store.profile.height)) cm") {
-                            activePicker = .height
-                        }
+                AppPageHeaderModule(
+                    titleKey: "header.profile.title",
+                    subtitleKey: "header.profile.subtitle"
+                ) {
+                    NavigationLink(destination: ProfileSettingsView()) {
+                        Image(systemName: "gearshape.fill")
+                            .font(AppTypography.icon(size: 18, weight: .semibold))
+                            .foregroundStyle(AppTheme.primaryText)
+                            .frame(width: 44, height: 44)
+                            .background(AppTheme.surfaceElevated, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .stroke(AppTheme.border, lineWidth: 1)
+                            )
                     }
+                    .buttonStyle(.plain)
                 }
 
+                Button {
+                    showingProfileEditor = true
+                } label: {
+                    ProfileHeroCard(profile: store.profile)
+                }
+                .buttonStyle(AppInteractiveCardButtonStyle(pressedOpacity: 0.97))
+
+                Button {
+                    store.selectedTab = .statistics
+                } label: {
+                    ProfileProgressSnapshotCard(summary: progressSummary, locale: store.locale)
+                }
+                .buttonStyle(AppInteractiveCardButtonStyle(pressedOpacity: 0.97))
+
+                Button {
+                    store.selectedTab = .statistics
+                } label: {
+                    ProfileRecentPRsCard(records: recentPersonalRecords, locale: store.locale)
+                }
+                .buttonStyle(AppInteractiveCardButtonStyle(pressedOpacity: 0.97))
+
+                ProfileConsistencyCard(
+                    summary: consistencySummary,
+                    calendar: AppStore.statisticsCalendar(locale: store.locale)
+                )
+
+                Button {
+                    showingProfileEditor = true
+                } label: {
+                    ProfileGoalStatusCard(summary: goalSummary)
+                }
+                .buttonStyle(AppInteractiveCardButtonStyle(pressedOpacity: 0.97))
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 0)
+            .padding(.bottom, 24 + bottomRailInset)
+        }
+        .sheet(isPresented: $showingProfileEditor) {
+            NavigationStack {
+                ProfileEditorView(profile: store.profile) { updatedProfile in
+                    store.updateProfile { profile in
+                        profile = updatedProfile
+                    }
+                }
+            }
+            .presentationDetents([.large])
+            .presentationBackground(AppTheme.background)
+        }
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.hidden, for: .navigationBar)
+        .appScreenBackground()
+    }
+}
+
+private struct ProfileSettingsView: View {
+    @Environment(AppStore.self) private var store
+    @Environment(\.appBottomRailInset) private var bottomRailInset
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
                 AppCard {
                     VStack(alignment: .leading, spacing: 16) {
-                        AppSectionTitle(titleKey: "profile.language")
+                        AppSectionTitle(titleKey: "profile.settings.preferences")
 
                         Picker("", selection: Binding(
                             get: { store.selectedLanguageCode },
@@ -56,29 +125,114 @@ struct ProfileView: View {
                 BackupControlsCard()
             }
             .padding(.horizontal, 20)
-            .padding(.top, 0)
-            .padding(.bottom, 24 + bottomRailInset)
+            .padding(.vertical, 20)
+            .padding(.bottom, bottomRailInset)
+        }
+        .navigationTitle("profile.settings.title")
+        .navigationBarTitleDisplayMode(.inline)
+        .appScreenBackground()
+    }
+}
+
+private struct ProfileEditorView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let onSave: (UserProfile) -> Void
+
+    @State private var draftProfile: UserProfile
+    @State private var activePicker: ProfilePickerField?
+
+    init(profile: UserProfile, onSave: @escaping (UserProfile) -> Void) {
+        self.onSave = onSave
+        _draftProfile = State(initialValue: profile)
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                AppCard {
+                    VStack(alignment: .leading, spacing: 16) {
+                        AppSectionTitle(titleKey: "profile.personal")
+
+                        ProfileSelectionRow(titleKey: "profile.sex", value: draftProfile.localizedSexValue) {
+                            activePicker = .sex
+                        }
+
+                        ProfileSelectionRow(titleKey: "profile.age", value: "\(draftProfile.age)") {
+                            activePicker = .age
+                        }
+
+                        ProfileSelectionRow(titleKey: "profile.weight", value: "\(draftProfile.weight.appNumberText) kg") {
+                            activePicker = .weight
+                        }
+
+                        ProfileSelectionRow(titleKey: "profile.height", value: "\(Int(draftProfile.height)) cm") {
+                            activePicker = .height
+                        }
+                    }
+                }
+
+                AppCard {
+                    VStack(alignment: .leading, spacing: 16) {
+                        AppSectionTitle(titleKey: "profile.training_preferences")
+
+                        ProfileSelectionRow(titleKey: "profile.goal", value: draftProfile.primaryGoal.localizedTitle) {
+                            activePicker = .primaryGoal
+                        }
+
+                        ProfileSelectionRow(titleKey: "profile.experience", value: draftProfile.experienceLevel.localizedTitle) {
+                            activePicker = .experienceLevel
+                        }
+
+                        ProfileSelectionRow(titleKey: "profile.weekly_target", value: draftProfile.weeklyTargetValue) {
+                            activePicker = .weeklyWorkoutTarget
+                        }
+
+                        ProfileSelectionRow(titleKey: "profile.target_weight", value: draftProfile.targetWeightValue) {
+                            activePicker = .targetBodyWeight
+                        }
+                    }
+                }
+            }
+            .padding(20)
+        }
+        .navigationTitle("profile.editor.title")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("action.cancel") {
+                    dismiss()
+                }
+            }
+            ToolbarItem(placement: .confirmationAction) {
+                Button("action.save") {
+                    onSave(draftProfile)
+                    dismiss()
+                }
+            }
         }
         .sheet(item: $activePicker) { picker in
             ProfilePickerSheet(
                 picker: picker,
-                profile: store.profile,
+                profile: draftProfile,
                 onSave: { updatedProfile in
-                    store.updateProfile { profile in
-                        profile = updatedProfile
-                    }
+                    draftProfile = updatedProfile
                 }
             )
-            .presentationDetents([.height(312)])
+            .presentationDetents([.height(332)])
             .presentationDragIndicator(.hidden)
             .presentationBackground(AppTheme.surfaceElevated)
         }
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar(.hidden, for: .navigationBar)
         .appScreenBackground()
     }
+}
 
-    private func profileRow(titleKey: LocalizedStringKey, value: String, action: @escaping () -> Void) -> some View {
+private struct ProfileSelectionRow: View {
+    let titleKey: LocalizedStringKey
+    let value: String
+    let action: () -> Void
+
+    var body: some View {
         Button(action: action) {
             HStack(spacing: 12) {
                 Text(titleKey)
@@ -88,6 +242,7 @@ struct ProfileView: View {
                 Text(value)
                     .font(AppTypography.value(size: 18, weight: .medium))
                     .foregroundStyle(AppTheme.secondaryText)
+                    .multilineTextAlignment(.trailing)
                 Image(systemName: "chevron.right")
                     .font(AppTypography.caption(size: 12, weight: .bold))
                     .foregroundStyle(AppTheme.secondaryText)
@@ -96,6 +251,625 @@ struct ProfileView: View {
         }
         .buttonStyle(.plain)
     }
+}
+
+private struct ProfileHeroCard: View {
+    let profile: UserProfile
+
+    var body: some View {
+        ProfileGraphiteCard {
+            VStack(alignment: .leading, spacing: 18) {
+                HStack(alignment: .top, spacing: 16) {
+                    ProfileCardBadge(systemImage: "person.crop.circle.fill")
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("profile.hero.title")
+                            .font(AppTypography.metric(size: 34))
+                            .foregroundStyle(AppTheme.primaryText)
+
+                        Text("profile.hero.subtitle")
+                            .font(AppTypography.body(size: 16, weight: .medium, relativeTo: .subheadline))
+                            .foregroundStyle(AppTheme.secondaryText)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    Spacer(minLength: 12)
+
+                    Image(systemName: "chevron.right")
+                        .font(AppTypography.icon(size: 16, weight: .bold))
+                        .foregroundStyle(AppTheme.secondaryText)
+                }
+
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+                    ProfileMetricTile(titleKey: "profile.sex", value: profile.localizedSexValue)
+                    ProfileMetricTile(titleKey: "profile.age", value: "\(profile.age)")
+                    ProfileMetricTile(titleKey: "profile.weight", value: "\(profile.weight.appNumberText) kg")
+                    ProfileMetricTile(titleKey: "profile.height", value: "\(Int(profile.height)) cm")
+                }
+
+                HStack(spacing: 10) {
+                    ProfilePill(value: profile.primaryGoal.localizedTitle)
+                    ProfilePill(value: profile.weeklyTargetValue)
+                }
+            }
+        }
+    }
+}
+
+private struct ProfileProgressSnapshotCard: View {
+    let summary: ProfileProgressSummary
+    let locale: Locale
+
+    var body: some View {
+        ProfileAccentCard(accent: .cyan) {
+            VStack(alignment: .leading, spacing: 18) {
+                ProfileCardHeader(
+                    eyebrowKey: "profile.card.progress.eyebrow",
+                    titleKey: "profile.card.progress.title",
+                    systemImage: "chart.xyaxis.line"
+                )
+
+                Text("\(summary.totalFinishedWorkouts)")
+                    .font(AppTypography.metric(size: 46))
+                    .foregroundStyle(AppTheme.primaryText)
+
+                Text("profile.card.progress.subtitle")
+                    .font(AppTypography.body(size: 16, weight: .medium, relativeTo: .subheadline))
+                    .foregroundStyle(DashboardCardAccent.cyan.secondaryText)
+
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+                    ProfileMetricTile(
+                        titleKey: "profile.card.progress.total_workouts",
+                        value: "\(summary.totalFinishedWorkouts)",
+                        accent: .cyan
+                    )
+                    ProfileMetricTile(
+                        titleKey: "profile.card.progress.volume_30d",
+                        value: summary.recentVolume.volumeValueText,
+                        accent: .cyan
+                    )
+                    ProfileMetricTile(
+                        titleKey: "profile.card.progress.avg_duration_30d",
+                        value: formattedProfileDuration(summary.averageDuration),
+                        accent: .cyan
+                    )
+                    ProfileMetricTile(
+                        titleKey: "profile.card.progress.last_workout",
+                        value: formattedProfileDate(summary.lastWorkoutDate, locale: locale),
+                        accent: .cyan
+                    )
+                }
+            }
+        }
+    }
+}
+
+private struct ProfileRecentPRsCard: View {
+    let records: [ProfilePRItem]
+    let locale: Locale
+
+    var body: some View {
+        ProfileAccentCard(accent: .orange) {
+            VStack(alignment: .leading, spacing: 18) {
+                ProfileCardHeader(
+                    eyebrowKey: "profile.card.prs.eyebrow",
+                    titleKey: "profile.card.prs.title",
+                    systemImage: "flame.fill"
+                )
+
+                if records.isEmpty {
+                    Text("profile.card.prs.empty")
+                        .font(AppTypography.body(size: 16, weight: .medium, relativeTo: .subheadline))
+                        .foregroundStyle(DashboardCardAccent.orange.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    VStack(spacing: 12) {
+                        ForEach(records) { item in
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                                    Text(item.exerciseName)
+                                        .font(AppTypography.heading(size: 21))
+                                        .foregroundStyle(AppTheme.primaryText)
+                                        .lineLimit(2)
+
+                                    Spacer(minLength: 12)
+
+                                    Text("\(item.weight.appNumberText) kg")
+                                        .font(AppTypography.value(size: 20, weight: .bold))
+                                        .foregroundStyle(AppTheme.primaryText)
+                                }
+
+                                HStack(spacing: 8) {
+                                    Text(String(format: localizedString("profile.card.prs.delta_format"), item.delta.appNumberText))
+                                        .font(AppTypography.caption(size: 13, weight: .semibold))
+                                        .foregroundStyle(AppTheme.primaryText)
+                                        .padding(.horizontal, 10)
+                                        .padding(.vertical, 6)
+                                        .background(Color.white.opacity(0.12), in: Capsule())
+
+                                    Text(item.achievedAt.formatted(
+                                        .dateTime
+                                            .day()
+                                            .month(.abbreviated)
+                                            .locale(locale)
+                                    ))
+                                    .font(AppTypography.caption(size: 13, weight: .medium))
+                                    .foregroundStyle(DashboardCardAccent.orange.secondaryText)
+                                }
+                            }
+                            .padding(14)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(
+                                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                                    .fill(Color.white.opacity(0.06))
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct ProfileConsistencyCard: View {
+    let summary: ProfileConsistencySummary
+    let calendar: Calendar
+
+    private var mostFrequentDayLabel: String {
+        guard let weekday = summary.mostFrequentWeekday else {
+            return localizedString("common.no_data")
+        }
+
+        let symbols = calendar.weekdaySymbols
+        guard symbols.indices.contains(weekday - 1) else {
+            return localizedString("common.no_data")
+        }
+
+        return symbols[weekday - 1]
+    }
+
+    var body: some View {
+        ProfileAccentCard(accent: .mint) {
+            VStack(alignment: .leading, spacing: 18) {
+                ProfileCardHeader(
+                    eyebrowKey: "profile.card.consistency.eyebrow",
+                    titleKey: "profile.card.consistency.title",
+                    systemImage: "calendar.badge.clock",
+                    showsChevron: false
+                )
+
+                HStack(alignment: .lastTextBaseline, spacing: 12) {
+                    Text("\(summary.workoutsThisWeek) / \(summary.weeklyTarget)")
+                        .font(AppTypography.metric(size: 40))
+                        .foregroundStyle(AppTheme.primaryText)
+
+                    Text("profile.card.consistency.this_week")
+                        .font(AppTypography.body(size: 16, weight: .medium, relativeTo: .subheadline))
+                        .foregroundStyle(DashboardCardAccent.mint.secondaryText)
+                }
+
+                HStack(spacing: 12) {
+                    ProfileMetricTile(
+                        titleKey: "profile.card.consistency.streak",
+                        value: String(format: localizedString("profile.card.consistency.weeks_value"), summary.streakWeeks),
+                        accent: .mint
+                    )
+                    ProfileMetricTile(
+                        titleKey: "profile.card.consistency.favorite_day",
+                        value: mostFrequentDayLabel,
+                        accent: .mint
+                    )
+                }
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("profile.card.consistency.last_weeks")
+                        .font(AppTypography.caption(size: 12, weight: .semibold))
+                        .foregroundStyle(DashboardCardAccent.mint.secondaryText)
+
+                    ProfileWeeklyActivityStrip(weeks: summary.recentWeeklyActivity, accent: .mint)
+                }
+            }
+        }
+    }
+}
+
+private struct ProfileGoalStatusCard: View {
+    let summary: ProfileGoalSummary
+
+    private var deltaText: String {
+        guard let delta = summary.remainingWeightDelta else {
+            return localizedString("profile.card.goal.no_target")
+        }
+
+        if delta == 0 {
+            return localizedString("profile.card.goal.target_reached")
+        }
+
+        return String(format: localizedString("profile.card.goal.delta_format"), abs(delta).appNumberText)
+    }
+
+    var body: some View {
+        ProfileAccentCard(accent: .aqua) {
+            VStack(alignment: .leading, spacing: 18) {
+                ProfileCardHeader(
+                    eyebrowKey: "profile.card.goal.eyebrow",
+                    titleKey: "profile.card.goal.title",
+                    systemImage: "scope"
+                )
+
+                Text(summary.primaryGoal.localizedTitle)
+                    .font(AppTypography.metric(size: 34))
+                    .foregroundStyle(AppTheme.primaryText)
+                    .lineLimit(2)
+
+                Text(deltaText)
+                    .font(AppTypography.body(size: 16, weight: .medium, relativeTo: .subheadline))
+                    .foregroundStyle(DashboardCardAccent.aqua.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                HStack(spacing: 12) {
+                    ProfileMetricTile(
+                        titleKey: "profile.card.goal.current_weight",
+                        value: "\(summary.currentWeight.appNumberText) kg",
+                        accent: .aqua
+                    )
+                    ProfileMetricTile(
+                        titleKey: "profile.card.goal.target_weight",
+                        value: summary.targetBodyWeight.map { "\($0.appNumberText) kg" } ?? localizedString("profile.value.not_set"),
+                        accent: .aqua
+                    )
+                }
+            }
+        }
+    }
+}
+
+private struct ProfileCardHeader: View {
+    let eyebrowKey: LocalizedStringKey
+    let titleKey: LocalizedStringKey
+    let systemImage: String
+    var showsChevron = true
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 14) {
+            ProfileCardBadge(systemImage: systemImage)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text(eyebrowKey)
+                    .font(AppTypography.label(size: 11, weight: .semibold))
+                    .foregroundStyle(Color.white.opacity(0.68))
+                    .textCase(.uppercase)
+                    .tracking(1.2)
+
+                Text(titleKey)
+                    .font(AppTypography.heading(size: 26))
+                    .foregroundStyle(AppTheme.primaryText)
+            }
+
+            Spacer(minLength: 12)
+
+            if showsChevron {
+                Image(systemName: "chevron.right")
+                    .font(AppTypography.icon(size: 14, weight: .bold))
+                    .foregroundStyle(Color.white.opacity(0.65))
+            }
+        }
+    }
+}
+
+private struct ProfileWeeklyActivityStrip: View {
+    let weeks: [ProfileWeeklyActivity]
+    let accent: DashboardCardAccent
+
+    private var maxCount: Int {
+        max(weeks.map(\.workoutsCount).max() ?? 0, 1)
+    }
+
+    var body: some View {
+        HStack(alignment: .bottom, spacing: 12) {
+            ForEach(Array(weeks.enumerated()), id: \.offset) { _, item in
+                VStack(spacing: 8) {
+                    GeometryReader { proxy in
+                        let height = max(14, (CGFloat(item.workoutsCount) / CGFloat(maxCount)) * proxy.size.height)
+
+                        ZStack(alignment: .bottom) {
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .fill(Color.white.opacity(0.08))
+
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .fill(
+                                    LinearGradient(
+                                        colors: [
+                                            item.meetsTarget ? accent.glowPrimary.opacity(0.94) : accent.glowSecondary.opacity(0.74),
+                                            accent.glowSecondary.opacity(0.38)
+                                        ],
+                                        startPoint: .top,
+                                        endPoint: .bottom
+                                    )
+                                )
+                                .frame(height: height)
+                        }
+                    }
+                    .frame(height: 56)
+
+                    Text("\(item.workoutsCount)")
+                        .font(AppTypography.caption(size: 12, weight: .semibold))
+                        .foregroundStyle(Color.white.opacity(0.8))
+                }
+                .frame(maxWidth: .infinity)
+            }
+        }
+    }
+}
+
+private struct ProfileMetricTile: View {
+    let titleKey: LocalizedStringKey
+    let value: String
+    var accent: DashboardCardAccent? = nil
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(titleKey)
+                .font(AppTypography.caption(size: 12, weight: .semibold))
+                .foregroundStyle((accent?.secondaryText ?? AppTheme.secondaryText).opacity(0.95))
+                .textCase(.uppercase)
+                .tracking(0.8)
+
+            Text(value)
+                .font(AppTypography.value(size: 20, weight: .bold))
+                .foregroundStyle(AppTheme.primaryText)
+                .lineLimit(2)
+                .minimumScaleFactor(0.82)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .fill(Color.white.opacity(accent == nil ? 0.04 : 0.06))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+        )
+    }
+}
+
+private struct ProfilePill: View {
+    let value: String
+
+    var body: some View {
+        Text(value)
+            .font(AppTypography.caption(size: 13, weight: .semibold))
+            .foregroundStyle(AppTheme.primaryText)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Capsule().fill(Color.white.opacity(0.06)))
+            .overlay(
+                Capsule()
+                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
+            )
+    }
+}
+
+private struct ProfileCardBadge: View {
+    let systemImage: String
+
+    var body: some View {
+        Image(systemName: systemImage)
+            .font(AppTypography.icon(size: 18, weight: .semibold))
+            .foregroundStyle(AppTheme.primaryText)
+            .frame(width: 52, height: 52)
+            .background(
+                Circle()
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Color.white.opacity(0.12),
+                                Color.white.opacity(0.03)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+            )
+            .overlay(
+                Circle()
+                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
+            )
+    }
+}
+
+private struct ProfileGraphiteCard<Content: View>: View {
+    let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 32, style: .continuous)
+
+        content
+            .padding(22)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background {
+                shape
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Color(red: 0.07, green: 0.07, blue: 0.09),
+                                Color(red: 0.03, green: 0.03, blue: 0.04),
+                                Color.black
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .overlay {
+                        shape
+                            .fill(
+                                LinearGradient(
+                                    colors: [
+                                        Color.white.opacity(0.05),
+                                        Color.clear,
+                                        Color.black.opacity(0.22)
+                                    ],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                    }
+            }
+            .overlay {
+                shape
+                    .stroke(
+                        LinearGradient(
+                            colors: [
+                                Color.white.opacity(0.28),
+                                Color.white.opacity(0.08)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ),
+                        lineWidth: 1
+                    )
+            }
+            .shadow(color: Color.black.opacity(0.38), radius: 18, y: 12)
+    }
+}
+
+private struct ProfileAccentCard<Content: View>: View {
+    let accent: DashboardCardAccent
+    let content: Content
+
+    init(accent: DashboardCardAccent, @ViewBuilder content: () -> Content) {
+        self.accent = accent
+        self.content = content()
+    }
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 32, style: .continuous)
+
+        content
+            .padding(22)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background {
+                GeometryReader { proxy in
+                    let maxSide = max(proxy.size.width, proxy.size.height)
+
+                    shape
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    Color(red: 0.05, green: 0.05, blue: 0.06),
+                                    Color(red: 0.02, green: 0.02, blue: 0.03),
+                                    Color.black
+                                ],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+                        .overlay {
+                            shape
+                                .fill(
+                                    LinearGradient(
+                                        colors: [
+                                            Color.white.opacity(0.05),
+                                            Color.clear,
+                                            Color.black.opacity(0.22)
+                                        ],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    )
+                                )
+                        }
+                        .overlay {
+                            RadialGradient(
+                                colors: [
+                                    accent.glowPrimary.opacity(0.92),
+                                    accent.glowSecondary.opacity(0.42),
+                                    Color.clear
+                                ],
+                                center: accent.primaryGlowCenter,
+                                startRadius: 0,
+                                endRadius: maxSide * 0.85
+                            )
+                            .blendMode(.screen)
+                        }
+                        .overlay {
+                            RadialGradient(
+                                colors: [
+                                    accent.glowSecondary.opacity(0.28),
+                                    Color.clear
+                                ],
+                                center: accent.secondaryGlowCenter,
+                                startRadius: 0,
+                                endRadius: maxSide * 0.5
+                            )
+                            .blendMode(.screen)
+                        }
+                }
+            }
+            .overlay {
+                shape
+                    .stroke(
+                        LinearGradient(
+                            colors: [
+                                Color.white.opacity(0.34),
+                                Color.white.opacity(0.1)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ),
+                        lineWidth: 1
+                    )
+            }
+            .shadow(color: Color.black.opacity(0.4), radius: 18, y: 12)
+    }
+}
+
+private struct DashboardCardAccent {
+    let glowPrimary: Color
+    let glowSecondary: Color
+    let secondaryText: Color
+    let primaryGlowCenter: UnitPoint
+    let secondaryGlowCenter: UnitPoint
+
+    static let cyan = DashboardCardAccent(
+        glowPrimary: Color(red: 0.17, green: 0.92, blue: 0.98),
+        glowSecondary: Color(red: 0.16, green: 0.56, blue: 0.98),
+        secondaryText: Color(red: 0.86, green: 0.98, blue: 1.0),
+        primaryGlowCenter: .bottomTrailing,
+        secondaryGlowCenter: UnitPoint(x: 0.78, y: 0.82)
+    )
+
+    static let orange = DashboardCardAccent(
+        glowPrimary: Color(red: 1.0, green: 0.58, blue: 0.12),
+        glowSecondary: Color(red: 1.0, green: 0.8, blue: 0.28),
+        secondaryText: Color(red: 1.0, green: 0.93, blue: 0.82),
+        primaryGlowCenter: .bottomTrailing,
+        secondaryGlowCenter: UnitPoint(x: 0.82, y: 0.86)
+    )
+
+    static let mint = DashboardCardAccent(
+        glowPrimary: Color(red: 0.38, green: 0.95, blue: 0.79),
+        glowSecondary: Color(red: 0.09, green: 0.7, blue: 0.64),
+        secondaryText: Color(red: 0.86, green: 1.0, blue: 0.95),
+        primaryGlowCenter: .bottomLeading,
+        secondaryGlowCenter: UnitPoint(x: 0.22, y: 0.84)
+    )
+
+    static let aqua = DashboardCardAccent(
+        glowPrimary: Color(red: 0.54, green: 0.97, blue: 0.79),
+        glowSecondary: Color(red: 0.22, green: 0.82, blue: 0.86),
+        secondaryText: Color(red: 0.9, green: 1.0, blue: 0.95),
+        primaryGlowCenter: .bottomTrailing,
+        secondaryGlowCenter: UnitPoint(x: 0.7, y: 0.82)
+    )
 }
 
 @MainActor
@@ -277,6 +1051,10 @@ enum ProfilePickerField: String, Identifiable {
     case age
     case weight
     case height
+    case primaryGoal
+    case experienceLevel
+    case weeklyWorkoutTarget
+    case targetBodyWeight
 
     var id: String { rawValue }
 }
@@ -292,6 +1070,10 @@ private struct ProfilePickerSheet: View {
     @State private var age: Int
     @State private var weightStep: Int
     @State private var height: Int
+    @State private var primaryGoal: TrainingGoal
+    @State private var experienceLevel: ExperienceLevel
+    @State private var weeklyWorkoutTarget: Int
+    @State private var targetBodyWeightStep: Int
 
     init(picker: ProfilePickerField, profile: UserProfile, onSave: @escaping (UserProfile) -> Void) {
         self.picker = picker
@@ -301,6 +1083,14 @@ private struct ProfilePickerSheet: View {
         _age = State(initialValue: min(max(profile.age, 10), 100))
         _weightStep = State(initialValue: min(max(Int((profile.weight * 2).rounded()), 60), 500))
         _height = State(initialValue: min(max(Int(profile.height.rounded()), 120), 230))
+        _primaryGoal = State(initialValue: profile.primaryGoal)
+        _experienceLevel = State(initialValue: profile.experienceLevel)
+        _weeklyWorkoutTarget = State(initialValue: min(max(profile.weeklyWorkoutTarget, 1), 14))
+        _targetBodyWeightStep = State(initialValue: profile.targetBodyWeight.map { min(max(Int(($0 * 2).rounded()), 60), 500) } ?? 0)
+    }
+
+    private var targetWeightOptions: [Int] {
+        [0] + Array(60...500)
     }
 
     var body: some View {
@@ -323,7 +1113,11 @@ private struct ProfilePickerSheet: View {
                             age: age,
                             weight: Double(weightStep) / 2,
                             height: Double(height),
-                            appLanguageCode: profile.appLanguageCode
+                            appLanguageCode: profile.appLanguageCode,
+                            primaryGoal: primaryGoal,
+                            experienceLevel: experienceLevel,
+                            weeklyWorkoutTarget: weeklyWorkoutTarget,
+                            targetBodyWeight: targetBodyWeightStep == 0 ? nil : Double(targetBodyWeightStep) / 2
                         )
                     )
                     dismiss()
@@ -336,7 +1130,7 @@ private struct ProfilePickerSheet: View {
 
             pickerContent
                 .frame(maxWidth: .infinity)
-                .frame(height: 176)
+                .frame(height: 188)
                 .clipped()
         }
         .padding(.horizontal, 20)
@@ -350,8 +1144,8 @@ private struct ProfilePickerSheet: View {
         switch picker {
         case .sex:
             Picker("", selection: $sex) {
-                Text("M").tag("M")
-                Text("F").tag("F")
+                Text("profile.sex.male").tag("M")
+                Text("profile.sex.female").tag("F")
             }
             .pickerStyle(.wheel)
 
@@ -367,7 +1161,7 @@ private struct ProfilePickerSheet: View {
         case .weight:
             Picker("", selection: $weightStep) {
                 ForEach(60...500, id: \.self) { value in
-                    Text("\(Double(value) / 2, specifier: "%.1f")")
+                    Text("\(Double(value) / 2, specifier: "%.1f") kg")
                         .tag(value)
                 }
             }
@@ -376,8 +1170,49 @@ private struct ProfilePickerSheet: View {
         case .height:
             Picker("", selection: $height) {
                 ForEach(120...230, id: \.self) { value in
-                    Text("\(value)")
+                    Text("\(value) cm")
                         .tag(value)
+                }
+            }
+            .pickerStyle(.wheel)
+
+        case .primaryGoal:
+            Picker("", selection: $primaryGoal) {
+                ForEach(TrainingGoal.allCases, id: \.self) { value in
+                    Text(value.localizedTitle)
+                        .tag(value)
+                }
+            }
+            .pickerStyle(.wheel)
+
+        case .experienceLevel:
+            Picker("", selection: $experienceLevel) {
+                ForEach(ExperienceLevel.allCases, id: \.self) { value in
+                    Text(value.localizedTitle)
+                        .tag(value)
+                }
+            }
+            .pickerStyle(.wheel)
+
+        case .weeklyWorkoutTarget:
+            Picker("", selection: $weeklyWorkoutTarget) {
+                ForEach(1...14, id: \.self) { value in
+                    Text(String(format: localizedString("profile.weekly_target_value"), value))
+                        .tag(value)
+                }
+            }
+            .pickerStyle(.wheel)
+
+        case .targetBodyWeight:
+            Picker("", selection: $targetBodyWeightStep) {
+                ForEach(targetWeightOptions, id: \.self) { value in
+                    if value == 0 {
+                        Text("profile.value.not_set")
+                            .tag(value)
+                    } else {
+                        Text("\(Double(value) / 2, specifier: "%.1f") kg")
+                            .tag(value)
+                    }
                 }
             }
             .pickerStyle(.wheel)
@@ -394,6 +1229,14 @@ private struct ProfilePickerSheet: View {
             return "profile.weight"
         case .height:
             return "profile.height"
+        case .primaryGoal:
+            return "profile.goal"
+        case .experienceLevel:
+            return "profile.experience"
+        case .weeklyWorkoutTarget:
+            return "profile.weekly_target"
+        case .targetBodyWeight:
+            return "profile.target_weight"
         }
     }
 }
@@ -495,4 +1338,97 @@ struct BackupDocumentPicker: UIViewControllerRepresentable {
             onCancel()
         }
     }
+}
+
+private extension UserProfile {
+    var localizedSexValue: String {
+        sex.uppercased() == "F" ? localizedString("profile.sex.female") : localizedString("profile.sex.male")
+    }
+
+    var weeklyTargetValue: String {
+        String(format: localizedString("profile.weekly_target_value"), weeklyWorkoutTarget)
+    }
+
+    var targetWeightValue: String {
+        targetBodyWeight.map { "\($0.appNumberText) kg" } ?? localizedString("profile.value.not_set")
+    }
+}
+
+private extension TrainingGoal {
+    var localizationKey: String {
+        switch self {
+        case .notSet:
+            return "profile.goal.not_set"
+        case .strength:
+            return "profile.goal.strength"
+        case .hypertrophy:
+            return "profile.goal.hypertrophy"
+        case .fatLoss:
+            return "profile.goal.fat_loss"
+        case .generalFitness:
+            return "profile.goal.general_fitness"
+        }
+    }
+
+    var localizedTitle: String {
+        localizedString(localizationKey)
+    }
+}
+
+private extension ExperienceLevel {
+    var localizationKey: String {
+        switch self {
+        case .notSet:
+            return "profile.experience.not_set"
+        case .beginner:
+            return "profile.experience.beginner"
+        case .intermediate:
+            return "profile.experience.intermediate"
+        case .advanced:
+            return "profile.experience.advanced"
+        }
+    }
+
+    var localizedTitle: String {
+        localizedString(localizationKey)
+    }
+}
+
+private extension Double {
+    var volumeValueText: String {
+        if self >= 1000 {
+            return "\(Int(self.rounded())) kg"
+        }
+        return "\(self.appNumberText) kg"
+    }
+}
+
+private func formattedProfileDate(_ date: Date?, locale: Locale) -> String {
+    guard let date else {
+        return localizedString("common.no_data")
+    }
+
+    return date.formatted(
+        .dateTime
+            .day()
+            .month(.abbreviated)
+            .year()
+            .locale(locale)
+    )
+}
+
+private func formattedProfileDuration(_ duration: TimeInterval?) -> String {
+    guard let duration else {
+        return localizedString("common.no_data")
+    }
+
+    if duration >= 3600 {
+        return DateComponentsFormatter.workoutDurationLong.string(from: duration) ?? "00:00"
+    }
+
+    return DateComponentsFormatter.workoutDurationShort.string(from: duration) ?? "00:00"
+}
+
+private func localizedString(_ key: String) -> String {
+    Bundle.main.localizedString(forKey: key, value: nil, table: nil)
 }

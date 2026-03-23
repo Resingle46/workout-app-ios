@@ -181,14 +181,156 @@ struct ExerciseSessionAverage: Identifiable, Hashable, Sendable {
     var setsCount: Int
 }
 
+enum TrainingGoal: String, Codable, CaseIterable, Hashable, Sendable {
+    case notSet = "not_set"
+    case strength
+    case hypertrophy
+    case fatLoss = "fat_loss"
+    case generalFitness = "general_fitness"
+}
+
+enum ExperienceLevel: String, Codable, CaseIterable, Hashable, Sendable {
+    case notSet = "not_set"
+    case beginner
+    case intermediate
+    case advanced
+}
+
+struct ProfileProgressSummary: Hashable, Sendable {
+    var totalFinishedWorkouts: Int
+    var recentVolume: Double
+    var averageDuration: TimeInterval?
+    var lastWorkoutDate: Date?
+}
+
+struct ProfilePRItem: Identifiable, Hashable, Sendable {
+    let id: String
+    var exerciseID: UUID
+    var exerciseName: String
+    var achievedAt: Date
+    var weight: Double
+    var previousWeight: Double
+
+    var delta: Double {
+        weight - previousWeight
+    }
+}
+
+struct ProfileWeeklyActivity: Hashable, Sendable {
+    var weekStart: Date
+    var workoutsCount: Int
+    var meetsTarget: Bool
+}
+
+struct ProfileConsistencySummary: Hashable, Sendable {
+    var workoutsThisWeek: Int
+    var weeklyTarget: Int
+    var streakWeeks: Int
+    var recentWeeklyActivity: [ProfileWeeklyActivity]
+    var mostFrequentWeekday: Int?
+}
+
+struct ProfileGoalSummary: Hashable, Sendable {
+    var primaryGoal: TrainingGoal
+    var currentWeight: Double
+    var targetBodyWeight: Double?
+    var weeklyWorkoutTarget: Int
+
+    var remainingWeightDelta: Double? {
+        targetBodyWeight.map { $0 - currentWeight }
+    }
+}
+
 struct UserProfile: Codable, Hashable, Sendable {
     var sex: String
     var age: Int
     var weight: Double
     var height: Double
     var appLanguageCode: String?
+    var primaryGoal: TrainingGoal = .notSet
+    var experienceLevel: ExperienceLevel = .notSet
+    var weeklyWorkoutTarget: Int = 3
+    var targetBodyWeight: Double? = nil
 
-    static let empty = UserProfile(sex: "M", age: 25, weight: 70, height: 175, appLanguageCode: nil)
+    static let empty = UserProfile(
+        sex: "M",
+        age: 25,
+        weight: 70,
+        height: 175,
+        appLanguageCode: nil,
+        primaryGoal: .notSet,
+        experienceLevel: .notSet,
+        weeklyWorkoutTarget: 3,
+        targetBodyWeight: nil
+    )
+}
+
+extension UserProfile {
+    init(
+        sex: String,
+        age: Int,
+        weight: Double,
+        height: Double,
+        appLanguageCode: String?,
+        primaryGoal: TrainingGoal = .notSet,
+        experienceLevel: ExperienceLevel = .notSet,
+        weeklyWorkoutTarget: Int = 3,
+        targetBodyWeight: Double? = nil
+    ) {
+        self.sex = sex
+        self.age = age
+        self.weight = weight
+        self.height = height
+        self.appLanguageCode = appLanguageCode
+        self.primaryGoal = primaryGoal
+        self.experienceLevel = experienceLevel
+        self.weeklyWorkoutTarget = weeklyWorkoutTarget
+        self.targetBodyWeight = targetBodyWeight
+    }
+}
+
+extension TrainingGoal {
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let rawValue = try container.decode(String.self)
+        self = Self(rawValue: rawValue) ?? .notSet
+    }
+}
+
+extension ExperienceLevel {
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let rawValue = try container.decode(String.self)
+        self = Self(rawValue: rawValue) ?? .notSet
+    }
+}
+
+extension UserProfile {
+    private enum CodingKeys: String, CodingKey {
+        case sex
+        case age
+        case weight
+        case height
+        case appLanguageCode
+        case primaryGoal
+        case experienceLevel
+        case weeklyWorkoutTarget
+        case targetBodyWeight
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+
+        sex = try container.decodeIfPresent(String.self, forKey: .sex) ?? "M"
+        age = try container.decodeIfPresent(Int.self, forKey: .age) ?? 25
+        weight = try container.decodeIfPresent(Double.self, forKey: .weight) ?? 70
+        height = try container.decodeIfPresent(Double.self, forKey: .height) ?? 175
+        appLanguageCode = try container.decodeIfPresent(String.self, forKey: .appLanguageCode)
+        primaryGoal = try container.decodeIfPresent(TrainingGoal.self, forKey: .primaryGoal) ?? .notSet
+        experienceLevel = try container.decodeIfPresent(ExperienceLevel.self, forKey: .experienceLevel) ?? .notSet
+        weeklyWorkoutTarget = try container.decodeIfPresent(Int.self, forKey: .weeklyWorkoutTarget) ?? 3
+        targetBodyWeight = try container.decodeIfPresent(Double.self, forKey: .targetBodyWeight)
+    }
 }
 
 extension Exercise {
