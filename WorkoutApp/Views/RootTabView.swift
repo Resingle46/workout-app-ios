@@ -153,7 +153,6 @@ struct RootTabView: View {
     @State private var launchBackupPickerMode: BackupDocumentPickerMode?
     @State private var launchRestoreRequest: BackupRestoreRequest?
     @State private var workoutTabsExpanded = false
-    @State private var bottomRailInset: CGFloat = 0
 
     private var tabBarPresentationMode: TabBarPresentationMode {
         RootTabBarPresentationResolver.resolve(
@@ -164,72 +163,74 @@ struct RootTabView: View {
     }
 
     var body: some View {
-        ZStack {
-            rootNavigationStack(for: .programs)
-            rootNavigationStack(for: .workout)
-            rootNavigationStack(for: .statistics)
-            rootNavigationStack(for: .profile)
-        }
-        .onChange(of: store.shouldPromptForBackupSetup, initial: true) { _, newValue in
-            showBackupSetupPrompt = newValue
-        }
-        .onChange(of: store.selectedTab) { _, newValue in
-            if newValue != .workout {
-                workoutTabsExpanded = false
+        GeometryReader { proxy in
+            let bottomRailInset = reservedBottomInset(safeAreaBottom: proxy.safeAreaInsets.bottom)
+
+            ZStack {
+                rootNavigationStack(for: .programs, bottomRailInset: bottomRailInset)
+                rootNavigationStack(for: .workout, bottomRailInset: bottomRailInset)
+                rootNavigationStack(for: .statistics, bottomRailInset: bottomRailInset)
+                rootNavigationStack(for: .profile, bottomRailInset: bottomRailInset)
             }
-        }
-        .onChange(of: store.activeSession?.id) { _, newValue in
-            if newValue == nil {
-                workoutTabsExpanded = false
+            .onChange(of: store.shouldPromptForBackupSetup, initial: true) { _, newValue in
+                showBackupSetupPrompt = newValue
             }
-        }
-        .onPreferenceChange(AppBottomRailHeightPreferenceKey.self) { bottomRailInset = $0 }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            bottomRail
-                .measureBottomRailHeight()
-        }
-        .environment(\.locale, store.locale)
-        .environment(\.appBottomRailInset, bottomRailInset)
-        .confirmationDialog("backup.setup.title", isPresented: $showBackupSetupPrompt, titleVisibility: .visible) {
-            Button("backup.setup.choose_folder") {
-                store.dismissBackupSetupPrompt()
-                launchBackupPickerMode = .folder
-            }
-            Button("backup.setup.later", role: .cancel) {
-                store.dismissBackupSetupPrompt()
-            }
-        } message: {
-            Text("backup.setup.message")
-        }
-        .sheet(item: $launchBackupPickerMode) { mode in
-            BackupDocumentPicker(mode: mode, onPick: { url in
-                launchBackupPickerMode = nil
-                Task {
-                    let hadExistingBackups = await store.chooseBackupFolder(url)
-                    if hadExistingBackups {
-                        launchRestoreRequest = .latest
-                    }
+            .onChange(of: store.selectedTab) { _, newValue in
+                if newValue != .workout {
+                    workoutTabsExpanded = false
                 }
-            }, onCancel: {
-                launchBackupPickerMode = nil
-            })
-        }
-        .alert(item: $launchRestoreRequest) { request in
-            Alert(
-                title: Text("backup.setup.restore_found_title"),
-                message: Text(request.message(store: store)),
-                primaryButton: .default(Text("backup.action.restore")) {
+            }
+            .onChange(of: store.activeSession?.id) { _, newValue in
+                if newValue == nil {
+                    workoutTabsExpanded = false
+                }
+            }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                bottomRail
+            }
+            .environment(\.locale, store.locale)
+            .environment(\.appBottomRailInset, bottomRailInset)
+            .confirmationDialog("backup.setup.title", isPresented: $showBackupSetupPrompt, titleVisibility: .visible) {
+                Button("backup.setup.choose_folder") {
+                    store.dismissBackupSetupPrompt()
+                    launchBackupPickerMode = .folder
+                }
+                Button("backup.setup.later", role: .cancel) {
+                    store.dismissBackupSetupPrompt()
+                }
+            } message: {
+                Text("backup.setup.message")
+            }
+            .sheet(item: $launchBackupPickerMode) { mode in
+                BackupDocumentPicker(mode: mode, onPick: { url in
+                    launchBackupPickerMode = nil
                     Task {
-                        await store.restoreLatestBackup()
+                        let hadExistingBackups = await store.chooseBackupFolder(url)
+                        if hadExistingBackups {
+                            launchRestoreRequest = .latest
+                        }
                     }
-                },
-                secondaryButton: .cancel(Text("backup.setup.restore_later"))
-            )
+                }, onCancel: {
+                    launchBackupPickerMode = nil
+                })
+            }
+            .alert(item: $launchRestoreRequest) { request in
+                Alert(
+                    title: Text("backup.setup.restore_found_title"),
+                    message: Text(request.message(store: store)),
+                    primaryButton: .default(Text("backup.action.restore")) {
+                        Task {
+                            await store.restoreLatestBackup()
+                        }
+                    },
+                    secondaryButton: .cancel(Text("backup.setup.restore_later"))
+                )
+            }
         }
     }
 
     @ViewBuilder
-    private func rootNavigationStack(for tab: RootTab) -> some View {
+    private func rootNavigationStack(for tab: RootTab, bottomRailInset: CGFloat) -> some View {
         let isSelected = store.selectedTab == tab
 
         NavigationStack {
@@ -249,6 +250,19 @@ struct RootTabView: View {
         .allowsHitTesting(isSelected)
         .accessibilityHidden(!isSelected)
         .zIndex(isSelected ? 1 : 0)
+    }
+
+    private func reservedBottomInset(safeAreaBottom: CGFloat) -> CGFloat {
+        let baseInset: CGFloat
+
+        switch tabBarPresentationMode {
+        case .collapsedWorkout:
+            baseInset = 84
+        case .expanded, .expandedFromWorkout:
+            baseInset = 92
+        }
+
+        return baseInset + max(0, safeAreaBottom - 10)
     }
 
     @ViewBuilder
@@ -476,14 +490,6 @@ private struct AppSurfaceCardModifier: ViewModifier {
     }
 }
 
-private struct AppBottomRailHeightPreferenceKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
-    }
-}
-
 private struct AppBottomRailInsetEnvironmentKey: EnvironmentKey {
     static let defaultValue: CGFloat = 0
 }
@@ -492,17 +498,6 @@ extension EnvironmentValues {
     var appBottomRailInset: CGFloat {
         get { self[AppBottomRailInsetEnvironmentKey.self] }
         set { self[AppBottomRailInsetEnvironmentKey.self] = newValue }
-    }
-}
-
-private extension View {
-    func measureBottomRailHeight() -> some View {
-        background {
-            GeometryReader { proxy in
-                Color.clear
-                    .preference(key: AppBottomRailHeightPreferenceKey.self, value: proxy.size.height)
-            }
-        }
     }
 }
 
