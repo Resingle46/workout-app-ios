@@ -154,10 +154,6 @@ struct RootTabView: View {
     @State private var launchRestoreRequest: BackupRestoreRequest?
     @State private var workoutTabsExpanded = false
 
-    init() {
-        UITabBar.appearance().isHidden = true
-    }
-
     private var tabBarPresentationMode: TabBarPresentationMode {
         RootTabBarPresentationResolver.resolve(
             selectedTab: store.selectedTab,
@@ -167,27 +163,12 @@ struct RootTabView: View {
     }
 
     var body: some View {
-        @Bindable var store = store
-
-        TabView(selection: $store.selectedTab) {
-            NavigationStack { ProgramsView() }
-                .tag(RootTab.programs)
-                .tabItem { Label("tab.programs", systemImage: "list.clipboard") }
-
-            NavigationStack { ActiveWorkoutView() }
-                .tag(RootTab.workout)
-                .tabItem { Label("tab.workout", systemImage: "timer") }
-
-            NavigationStack { StatisticsView() }
-                .tag(RootTab.statistics)
-                .tabItem { Label("tab.statistics", systemImage: "chart.line.uptrend.xyaxis") }
-
-            NavigationStack { ProfileView() }
-                .tag(RootTab.profile)
-                .tabItem { Label("tab.profile", systemImage: "person.crop.circle") }
+        ZStack {
+            rootNavigationStack(for: .programs)
+            rootNavigationStack(for: .workout)
+            rootNavigationStack(for: .statistics)
+            rootNavigationStack(for: .profile)
         }
-        .background(SystemTabBarHider())
-        .toolbar(.hidden, for: .tabBar)
         .environment(\.locale, store.locale)
         .onChange(of: store.shouldPromptForBackupSetup, initial: true) { _, newValue in
             showBackupSetupPrompt = newValue
@@ -241,6 +222,28 @@ struct RootTabView: View {
                 secondaryButton: .cancel(Text("backup.setup.restore_later"))
             )
         }
+    }
+
+    @ViewBuilder
+    private func rootNavigationStack(for tab: RootTab) -> some View {
+        let isSelected = store.selectedTab == tab
+
+        NavigationStack {
+            switch tab {
+            case .programs:
+                ProgramsView()
+            case .workout:
+                ActiveWorkoutView()
+            case .statistics:
+                StatisticsView()
+            case .profile:
+                ProfileView()
+            }
+        }
+        .opacity(isSelected ? 1 : 0)
+        .allowsHitTesting(isSelected)
+        .accessibilityHidden(!isSelected)
+        .zIndex(isSelected ? 1 : 0)
     }
 
     @ViewBuilder
@@ -667,38 +670,6 @@ private struct AppCollapsedWorkoutTabBar: View {
                 )
                 .shadow(color: AppTheme.shadowSubtle, radius: 16, y: 10)
         )
-    }
-}
-
-private struct SystemTabBarHider: UIViewControllerRepresentable {
-    func makeUIViewController(context: Context) -> Controller {
-        Controller()
-    }
-
-    func updateUIViewController(_ uiViewController: Controller, context: Context) {}
-
-    final class Controller: UIViewController {
-        override func viewWillAppear(_ animated: Bool) {
-            super.viewWillAppear(animated)
-            hideTabBar()
-        }
-
-        override func viewDidAppear(_ animated: Bool) {
-            super.viewDidAppear(animated)
-            hideTabBar()
-        }
-
-        override func viewDidLayoutSubviews() {
-            super.viewDidLayoutSubviews()
-            hideTabBar()
-        }
-
-        private func hideTabBar() {
-            guard let tabBar = tabBarController?.tabBar else { return }
-            tabBar.isHidden = true
-            tabBar.alpha = 0
-            tabBar.isUserInteractionEnabled = false
-        }
     }
 }
 
