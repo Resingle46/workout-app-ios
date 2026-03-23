@@ -412,6 +412,112 @@ final class BackupCoordinatorTests: XCTestCase {
         XCTAssertEqual(progress.currentStep, 2)
     }
 
+    @MainActor
+    func testExerciseCatalogIndexFiltersByLocalizedQueryAndCategory() {
+        let snapshot = AppSnapshot(
+            programs: [],
+            exercises: [
+                Exercise(name: "Barbell Bench Press", categoryID: SeedData.chestCategoryID, equipment: "Barbell"),
+                Exercise(name: "Barbell Row", categoryID: SeedData.backCategoryID, equipment: "Barbell")
+            ],
+            history: [],
+            profile: UserProfile(sex: "M", age: 29, weight: 88, height: 182, appLanguageCode: "ru")
+        )
+
+        let store = AppStore()
+        store.apply(snapshot: snapshot)
+
+        let index = ExerciseCatalogIndex.build(
+            exercises: store.exercises,
+            categories: store.categories,
+            localeIdentifier: store.locale.identifier
+        )
+
+        let localizedRows = index.filteredRows(categoryID: nil, query: "штанги лёжа")
+        XCTAssertEqual(localizedRows.map(\.exercise.name), ["Barbell Bench Press"])
+
+        let backRows = index.filteredRows(categoryID: SeedData.backCategoryID, query: "")
+        XCTAssertTrue(backRows.allSatisfy { $0.categoryID == SeedData.backCategoryID })
+        XCTAssertTrue(backRows.contains(where: { $0.exercise.name == "Barbell Row" }))
+    }
+
+    @MainActor
+    func testActiveWorkoutDerivedStateBuildsWeightProgressAndRestLookups() {
+        let workoutID = UUID(uuidString: "D1D1D1D1-0000-0000-0000-000000000021")!
+        let exerciseID = UUID(uuidString: "D2D2D2D2-0000-0000-0000-000000000022")!
+        let templateExerciseID = UUID(uuidString: "D3D3D3D3-0000-0000-0000-000000000023")!
+        let exercise = Exercise(id: exerciseID, name: "Barbell Bench Press", categoryID: SeedData.chestCategoryID, equipment: "Barbell")
+        let template = WorkoutTemplate(
+            id: workoutID,
+            title: "Push",
+            focus: "",
+            exercises: [
+                WorkoutExerciseTemplate(
+                    id: templateExerciseID,
+                    exerciseID: exerciseID,
+                    sets: [
+                        WorkoutSetTemplate(reps: 8, suggestedWeight: 80),
+                        WorkoutSetTemplate(reps: 8, suggestedWeight: 80),
+                        WorkoutSetTemplate(reps: 8, suggestedWeight: 80)
+                    ]
+                )
+            ]
+        )
+        let previousSession = WorkoutSession(
+            workoutTemplateID: workoutID,
+            title: "Push",
+            startedAt: makeDate(year: 2024, month: 3, day: 18, hour: 10),
+            endedAt: makeDate(year: 2024, month: 3, day: 18, hour: 11),
+            exercises: [
+                WorkoutExerciseLog(
+                    templateExerciseID: templateExerciseID,
+                    exerciseID: exerciseID,
+                    groupKind: .regular,
+                    groupID: nil,
+                    sets: [
+                        WorkoutSetLog(reps: 8, weight: 77.5, completedAt: makeDate(year: 2024, month: 3, day: 18, hour: 10, minute: 5))
+                    ]
+                )
+            ]
+        )
+
+        let store = AppStore()
+        store.apply(snapshot: AppSnapshot(
+            programs: [WorkoutProgram(title: "Program", workouts: [template])],
+            exercises: [exercise],
+            history: [previousSession],
+            profile: UserProfile(sex: "M", age: 29, weight: 88, height: 182, appLanguageCode: "en")
+        ))
+        store.startWorkout(template: template)
+        store.updateActiveSession { session in
+            session.exercises[0].sets[0].completedAt = makeDate(year: 2024, month: 3, day: 20, hour: 10, minute: 0)
+            session.exercises[0].sets[1].completedAt = makeDate(year: 2024, month: 3, day: 20, hour: 10, minute: 1)
+            session.exercises[0].sets[1].weight = 82.5
+        }
+
+        let activeSession = try! XCTUnwrap(store.activeSession)
+        let derivedState = ActiveWorkoutDerivedState.build(session: activeSession, store: store)
+        let activeExercise = activeSession.exercises[0]
+
+        XCTAssertEqual(
+            derivedState.targetWeightText(for: activeExercise),
+            String(format: NSLocalizedString("stats.weight_value", comment: ""), 80.0)
+        )
+        XCTAssertEqual(
+            derivedState.previousWeightText(for: activeExercise),
+            String(format: NSLocalizedString("stats.weight_value", comment: ""), 77.5)
+        )
+        XCTAssertEqual(derivedState.progress.total, 1)
+        XCTAssertEqual(derivedState.progress.completed, 0)
+        XCTAssertEqual(derivedState.currentSetPosition, CurrentWorkoutSetPosition(exerciseIndex: 0, setIndex: 2))
+        XCTAssertEqual(
+            derivedState.restSummary(for: activeExercise).summaryText,
+            String(format: NSLocalizedString("workout.avg_rest", comment: ""), 60)
+        )
+        XCTAssertNotNil(derivedState.restSummary(for: activeExercise).previousRestText)
+        XCTAssertEqual(derivedState.lastCompletedSetDate, makeDate(year: 2024, month: 3, day: 20, hour: 10, minute: 1))
+    }
+
     func testWorkoutDurationFormatterUsesMinuteSecondBelowOneHour() {
         XCTAssertEqual(WorkoutTimeTextFormatter.formatDuration(elapsedSeconds: 3_599), "59:59")
     }
@@ -825,7 +931,7 @@ final class BackupCoordinatorTests: XCTestCase {
         )
     }
 
-    private func makeDate(year: Int, month: Int, day: Int, hour: Int) -> Date {
+    private func makeDate(year: Int, month: Int, day: Int, hour: Int, minute: Int = 0) -> Date {
         var components = DateComponents()
         components.calendar = statisticsCalendar(localeIdentifier: "ru_RU")
         components.timeZone = TimeZone(secondsFromGMT: 0)
@@ -833,7 +939,7 @@ final class BackupCoordinatorTests: XCTestCase {
         components.month = month
         components.day = day
         components.hour = hour
-        components.minute = 0
+        components.minute = minute
         components.second = 0
         return components.date!
     }

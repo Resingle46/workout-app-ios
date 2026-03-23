@@ -292,20 +292,9 @@ struct AddExerciseToWorkoutView: View {
     @State private var currentSupersetGroupID: UUID?
     @State private var showingCreateExercise = false
     @State private var pendingConfiguration: PendingExerciseConfiguration?
-
-    private var availableExercises: [Exercise] {
-        stagedCustomExercises + store.exercises
-    }
-
-    private var filteredExercises: [Exercise] {
-        availableExercises.filter { exercise in
-            let matchesCategory = selectedCategoryID == nil || exercise.categoryID == selectedCategoryID
-            let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
-            let matchesQuery = normalizedQuery.isEmpty ||
-                exercise.searchableTexts.contains(where: { $0.localizedCaseInsensitiveContains(normalizedQuery) })
-            return matchesCategory && matchesQuery
-        }
-    }
+    @State private var catalogIndex = ExerciseCatalogIndex.empty
+    @State private var filteredCatalogRows: [ExerciseCatalogRowModel] = []
+    @State private var selectedExerciseIDSet: Set<UUID> = []
 
     private var currentSupersetDraftCount: Int {
         guard let currentSupersetGroupID else { return 0 }
@@ -316,67 +305,23 @@ struct AddExerciseToWorkoutView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    AppCard {
-                        VStack(alignment: .leading, spacing: 16) {
-                            AppSectionTitle(titleKey: "catalog.search")
+                    ExerciseCatalogControlsCard(
+                        query: $query,
+                        selectedCategoryID: $selectedCategoryID,
+                        isSupersetEnabled: Binding(
+                            get: { isSupersetEnabled },
+                            set: { handleSupersetToggleChange($0) }
+                        ),
+                        currentSupersetDraftCount: currentSupersetDraftCount,
+                        categories: store.categories,
+                        onCreateCustom: { showingCreateExercise = true }
+                    )
 
-                            TemplateEditorTextField(titleKey: "catalog.search_placeholder", text: $query)
-
-                            Picker(NSLocalizedString("catalog.category", comment: ""), selection: $selectedCategoryID) {
-                                Text("common.all").tag(UUID?.none)
-                                ForEach(store.categories) { category in
-                                    Text(LocalizedStringKey(category.nameKey)).tag(UUID?.some(category.id))
-                                }
-                            }
-                            .pickerStyle(.menu)
-
-                            Toggle(isOn: Binding(
-                                get: { isSupersetEnabled },
-                                set: { handleSupersetToggleChange($0) }
-                            )) {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text("template.superset")
-                                        .font(AppTypography.body(size: 18, weight: .semibold, relativeTo: .headline))
-                                    Text(
-                                        LocalizedStringKey(
-                                            currentSupersetDraftCount == 0
-                                                ? "template.superset_hint_single"
-                                                : "template.superset_hint_pair"
-                                        )
-                                    )
-                                    .font(AppTypography.caption(size: 13, weight: .regular))
-                                    .foregroundStyle(AppTheme.secondaryText)
-                                }
-                            }
-
-                            Button {
-                                showingCreateExercise = true
-                            } label: {
-                                Label("catalog.create_custom", systemImage: "plus.circle")
-                            }
-                            .buttonStyle(AppSecondaryButtonStyle())
-                        }
-                    }
-
-                    AppCard {
-                        VStack(alignment: .leading, spacing: 14) {
-                            AppSectionTitle(titleKey: "catalog.results")
-
-                            if filteredExercises.isEmpty {
-                                Text("catalog.no_results")
-                                    .foregroundStyle(AppTheme.secondaryText)
-                            } else {
-                                ForEach(filteredExercises) { exercise in
-                                    ExerciseSelectionCard(
-                                        exercise: exercise,
-                                        category: store.category(for: exercise.categoryID),
-                                        isSelected: stagedExercises.contains(where: { $0.exercise.id == exercise.id }),
-                                        action: { presentConfiguration(for: exercise) }
-                                    )
-                                }
-                            }
-                        }
-                    }
+                    ExerciseCatalogResultsCard(
+                        rows: filteredCatalogRows,
+                        selectedExerciseIDs: selectedExerciseIDSet,
+                        onSelect: { presentConfiguration(for: $0) }
+                    )
                 }
                 .padding(20)
             }
@@ -423,6 +368,30 @@ struct AddExerciseToWorkoutView: View {
                 .presentationDetents([.height(380)])
                 .presentationDragIndicator(.hidden)
                 .presentationBackground(AppTheme.surface)
+            }
+            .onAppear {
+                rebuildCatalogIndex()
+            }
+            .onChange(of: store.selectedLanguageCode) { _, _ in
+                rebuildCatalogIndex()
+            }
+            .onChange(of: store.categories) { _, _ in
+                rebuildCatalogIndex()
+            }
+            .onChange(of: store.exercises) { _, _ in
+                rebuildCatalogIndex()
+            }
+            .onChange(of: stagedCustomExercises) { _, _ in
+                rebuildCatalogIndex()
+            }
+            .onChange(of: stagedExercises) { _, _ in
+                refreshSelectedExerciseIDs()
+            }
+            .onChange(of: query) { _, _ in
+                refreshFilteredCatalogRows()
+            }
+            .onChange(of: selectedCategoryID) { _, _ in
+                refreshFilteredCatalogRows()
             }
             .appScreenBackground()
         }
@@ -567,6 +536,27 @@ struct AddExerciseToWorkoutView: View {
 
         return finalized
     }
+
+    private func rebuildCatalogIndex() {
+        catalogIndex = ExerciseCatalogIndex.build(
+            exercises: stagedCustomExercises + store.exercises,
+            categories: store.categories,
+            localeIdentifier: store.locale.identifier
+        )
+        refreshSelectedExerciseIDs()
+        refreshFilteredCatalogRows()
+    }
+
+    private func refreshFilteredCatalogRows() {
+        filteredCatalogRows = catalogIndex.filteredRows(
+            categoryID: selectedCategoryID,
+            query: query
+        )
+    }
+
+    private func refreshSelectedExerciseIDs() {
+        selectedExerciseIDSet = Set(stagedExercises.lazy.map(\.exercise.id))
+    }
 }
 
 private struct StagedWorkoutExercise: Identifiable {
@@ -590,9 +580,172 @@ private struct PendingExerciseConfiguration: Identifiable {
     let groupID: UUID?
 }
 
-private struct ExerciseSelectionCard: View {
+struct ExerciseCatalogRowModel: Identifiable, Hashable {
     let exercise: Exercise
-    let category: ExerciseCategory?
+    let categoryID: UUID
+    let categoryNameKey: String?
+    let categorySymbol: String?
+    let localizedName: String
+    let localizedEquipment: String
+    let searchText: String
+
+    var id: UUID { exercise.id }
+}
+
+struct ExerciseCatalogIndex: Hashable {
+    let localeIdentifier: String
+    let rows: [ExerciseCatalogRowModel]
+    let rowsByCategoryID: [UUID: [ExerciseCatalogRowModel]]
+
+    static let empty = ExerciseCatalogIndex(localeIdentifier: Locale.autoupdatingCurrent.identifier, rows: [], rowsByCategoryID: [:])
+
+    static func build(
+        exercises: [Exercise],
+        categories: [ExerciseCategory],
+        localeIdentifier: String
+    ) -> ExerciseCatalogIndex {
+        let categoriesByID = Dictionary(uniqueKeysWithValues: categories.map { ($0.id, $0) })
+        let rows = exercises.map { exercise -> ExerciseCatalogRowModel in
+            let category = categoriesByID[exercise.categoryID]
+            let localizedName = exercise.localizedName
+            let localizedEquipment = exercise.localizedEquipment
+            let searchText = normalizedSearchText(
+                [
+                    exercise.name,
+                    localizedName,
+                    exercise.equipment,
+                    localizedEquipment
+                ]
+                .filter { !$0.isEmpty }
+                .joined(separator: " "),
+                localeIdentifier: localeIdentifier
+            )
+
+            return ExerciseCatalogRowModel(
+                exercise: exercise,
+                categoryID: exercise.categoryID,
+                categoryNameKey: category?.nameKey,
+                categorySymbol: category?.symbol,
+                localizedName: localizedName,
+                localizedEquipment: localizedEquipment,
+                searchText: searchText
+            )
+        }
+
+        return ExerciseCatalogIndex(
+            localeIdentifier: localeIdentifier,
+            rows: rows,
+            rowsByCategoryID: Dictionary(grouping: rows, by: \.categoryID)
+        )
+    }
+
+    func filteredRows(categoryID: UUID?, query: String) -> [ExerciseCatalogRowModel] {
+        let normalizedQuery = Self.normalizedSearchText(query, localeIdentifier: localeIdentifier)
+
+        if normalizedQuery.isEmpty {
+            guard let categoryID else { return rows }
+            return rowsByCategoryID[categoryID] ?? []
+        }
+
+        let sourceRows: [ExerciseCatalogRowModel]
+        if let categoryID {
+            sourceRows = rowsByCategoryID[categoryID] ?? []
+        } else {
+            sourceRows = rows
+        }
+
+        return sourceRows.filter { $0.searchText.contains(normalizedQuery) }
+    }
+
+    private static func normalizedSearchText(_ value: String, localeIdentifier: String) -> String {
+        let locale = Locale(identifier: localeIdentifier)
+        return value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: locale)
+            .lowercased(with: locale)
+    }
+}
+
+private struct ExerciseCatalogControlsCard: View {
+    @Binding var query: String
+    @Binding var selectedCategoryID: UUID?
+    @Binding var isSupersetEnabled: Bool
+
+    let currentSupersetDraftCount: Int
+    let categories: [ExerciseCategory]
+    let onCreateCustom: () -> Void
+
+    var body: some View {
+        AppCard {
+            VStack(alignment: .leading, spacing: 16) {
+                AppSectionTitle(titleKey: "catalog.search")
+
+                TemplateEditorTextField(titleKey: "catalog.search_placeholder", text: $query)
+
+                Picker(NSLocalizedString("catalog.category", comment: ""), selection: $selectedCategoryID) {
+                    Text("common.all").tag(UUID?.none)
+                    ForEach(categories) { category in
+                        Text(LocalizedStringKey(category.nameKey)).tag(UUID?.some(category.id))
+                    }
+                }
+                .pickerStyle(.menu)
+
+                Toggle(isOn: $isSupersetEnabled) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("template.superset")
+                            .font(AppTypography.body(size: 18, weight: .semibold, relativeTo: .headline))
+                        Text(
+                            LocalizedStringKey(
+                                currentSupersetDraftCount == 0
+                                    ? "template.superset_hint_single"
+                                    : "template.superset_hint_pair"
+                            )
+                        )
+                        .font(AppTypography.caption(size: 13, weight: .regular))
+                        .foregroundStyle(AppTheme.secondaryText)
+                    }
+                }
+
+                Button(action: onCreateCustom) {
+                    Label("catalog.create_custom", systemImage: "plus.circle")
+                }
+                .buttonStyle(AppSecondaryButtonStyle())
+            }
+        }
+    }
+}
+
+private struct ExerciseCatalogResultsCard: View {
+    let rows: [ExerciseCatalogRowModel]
+    let selectedExerciseIDs: Set<UUID>
+    let onSelect: (Exercise) -> Void
+
+    var body: some View {
+        AppCard {
+            VStack(alignment: .leading, spacing: 14) {
+                AppSectionTitle(titleKey: "catalog.results")
+
+                if rows.isEmpty {
+                    Text("catalog.no_results")
+                        .foregroundStyle(AppTheme.secondaryText)
+                } else {
+                    LazyVStack(spacing: 12) {
+                        ForEach(rows) { row in
+                            ExerciseSelectionCard(
+                                row: row,
+                                isSelected: selectedExerciseIDs.contains(row.exercise.id),
+                                action: { onSelect(row.exercise) }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct ExerciseSelectionCard: View {
+    let row: ExerciseCatalogRowModel
     let isSelected: Bool
     let action: () -> Void
 
@@ -602,28 +755,28 @@ private struct ExerciseSelectionCard: View {
                 ZStack {
                     Circle()
                         .fill(Color.white.opacity(0.14))
-                    Image(systemName: category?.symbol ?? "figure.strengthtraining.functional")
+                    Image(systemName: row.categorySymbol ?? "figure.strengthtraining.functional")
                         .font(AppTypography.icon(size: 18, weight: .semibold))
                         .foregroundStyle(.white)
                 }
                 .frame(width: 44, height: 44)
 
                 VStack(alignment: .leading, spacing: 4) {
-                    if let category {
-                        Text(LocalizedStringKey(category.nameKey))
+                    if let categoryNameKey = row.categoryNameKey {
+                        Text(LocalizedStringKey(categoryNameKey))
                             .font(AppTypography.label(size: 11, weight: .medium))
                             .foregroundStyle(Color.white.opacity(0.72))
                     }
 
-                    Text(exercise.localizedName)
+                    Text(row.localizedName)
                         .font(AppTypography.body(size: 18, weight: .medium))
                         .foregroundStyle(.white)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .multilineTextAlignment(.leading)
                         .lineLimit(2)
 
-                    if !exercise.equipment.isEmpty {
-                        Text(exercise.localizedEquipment)
+                    if !row.localizedEquipment.isEmpty {
+                        Text(row.localizedEquipment)
                             .font(AppTypography.caption(size: 13, weight: .regular))
                             .foregroundStyle(Color.white.opacity(0.74))
                             .lineLimit(1)

@@ -77,13 +77,14 @@ struct ActiveWorkoutView: View {
     }
 
     private func activeSessionContent(for session: WorkoutSession) -> some View {
-        let currentSetPosition = currentSetPosition(in: session)
+        let derivedState = ActiveWorkoutDerivedState.build(session: session, store: store)
 
         return ScrollViewReader { proxy in
             ScrollView {
                 activeSessionScrollContent(
                     for: session,
-                    currentSetPosition: currentSetPosition,
+                    derivedState: derivedState,
+                    currentSetPosition: derivedState.currentSetPosition,
                     onMarkedDone: { scrollToCurrentSet(using: proxy) }
                 )
             }
@@ -93,13 +94,14 @@ struct ActiveWorkoutView: View {
 
     private func activeSessionScrollContent(
         for session: WorkoutSession,
+        derivedState: ActiveWorkoutDerivedState,
         currentSetPosition: CurrentWorkoutSetPosition?,
         onMarkedDone: @escaping () -> Void
     ) -> some View {
         VStack(alignment: .leading, spacing: 18) {
             AppPageHeaderModule(titleKey: "header.workout.title", subtitleKey: "header.workout.subtitle")
-            expandedHeader(for: session)
-            exerciseList(for: session, currentSetPosition: currentSetPosition, onMarkedDone: onMarkedDone)
+            expandedHeader(for: session, derivedState: derivedState)
+            exerciseList(derivedState: derivedState, currentSetPosition: currentSetPosition, onMarkedDone: onMarkedDone)
             finishWorkoutCTA
         }
         .padding(.horizontal, 20)
@@ -108,26 +110,24 @@ struct ActiveWorkoutView: View {
     }
 
     private func exerciseList(
-        for session: WorkoutSession,
+        derivedState: ActiveWorkoutDerivedState,
         currentSetPosition: CurrentWorkoutSetPosition?,
         onMarkedDone: @escaping () -> Void
     ) -> some View {
-        let blocks = displayBlocks(for: session)
-
         return LazyVStack(spacing: 16) {
-            ForEach(blocks) { block in
+            ForEach(derivedState.displayBlocks) { block in
                 switch block {
                 case .regular(let regularBlock):
                     exerciseCard(
                         for: regularBlock,
-                        session: session,
+                        derivedState: derivedState,
                         currentSetPosition: currentSetPosition,
                         onMarkedDone: onMarkedDone
                     )
                 case .superset(let supersetBlock):
                     supersetCard(
                         for: supersetBlock,
-                        session: session,
+                        derivedState: derivedState,
                         currentSetPosition: currentSetPosition,
                         onMarkedDone: onMarkedDone
                     )
@@ -138,7 +138,7 @@ struct ActiveWorkoutView: View {
 
     private func exerciseCard(
         for block: ActiveWorkoutRegularBlock,
-        session: WorkoutSession,
+        derivedState: ActiveWorkoutDerivedState,
         currentSetPosition: CurrentWorkoutSetPosition?,
         onMarkedDone: @escaping () -> Void
     ) -> some View {
@@ -150,8 +150,8 @@ struct ActiveWorkoutView: View {
                             .font(AppTypography.heading(size: 21))
 
                         WorkoutExerciseInfoRow(
-                            targetWeightText: targetWeightText(for: block.item, session: session),
-                            previousWeightText: previousWeightText(for: block.item)
+                            targetWeightText: derivedState.targetWeightText(for: block.item),
+                            previousWeightText: derivedState.previousWeightText(for: block.item)
                         )
 
                         if block.item.groupKind == .superset {
@@ -189,8 +189,9 @@ struct ActiveWorkoutView: View {
                 .buttonStyle(AppSecondaryButtonStyle())
 
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(restSummary(for: block.item))
-                    if let previousSetRest = previousSetRest(for: block.item) {
+                    let restSummary = derivedState.restSummary(for: block.item)
+                    Text(restSummary.summaryText)
+                    if let previousSetRest = restSummary.previousRestText {
                         Text(String(format: NSLocalizedString("workout.previous_rest", comment: ""), previousSetRest))
                     }
                 }
@@ -202,7 +203,7 @@ struct ActiveWorkoutView: View {
 
     private func supersetCard(
         for block: ActiveWorkoutSupersetBlock,
-        session: WorkoutSession,
+        derivedState: ActiveWorkoutDerivedState,
         currentSetPosition: CurrentWorkoutSetPosition?,
         onMarkedDone: @escaping () -> Void
     ) -> some View {
@@ -226,7 +227,7 @@ struct ActiveWorkoutView: View {
                 ForEach(block.rounds) { round in
                     supersetRoundCard(
                         round,
-                        session: session,
+                        derivedState: derivedState,
                         currentSetPosition: currentSetPosition,
                         onMarkedDone: onMarkedDone
                     )
@@ -244,7 +245,7 @@ struct ActiveWorkoutView: View {
 
     private func supersetRoundCard(
         _ round: ActiveWorkoutSupersetRound,
-        session: WorkoutSession,
+        derivedState: ActiveWorkoutDerivedState,
         currentSetPosition: CurrentWorkoutSetPosition?,
         onMarkedDone: @escaping () -> Void
     ) -> some View {
@@ -266,8 +267,8 @@ struct ActiveWorkoutView: View {
                         .font(AppTypography.body(size: 18, weight: .semibold, relativeTo: .headline))
 
                     WorkoutExerciseInfoRow(
-                        targetWeightText: targetWeightText(for: roundItem.item, session: session),
-                        previousWeightText: previousWeightText(for: roundItem.item)
+                        targetWeightText: derivedState.targetWeightText(for: roundItem.item),
+                        previousWeightText: derivedState.previousWeightText(for: roundItem.item)
                     )
 
                     WorkoutSetRow(
@@ -280,6 +281,7 @@ struct ActiveWorkoutView: View {
                             setIndex: roundItem.setIndex
                         ),
                         focusedField: $focusedField,
+                        currentFocusedField: focusedField,
                         onMarkedDone: onMarkedDone
                     )
                 }
@@ -315,6 +317,7 @@ struct ActiveWorkoutView: View {
                     setIndex: setIndex
                 ),
                 focusedField: $focusedField,
+                currentFocusedField: focusedField,
                 onMarkedDone: onMarkedDone
             )
             .id(CurrentWorkoutSetPosition(exerciseIndex: exerciseIndex, setIndex: setIndex))
@@ -346,15 +349,13 @@ struct ActiveWorkoutView: View {
         .padding(.top, 8)
     }
 
-    private func expandedHeader(for session: WorkoutSession) -> some View {
-        let lastCompletedSetDate = lastCompletedSetDate(in: session)
-
+    private func expandedHeader(for session: WorkoutSession, derivedState: ActiveWorkoutDerivedState) -> some View {
         return WorkoutHeroCard {
             VStack(alignment: .leading, spacing: 18) {
                 Text(session.title)
                     .font(AppTypography.title(size: 30))
 
-                WorkoutExerciseProgressCard(progress: workoutProgress(for: session))
+                WorkoutExerciseProgressCard(progress: derivedState.progress)
 
                 HStack(spacing: 12) {
                     WorkoutMetricPanel(
@@ -366,52 +367,11 @@ struct ActiveWorkoutView: View {
                     WorkoutMetricPanel(
                         title: NSLocalizedString("workout.rest_live", comment: "")
                     ) {
-                        WorkoutLiveRestText(lastCompletedSetDate: lastCompletedSetDate)
+                        WorkoutLiveRestText(lastCompletedSetDate: derivedState.lastCompletedSetDate)
                     }
                 }
             }
         }
-    }
-
-    private func restSummary(for exercise: WorkoutExerciseLog) -> String {
-        let completed = exercise.sets.compactMap(\.completedAt).sorted()
-        guard completed.count > 1 else { return NSLocalizedString("workout.no_rest_data", comment: "") }
-        let diffs = zip(completed.dropFirst(), completed).map { $0.timeIntervalSince($1) }
-        let avg = diffs.reduce(0, +) / Double(diffs.count)
-        return String(format: NSLocalizedString("workout.avg_rest", comment: ""), Int(avg))
-    }
-
-    private func previousSetRest(for exercise: WorkoutExerciseLog) -> String? {
-        let completed = exercise.sets.compactMap(\.completedAt).sorted()
-        guard completed.count > 1,
-              let last = completed.last,
-              let previous = completed.dropLast().last else { return nil }
-        return DateComponentsFormatter.workoutRest.string(from: previous, to: last)
-    }
-
-    private func lastCompletedSetDate(in session: WorkoutSession) -> Date? {
-        session.exercises
-            .flatMap(\.sets)
-            .compactMap(\.completedAt)
-            .max()
-    }
-
-    private func workoutProgress(for session: WorkoutSession) -> WorkoutExerciseProgress {
-        ActiveWorkoutDisplayResolver.progress(for: displayBlocks(for: session))
-    }
-
-    private func targetWeightText(for item: WorkoutExerciseLog, session: WorkoutSession) -> String {
-        guard let weight = store.targetWeight(workoutTemplateID: session.workoutTemplateID, templateExerciseID: item.templateExerciseID) else {
-            return NSLocalizedString("common.no_data", comment: "")
-        }
-        return String(format: NSLocalizedString("stats.weight_value", comment: ""), weight)
-    }
-
-    private func previousWeightText(for item: WorkoutExerciseLog) -> String {
-        guard let weight = store.lastUsedWeight(for: item.exerciseID) else {
-            return NSLocalizedString("common.no_data", comment: "")
-        }
-        return String(format: NSLocalizedString("stats.weight_value", comment: ""), weight)
     }
 
     private func isCurrentSet(
@@ -422,23 +382,14 @@ struct ActiveWorkoutView: View {
         currentSetPosition?.exerciseIndex == exerciseIndex && currentSetPosition?.setIndex == setIndex
     }
 
-    private func currentSetPosition(in session: WorkoutSession) -> CurrentWorkoutSetPosition? {
-        ActiveWorkoutDisplayResolver.currentSetPosition(in: displayBlocks(for: session))
-    }
-
     private func scrollToCurrentSet(using proxy: ScrollViewProxy) {
         DispatchQueue.main.async {
             guard let updatedSession = store.activeSession,
-                  let target = currentSetPosition(in: updatedSession) else { return }
+                  let target = ActiveWorkoutDerivedState.build(session: updatedSession, store: store).currentSetPosition else { return }
             withAnimation(.easeInOut(duration: 0.32)) {
                 proxy.scrollTo(target, anchor: .center)
             }
         }
-    }
-
-    private func displayBlocks(for session: WorkoutSession) -> [ActiveWorkoutDisplayBlock] {
-        let exercisesByID = Dictionary(uniqueKeysWithValues: store.exercises.map { ($0.id, $0) })
-        return ActiveWorkoutDisplayResolver.buildBlocks(session: session, exercisesByID: exercisesByID)
     }
 }
 
@@ -538,7 +489,33 @@ private struct WorkoutSetRow: View {
     let set: WorkoutSetLog
     let isCurrent: Bool
     let focusedField: FocusState<WorkoutSetField?>.Binding
+    let currentFocusedField: WorkoutSetField?
     var onMarkedDone: () -> Void = {}
+
+    @State private var draftReps: Int
+    @State private var draftWeight: Double
+    @State private var pendingCommitTask: Task<Void, Never>?
+    @State private var hasPendingDraftChanges = false
+
+    init(
+        exerciseIndex: Int,
+        setIndex: Int,
+        set: WorkoutSetLog,
+        isCurrent: Bool,
+        focusedField: FocusState<WorkoutSetField?>.Binding,
+        currentFocusedField: WorkoutSetField?,
+        onMarkedDone: @escaping () -> Void = {}
+    ) {
+        self.exerciseIndex = exerciseIndex
+        self.setIndex = setIndex
+        self.set = set
+        self.isCurrent = isCurrent
+        self.focusedField = focusedField
+        self.currentFocusedField = currentFocusedField
+        self.onMarkedDone = onMarkedDone
+        _draftReps = State(initialValue: set.reps)
+        _draftWeight = State(initialValue: set.weight)
+    }
 
     private var isCompleted: Bool {
         self.set.completedAt != nil
@@ -546,6 +523,10 @@ private struct WorkoutSetRow: View {
 
     private var isUpcoming: Bool {
         !isCompleted && !isCurrent
+    }
+
+    private var syncToken: WorkoutSetDraftSyncToken {
+        WorkoutSetDraftSyncToken(id: set.id, reps: set.reps, weight: set.weight, completedAt: set.completedAt)
     }
 
     var body: some View {
@@ -580,8 +561,11 @@ private struct WorkoutSetRow: View {
                     .foregroundStyle(AppTheme.secondaryText)
                 Spacer()
                 TextField("0", value: Binding(
-                    get: { set.weight },
-                    set: { newValue in updateWeight(newValue) }
+                    get: { draftWeight },
+                    set: { newValue in
+                        draftWeight = newValue
+                        scheduleDraftCommit()
+                    }
                 ), format: .number)
                 .multilineTextAlignment(.trailing)
                 .keyboardType(.decimalPad)
@@ -598,6 +582,7 @@ private struct WorkoutSetRow: View {
 
             HStack(spacing: 10) {
                 Button {
+                    flushDraftCommit()
                     let shouldMarkDone = !isCompleted
                     updateSet { current in
                         current.completedAt = current.completedAt == nil ? .now : nil
@@ -615,6 +600,7 @@ private struct WorkoutSetRow: View {
                 .layoutPriority(1)
 
                 Button(role: .destructive) {
+                    flushDraftCommit()
                     store.removeSetFromActiveWorkout(exerciseIndex: exerciseIndex, setIndex: setIndex)
                 } label: {
                     Image(systemName: "trash")
@@ -632,12 +618,31 @@ private struct WorkoutSetRow: View {
                 .stroke(cardStroke, lineWidth: isCurrent ? 1.2 : 1)
         )
         .shadow(color: cardShadowColor, radius: isCurrent ? 12 : 0, y: isCurrent ? 6 : 0)
+        .onAppear {
+            synchronizeDraftFromStore()
+        }
+        .onChange(of: syncToken) { _, _ in
+            synchronizeDraftFromStore()
+        }
+        .onChange(of: currentFocusedField) { oldValue, newValue in
+            if focusBelongsToRow(oldValue) && !focusBelongsToRow(newValue) {
+                flushDraftCommit()
+            }
+        }
+        .onDisappear {
+            if hasPendingDraftChanges {
+                flushDraftCommit()
+            } else {
+                pendingCommitTask?.cancel()
+                pendingCommitTask = nil
+            }
+        }
     }
 
     private var repsControl: some View {
         HStack(spacing: 0) {
             Button {
-                updateReps(max(1, set.reps - 1))
+                updateReps(max(1, draftReps - 1))
             } label: {
                 Image(systemName: "minus")
                     .font(AppTypography.icon(size: 16, weight: .bold))
@@ -653,9 +658,10 @@ private struct WorkoutSetRow: View {
                 .frame(width: 1, height: 26)
 
             TextField("0", value: Binding(
-                get: { set.reps },
+                get: { draftReps },
                 set: { newValue in
-                    updateReps(min(max(newValue, 1), 50))
+                    draftReps = min(max(newValue, 1), 50)
+                    scheduleDraftCommit()
                 }
             ), format: .number)
             .textFieldStyle(.plain)
@@ -669,7 +675,7 @@ private struct WorkoutSetRow: View {
                 .frame(width: 1, height: 26)
 
             Button {
-                updateReps(min(50, set.reps + 1))
+                updateReps(min(50, draftReps + 1))
             } label: {
                 Image(systemName: "plus")
                     .font(AppTypography.icon(size: 16, weight: .bold))
@@ -738,48 +744,97 @@ private struct WorkoutSetRow: View {
         isCurrent ? AppTheme.accent.opacity(0.14) : .clear
     }
 
+    private func synchronizeDraftFromStore() {
+        guard !focusBelongsToRow(currentFocusedField) || !hasPendingDraftChanges else {
+            return
+        }
+
+        draftReps = set.reps
+        draftWeight = set.weight
+    }
+
+    private func focusBelongsToRow(_ field: WorkoutSetField?) -> Bool {
+        switch field {
+        case .reps(let focusedExerciseIndex, let focusedSetIndex),
+             .weight(let focusedExerciseIndex, let focusedSetIndex):
+            return focusedExerciseIndex == exerciseIndex && focusedSetIndex == setIndex
+        default:
+            return false
+        }
+    }
+
+    private func scheduleDraftCommit() {
+        hasPendingDraftChanges = true
+        pendingCommitTask?.cancel()
+
+        let scheduledReps = draftReps
+        let scheduledWeight = draftWeight
+        pendingCommitTask = Task { [scheduledReps, scheduledWeight] in
+            do {
+                try await Task.sleep(for: .milliseconds(200))
+            } catch {
+                return
+            }
+
+            await MainActor.run {
+                commitDraft(reps: scheduledReps, weight: scheduledWeight)
+            }
+        }
+    }
+
+    private func flushDraftCommit() {
+        pendingCommitTask?.cancel()
+        pendingCommitTask = nil
+        commitDraft(reps: draftReps, weight: draftWeight)
+    }
+
+    private func commitDraft(reps: Int, weight: Double) {
+        guard reps != set.reps || weight != set.weight else {
+            hasPendingDraftChanges = false
+            return
+        }
+
+        store.updateActiveSession { session in
+            guard exerciseIndex < session.exercises.count else { return }
+            guard setIndex < session.exercises[exerciseIndex].sets.count else { return }
+
+            session.exercises[exerciseIndex].sets[setIndex].reps = reps
+            session.exercises[exerciseIndex].sets[setIndex].weight = weight
+
+            if setIndex + 1 < session.exercises[exerciseIndex].sets.count {
+                for index in (setIndex + 1)..<session.exercises[exerciseIndex].sets.count
+                where session.exercises[exerciseIndex].sets[index].completedAt == nil {
+                    session.exercises[exerciseIndex].sets[index].reps = reps
+                    session.exercises[exerciseIndex].sets[index].weight = weight
+                }
+            }
+        }
+
+        hasPendingDraftChanges = false
+    }
+
     private func updateSet(_ change: (inout WorkoutSetLog) -> Void) {
         store.updateActiveSession { session in
             change(&session.exercises[exerciseIndex].sets[setIndex])
         }
     }
 
-    private func updateWeight(_ newWeight: Double) {
-        store.updateActiveSession { session in
-            guard exerciseIndex < session.exercises.count else { return }
-            guard setIndex < session.exercises[exerciseIndex].sets.count else { return }
-
-            session.exercises[exerciseIndex].sets[setIndex].weight = newWeight
-
-            if setIndex + 1 < session.exercises[exerciseIndex].sets.count {
-                for index in (setIndex + 1)..<session.exercises[exerciseIndex].sets.count
-                where session.exercises[exerciseIndex].sets[index].completedAt == nil {
-                    session.exercises[exerciseIndex].sets[index].weight = newWeight
-                }
-            }
-        }
-    }
-
     private func updateReps(_ newReps: Int) {
-        store.updateActiveSession { session in
-            guard exerciseIndex < session.exercises.count else { return }
-            guard setIndex < session.exercises[exerciseIndex].sets.count else { return }
-
-            session.exercises[exerciseIndex].sets[setIndex].reps = newReps
-
-            if setIndex + 1 < session.exercises[exerciseIndex].sets.count {
-                for index in (setIndex + 1)..<session.exercises[exerciseIndex].sets.count
-                where session.exercises[exerciseIndex].sets[index].completedAt == nil {
-                    session.exercises[exerciseIndex].sets[index].reps = newReps
-                }
-            }
-        }
+        draftReps = newReps
+        flushDraftCommit()
     }
 }
 
 private enum WorkoutSetField: Hashable {
     case reps(Int, Int)
     case weight(Int, Int)
+}
+
+private struct WorkoutSetDraftSyncToken: Hashable {
+    let id: UUID
+    let reps: Int
+    let weight: Double
+    let completedAt: Date?
 }
 
 private struct WorkoutSetPrimaryActionLabel: View {
@@ -1111,58 +1166,168 @@ struct ActiveWorkoutSupersetRoundItem: Hashable, Identifiable {
     }
 }
 
+struct ActiveWorkoutRestSummary: Hashable {
+    let summaryText: String
+    let previousRestText: String?
+}
+
+struct ActiveWorkoutDerivedState {
+    let displayBlocks: [ActiveWorkoutDisplayBlock]
+    let currentSetPosition: CurrentWorkoutSetPosition?
+    let progress: WorkoutExerciseProgress
+    let targetWeightTextByTemplateExerciseID: [UUID: String]
+    let previousWeightTextByExerciseID: [UUID: String]
+    let restSummaryByExerciseLogID: [UUID: ActiveWorkoutRestSummary]
+    let lastCompletedSetDate: Date?
+
+    static let empty = ActiveWorkoutDerivedState(
+        displayBlocks: [],
+        currentSetPosition: nil,
+        progress: WorkoutExerciseProgress(total: 1, completed: 0, remaining: 1, currentStep: 0),
+        targetWeightTextByTemplateExerciseID: [:],
+        previousWeightTextByExerciseID: [:],
+        restSummaryByExerciseLogID: [:],
+        lastCompletedSetDate: nil
+    )
+
+    static func build(session: WorkoutSession, store: AppStore) -> ActiveWorkoutDerivedState {
+        let exercisesByID = Dictionary(uniqueKeysWithValues: store.exercises.map { ($0.id, $0) })
+        let displayBlocks = ActiveWorkoutDisplayResolver.buildBlocks(session: session, exercisesByID: exercisesByID)
+        let currentSetPosition = ActiveWorkoutDisplayResolver.currentSetPosition(in: displayBlocks)
+        let progress = ActiveWorkoutDisplayResolver.progress(for: displayBlocks)
+        let templateExerciseIDs = Set(session.exercises.map(\.templateExerciseID))
+        let targetWeights = store.targetWeights(
+            workoutTemplateID: session.workoutTemplateID,
+            templateExerciseIDs: templateExerciseIDs
+        )
+        let exerciseIDs = Set(session.exercises.map(\.exerciseID))
+        let previousWeights = store.lastUsedWeights(for: exerciseIDs)
+        let targetWeightTextByTemplateExerciseID = Dictionary(uniqueKeysWithValues: templateExerciseIDs.map {
+            ($0, formattedWeightText(targetWeights[$0]))
+        })
+        let previousWeightTextByExerciseID = Dictionary(uniqueKeysWithValues: exerciseIDs.map {
+            ($0, formattedWeightText(previousWeights[$0]))
+        })
+        let restSummaryByExerciseLogID = Dictionary(uniqueKeysWithValues: session.exercises.map { item in
+            (item.id, buildRestSummary(for: item))
+        })
+        let lastCompletedSetDate = session.exercises
+            .flatMap(\.sets)
+            .compactMap(\.completedAt)
+            .max()
+
+        return ActiveWorkoutDerivedState(
+            displayBlocks: displayBlocks,
+            currentSetPosition: currentSetPosition,
+            progress: progress,
+            targetWeightTextByTemplateExerciseID: targetWeightTextByTemplateExerciseID,
+            previousWeightTextByExerciseID: previousWeightTextByExerciseID,
+            restSummaryByExerciseLogID: restSummaryByExerciseLogID,
+            lastCompletedSetDate: lastCompletedSetDate
+        )
+    }
+
+    func targetWeightText(for item: WorkoutExerciseLog) -> String {
+        targetWeightTextByTemplateExerciseID[item.templateExerciseID] ?? Self.noDataText
+    }
+
+    func previousWeightText(for item: WorkoutExerciseLog) -> String {
+        previousWeightTextByExerciseID[item.exerciseID] ?? Self.noDataText
+    }
+
+    func restSummary(for item: WorkoutExerciseLog) -> ActiveWorkoutRestSummary {
+        restSummaryByExerciseLogID[item.id]
+            ?? ActiveWorkoutRestSummary(summaryText: Self.noDataText, previousRestText: nil)
+    }
+
+    private static func buildRestSummary(for exercise: WorkoutExerciseLog) -> ActiveWorkoutRestSummary {
+        let completedDates = exercise.sets.compactMap(\.completedAt).sorted()
+        guard completedDates.count > 1 else {
+            return ActiveWorkoutRestSummary(
+                summaryText: NSLocalizedString("workout.no_rest_data", comment: ""),
+                previousRestText: nil
+            )
+        }
+
+        let restDiffs = zip(completedDates.dropFirst(), completedDates).map { $0.timeIntervalSince($1) }
+        let averageRest = restDiffs.reduce(0, +) / Double(restDiffs.count)
+        let previousRestText = completedDates.dropLast().last.flatMap { previous in
+            completedDates.last.flatMap { last in
+                DateComponentsFormatter.workoutRest.string(from: previous, to: last)
+            }
+        }
+
+        return ActiveWorkoutRestSummary(
+            summaryText: String(format: NSLocalizedString("workout.avg_rest", comment: ""), Int(averageRest)),
+            previousRestText: previousRestText
+        )
+    }
+
+    private static func formattedWeightText(_ weight: Double?) -> String {
+        guard let weight, weight > 0 else {
+            return noDataText
+        }
+
+        return String(format: NSLocalizedString("stats.weight_value", comment: ""), weight)
+    }
+
+    private static var noDataText: String {
+        NSLocalizedString("common.no_data", comment: "")
+    }
+}
+
 enum ActiveWorkoutDisplayResolver {
     static func buildBlocks(session: WorkoutSession, exercisesByID: [UUID: Exercise]) -> [ActiveWorkoutDisplayBlock] {
-        var result: [ActiveWorkoutDisplayBlock] = []
-        var handledExerciseIndices = Set<Int>()
+        var supersetItemsByGroupID: [UUID: [ActiveWorkoutSupersetExercise]] = [:]
+        var supersetFirstIndexByGroupID: [UUID: Int] = [:]
 
         for (exerciseIndex, item) in session.exercises.enumerated() {
-            guard !handledExerciseIndices.contains(exerciseIndex),
+            guard item.groupKind == .superset,
+                  let groupID = item.groupID,
                   let exercise = exercisesByID[item.exerciseID] else {
                 continue
             }
 
-            if item.groupKind == .superset, let groupID = item.groupID {
-                let groupItems = session.exercises.enumerated().compactMap { index, groupItem -> ActiveWorkoutSupersetExercise? in
-                    guard groupItem.groupKind == .superset,
-                          groupItem.groupID == groupID,
-                          let groupExercise = exercisesByID[groupItem.exerciseID] else {
-                        return nil
-                    }
-
-                    return ActiveWorkoutSupersetExercise(
-                        exerciseIndex: index,
-                        exercise: groupExercise,
-                        item: groupItem
-                    )
-                }
-
-                groupItems.forEach { handledExerciseIndices.insert($0.exerciseIndex) }
-
-                if groupItems.count > 1 {
-                    let targetRoundCount = groupItems.first?.item.sets.count ?? 0
-                    let rounds = (0..<targetRoundCount).compactMap { roundIndex -> ActiveWorkoutSupersetRound? in
-                        let roundItems = groupItems.compactMap { groupEntry -> ActiveWorkoutSupersetRoundItem? in
-                            guard groupEntry.item.sets.indices.contains(roundIndex) else { return nil }
-                            return ActiveWorkoutSupersetRoundItem(
-                                exerciseIndex: groupEntry.exerciseIndex,
-                                setIndex: roundIndex,
-                                exercise: groupEntry.exercise,
-                                item: groupEntry.item,
-                                set: groupEntry.item.sets[roundIndex]
-                            )
-                        }
-
-                        guard !roundItems.isEmpty else { return nil }
-                        return ActiveWorkoutSupersetRound(groupID: groupID, roundIndex: roundIndex, items: roundItems)
-                    }
-
-                    result.append(.superset(ActiveWorkoutSupersetBlock(id: groupID, items: groupItems, rounds: rounds)))
-                    continue
-                }
+            if supersetFirstIndexByGroupID[groupID] == nil {
+                supersetFirstIndexByGroupID[groupID] = exerciseIndex
             }
 
-            handledExerciseIndices.insert(exerciseIndex)
+            supersetItemsByGroupID[groupID, default: []].append(
+                ActiveWorkoutSupersetExercise(
+                    exerciseIndex: exerciseIndex,
+                    exercise: exercise,
+                    item: item
+                )
+            )
+        }
+
+        let supersetBlocksByFirstIndex = Dictionary(uniqueKeysWithValues: supersetFirstIndexByGroupID.compactMap { groupID, firstIndex in
+            guard let groupItems = supersetItemsByGroupID[groupID],
+                  groupItems.count > 1 else {
+                return nil
+            }
+
+            let rounds = buildSupersetRounds(groupID: groupID, groupItems: groupItems)
+            return (firstIndex, ActiveWorkoutDisplayBlock.superset(
+                ActiveWorkoutSupersetBlock(id: groupID, items: groupItems, rounds: rounds)
+            ))
+        })
+
+        var result: [ActiveWorkoutDisplayBlock] = []
+
+        for (exerciseIndex, item) in session.exercises.enumerated() {
+            if let supersetBlock = supersetBlocksByFirstIndex[exerciseIndex] {
+                result.append(supersetBlock)
+                continue
+            }
+
+            if item.groupKind == .superset,
+               let groupID = item.groupID,
+               supersetFirstIndexByGroupID[groupID] != exerciseIndex {
+                continue
+            }
+
+            guard let exercise = exercisesByID[item.exerciseID] else { continue }
             result.append(.regular(ActiveWorkoutRegularBlock(exerciseIndex: exerciseIndex, exercise: exercise, item: item)))
         }
 
@@ -1200,6 +1365,30 @@ enum ActiveWorkoutDisplayResolver {
             remaining: remainingBlocks,
             currentStep: currentStep
         )
+    }
+
+    private static func buildSupersetRounds(
+        groupID: UUID,
+        groupItems: [ActiveWorkoutSupersetExercise]
+    ) -> [ActiveWorkoutSupersetRound] {
+        let targetRoundCount = groupItems.first?.item.sets.count ?? 0
+
+        return (0..<targetRoundCount).compactMap { roundIndex in
+            let roundItems = groupItems.compactMap { groupEntry -> ActiveWorkoutSupersetRoundItem? in
+                guard groupEntry.item.sets.indices.contains(roundIndex) else { return nil }
+
+                return ActiveWorkoutSupersetRoundItem(
+                    exerciseIndex: groupEntry.exerciseIndex,
+                    setIndex: roundIndex,
+                    exercise: groupEntry.exercise,
+                    item: groupEntry.item,
+                    set: groupEntry.item.sets[roundIndex]
+                )
+            }
+
+            guard !roundItems.isEmpty else { return nil }
+            return ActiveWorkoutSupersetRound(groupID: groupID, roundIndex: roundIndex, items: roundItems)
+        }
     }
 }
 

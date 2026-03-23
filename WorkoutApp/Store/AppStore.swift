@@ -537,28 +537,55 @@ final class AppStore {
             .map { $0 }
     }
 
-    func targetWeight(workoutTemplateID: UUID, templateExerciseID: UUID) -> Double? {
-        guard let templateExercise = programs
-            .flatMap(\.workouts)
-            .first(where: { $0.id == workoutTemplateID })?
-            .exercises
-            .first(where: { $0.id == templateExerciseID }) else {
-            return nil
+    func targetWeights(
+        workoutTemplateID: UUID,
+        templateExerciseIDs: Set<UUID>
+    ) -> [UUID: Double] {
+        guard !templateExerciseIDs.isEmpty,
+              let workout = programs
+                .lazy
+                .flatMap(\.workouts)
+                .first(where: { $0.id == workoutTemplateID }) else {
+            return [:]
         }
 
-        let weight = templateExercise.sets.first?.suggestedWeight ?? 0
-        return weight > 0 ? weight : nil
+        return workout.exercises.reduce(into: [UUID: Double]()) { result, templateExercise in
+            guard templateExerciseIDs.contains(templateExercise.id) else { return }
+
+            let weight = templateExercise.sets.first?.suggestedWeight ?? 0
+            if weight > 0 {
+                result[templateExercise.id] = weight
+            }
+        }
     }
 
-    func lastUsedWeight(for exerciseID: UUID) -> Double? {
-        for session in history {
-            guard let exerciseLog = session.exercises.first(where: { $0.exerciseID == exerciseID }) else { continue }
-            if let lastWeight = exerciseLog.sets.reversed().map(\.weight).first(where: { $0 > 0 }) {
-                return lastWeight
+    func lastUsedWeights(for exerciseIDs: Set<UUID>) -> [UUID: Double] {
+        guard !exerciseIDs.isEmpty else { return [:] }
+
+        var remainingExerciseIDs = exerciseIDs
+        var result: [UUID: Double] = [:]
+
+        for session in history where !remainingExerciseIDs.isEmpty {
+            for exerciseLog in session.exercises where remainingExerciseIDs.contains(exerciseLog.exerciseID) {
+                if let lastWeight = exerciseLog.sets.reversed().lazy.map(\.weight).first(where: { $0 > 0 }) {
+                    result[exerciseLog.exerciseID] = lastWeight
+                    remainingExerciseIDs.remove(exerciseLog.exerciseID)
+                }
             }
         }
 
-        return nil
+        return result
+    }
+
+    func targetWeight(workoutTemplateID: UUID, templateExerciseID: UUID) -> Double? {
+        targetWeights(
+            workoutTemplateID: workoutTemplateID,
+            templateExerciseIDs: [templateExerciseID]
+        )[templateExerciseID]
+    }
+
+    func lastUsedWeight(for exerciseID: UUID) -> Double? {
+        lastUsedWeights(for: [exerciseID])[exerciseID]
     }
 
     private func scheduleAutomaticBackup() {
