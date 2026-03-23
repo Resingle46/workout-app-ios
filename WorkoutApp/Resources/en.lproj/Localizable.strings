@@ -176,6 +176,9 @@
 "profile.card.consistency.title" = "Consistency";
 "profile.card.consistency.goal_met" = "Goal completed (%d of %d)";
 "profile.card.consistency.goal_not_met" = "Goal not completed (%d of %d)";
+"profile.card.consistency.goal_met_short" = "Goal completed";
+"profile.card.consistency.goal_not_met_short" = "Goal not completed";
+"profile.card.consistency.goal_progress" = "%d of %d";
 "profile.card.consistency.this_week" = "this week";
 "profile.card.consistency.streak" = "Streak";
 "profile.card.consistency.favorite_day" = "Favorite day";

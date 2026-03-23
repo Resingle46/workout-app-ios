@@ -438,10 +438,17 @@ private struct ProfileConsistencyCard: View {
                     showsChevron: false
                 )
 
-                Text(summary.weeklyStatusText)
-                    .font(AppTypography.heading(size: 29))
-                    .foregroundStyle(AppTheme.primaryText)
-                    .fixedSize(horizontal: false, vertical: true)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(summary.weeklyStatusTitle)
+                        .font(AppTypography.heading(size: 25))
+                        .foregroundStyle(AppTheme.primaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    Text(summary.weeklyStatusProgress)
+                        .font(AppTypography.metric(size: 36))
+                        .foregroundStyle(AppTheme.primaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
 
                 HStack(spacing: 12) {
                     ProfileMetricTile(
@@ -613,24 +620,24 @@ private struct ProfileMetricTile: View {
     var compact = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: compact ? 6 : 8) {
             Text(titleKey)
-                .font(AppTypography.caption(size: compact ? 11 : 12, weight: .semibold))
+                .font(AppTypography.caption(size: compact ? 10 : 12, weight: .semibold))
                 .foregroundStyle((accent?.secondaryText ?? AppTheme.secondaryText).opacity(0.95))
                 .textCase(.uppercase)
-                .tracking(0.8)
+                .tracking(compact ? 0.5 : 0.8)
                 .lineLimit(2)
                 .minimumScaleFactor(0.8)
 
             Text(value)
-                .font(AppTypography.value(size: compact ? 16 : 20, weight: .bold))
+                .font(AppTypography.value(size: compact ? 15 : 20, weight: .bold))
                 .foregroundStyle(AppTheme.primaryText)
-                .lineLimit(compact ? 3 : 2)
+                .lineLimit(compact ? 2 : 2)
                 .minimumScaleFactor(0.82)
         }
         .padding(compact ? 12 : 14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .frame(minHeight: compact ? 82 : 100, alignment: .topLeading)
+        .frame(height: compact ? 112 : 100, alignment: .topLeading)
         .background(
             RoundedRectangle(cornerRadius: 22, style: .continuous)
                 .fill(Color.white.opacity(accent == nil ? 0.04 : 0.06))
@@ -1423,11 +1430,14 @@ private extension Double {
 }
 
 private extension ProfileConsistencySummary {
-    var weeklyStatusText: String {
-        let key = workoutsThisWeek >= weeklyTarget
-            ? "profile.card.consistency.goal_met"
-            : "profile.card.consistency.goal_not_met"
-        return String(format: localizedString(key), workoutsThisWeek, weeklyTarget)
+    var weeklyStatusTitle: String {
+        localizedString(workoutsThisWeek >= weeklyTarget
+            ? "profile.card.consistency.goal_met_short"
+            : "profile.card.consistency.goal_not_met_short")
+    }
+
+    var weeklyStatusProgress: String {
+        String(format: localizedString("profile.card.consistency.goal_progress"), workoutsThisWeek, weeklyTarget)
     }
 }
 

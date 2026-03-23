@@ -176,6 +176,9 @@
 "profile.card.consistency.title" = "Стабильность";
 "profile.card.consistency.goal_met" = "Цель выполнена (%d из %d)";
 "profile.card.consistency.goal_not_met" = "Цель не выполнена (%d из %d)";
+"profile.card.consistency.goal_met_short" = "Цель выполнена";
+"profile.card.consistency.goal_not_met_short" = "Цель не выполнена";
+"profile.card.consistency.goal_progress" = "%d из %d";
 "profile.card.consistency.this_week" = "на этой неделе";
 "profile.card.consistency.streak" = "Серия";
 "profile.card.consistency.favorite_day" = "Любимый день";
