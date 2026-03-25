@@ -68,14 +68,13 @@ struct CoachRuntimeConfiguration: Hashable, Sendable {
     }
 }
 
-@Observable
 final class CoachRuntimeConfigurationStore {
     var isFeatureEnabled: Bool
     var backendBaseURLText: String
     var internalBearerToken: String
 
-    @ObservationIgnored private let defaultConfiguration: CoachRuntimeConfiguration
-    @ObservationIgnored private let defaults: UserDefaults
+    private let defaultConfiguration: CoachRuntimeConfiguration
+    private let defaults: UserDefaults
 
     init(bundle: Bundle = .main, defaults: UserDefaults = .standard) {
         self.init(

@@ -212,7 +212,7 @@ private struct ProfileSettingsView: View {
 private struct CoachBackendSettingsCard: View {
     @Environment(AppStore.self) private var store
     @Environment(CoachStore.self) private var coachStore
-    @Environment(CoachRuntimeConfigurationStore.self) private var coachConfigurationStore
+    private let coachConfigurationStore = CoachRuntimeConfigurationStore(bundle: .main)
 
     @State private var isFeatureEnabled = false
     @State private var backendBaseURLText = ""
