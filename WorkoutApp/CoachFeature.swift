@@ -1468,13 +1468,13 @@ private struct CoachSnapshotPackage {
     var includedInlineSnapshot: Bool
 }
 
-private enum CoachAnalysisSettingsSaveState: Equatable {
+enum CoachAnalysisSettingsSaveState: Equatable {
     case idle
     case saving
     case saved
 }
 
-private enum CoachFocusField: Hashable {
+enum CoachFocusField: Hashable {
     case question
     case comment
 }
