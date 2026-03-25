@@ -688,7 +688,7 @@ final class AppStore {
         let safeWeightChange = profile.targetBodyWeight.flatMap { targetWeight in
             safeWeightChangeRange(currentWeight: profile.weight, targetWeight: targetWeight)
         }
-        let etaWeeksRange = profile.targetBodyWeight.flatMap { targetWeight -> (lower: Int, upper: Int)? in
+        let etaWeeks = profile.targetBodyWeight.flatMap { targetWeight -> (lower: Int, upper: Int)? in
             guard let safeWeightChange else {
                 return nil
             }
@@ -706,8 +706,8 @@ final class AppStore {
             weeklyWorkoutTarget: profile.weeklyWorkoutTarget,
             safeWeeklyChangeLowerBound: safeWeightChange?.lower,
             safeWeeklyChangeUpperBound: safeWeightChange?.upper,
-            etaWeeksLowerBound: etaWeeksRange?.lower,
-            etaWeeksUpperBound: etaWeeksRange?.upper,
+            etaWeeksLowerBound: etaWeeks?.lower,
+            etaWeeksUpperBound: etaWeeks?.upper,
             usesCurrentWeightOnly: true
         )
     }
