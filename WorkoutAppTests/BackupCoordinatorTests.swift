@@ -1423,9 +1423,114 @@ final class BackupCoordinatorTests: XCTestCase {
         let lastRequest = try XCTUnwrap(requests.last)
 
         XCTAssertEqual(lastRequest.question, "Question 6")
-        XCTAssertEqual(lastRequest.conversationMessages.count, 8)
-        XCTAssertEqual(lastRequest.conversationMessages.first?.content, "Question 2")
-        XCTAssertEqual(lastRequest.conversationMessages.last?.content, "Coach answer")
+        XCTAssertEqual(lastRequest.clientRecentTurns.count, 6)
+        XCTAssertEqual(lastRequest.clientRecentTurns.first?.content, "Question 3")
+        XCTAssertEqual(lastRequest.clientRecentTurns.last?.content, "Coach answer")
+    }
+
+    @MainActor
+    func testCoachLocalStateStorePersistsInstallID() throws {
+        let suiteName = "CoachLocalStateStoreInstallIDTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        let firstStore = CoachLocalStateStore(
+            defaults: defaults,
+            generatedInstallID: "install-A"
+        )
+        let secondStore = CoachLocalStateStore(
+            defaults: defaults,
+            generatedInstallID: "install-B"
+        )
+
+        XCTAssertEqual(firstStore.installID, "install-A")
+        XCTAssertEqual(secondStore.installID, "install-A")
+    }
+
+    @MainActor
+    func testCoachSnapshotHashIsStableForEquivalentSnapshot() throws {
+        let store = AppStore()
+        let snapshot = makeSnapshot()
+        store.apply(snapshot: snapshot)
+
+        let firstHash = try CoachSnapshotHashing.hash(
+            for: CoachContextBuilder().build(from: store)
+        )
+
+        let reloadedStore = AppStore()
+        reloadedStore.apply(snapshot: snapshot)
+        let secondHash = try CoachSnapshotHashing.hash(
+            for: CoachContextBuilder().build(from: reloadedStore)
+        )
+
+        XCTAssertEqual(firstHash, secondHash)
+    }
+
+    @MainActor
+    func testCoachStoreOmitsInlineSnapshotAfterSuccessfulSync() async throws {
+        let store = AppStore()
+        store.apply(snapshot: makeSnapshot())
+        let recorder = SnapshotRequestRecorder()
+        let suiteName = "CoachLocalStateStoreSyncedTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        let coachStore = CoachStore(
+            client: RecordingSnapshotCoachAPIClient(recorder: recorder),
+            configuration: CoachRuntimeConfiguration(
+                isFeatureEnabled: true,
+                backendBaseURL: URL(string: "https://example.com"),
+                internalBearerToken: "internal-token"
+            ),
+            localStateStore: CoachLocalStateStore(
+                defaults: defaults,
+                generatedInstallID: "install-test"
+            )
+        )
+
+        await coachStore.syncSnapshotIfNeeded(using: store)
+        await coachStore.refreshProfileInsights(using: store)
+
+        let requests = await recorder.requests
+        let lastRequest = try XCTUnwrap(requests.last)
+        XCTAssertNil(lastRequest.snapshotEnvelope.snapshot)
+    }
+
+    @MainActor
+    func testCoachStoreIncludesInlineSnapshotWhenDirty() async throws {
+        let store = AppStore()
+        store.apply(snapshot: makeSnapshot())
+        let recorder = SnapshotRequestRecorder()
+        let suiteName = "CoachLocalStateStoreDirtyTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        let coachStore = CoachStore(
+            client: RecordingSnapshotCoachAPIClient(recorder: recorder),
+            configuration: CoachRuntimeConfiguration(
+                isFeatureEnabled: true,
+                backendBaseURL: URL(string: "https://example.com"),
+                internalBearerToken: "internal-token"
+            ),
+            localStateStore: CoachLocalStateStore(
+                defaults: defaults,
+                generatedInstallID: "install-test"
+            )
+        )
+
+        await coachStore.syncSnapshotIfNeeded(using: store)
+        store.profile.weeklyWorkoutTarget = 5
+        await coachStore.refreshProfileInsights(using: store)
+
+        let requests = await recorder.requests
+        let lastRequest = try XCTUnwrap(requests.last)
+        XCTAssertNotNil(lastRequest.snapshotEnvelope.snapshot)
     }
 
     @MainActor
@@ -1698,9 +1803,16 @@ private struct StubCoachAPIClient: CoachAPIClient {
     let shouldFailInsights: Bool
     let shouldFailChat: Bool
 
+    func syncSnapshot(_ request: CoachSnapshotSyncRequest) async throws -> CoachSnapshotSyncResponse {
+        CoachSnapshotSyncResponse(
+            acceptedHash: request.snapshotHash,
+            storedAt: request.snapshotUpdatedAt
+        )
+    }
+
     func fetchProfileInsights(
         locale: String,
-        context: CoachContextPayload,
+        snapshotEnvelope: CoachSnapshotEnvelope,
         capabilityScope: CoachCapabilityScope
     ) async throws -> CoachProfileInsights {
         if shouldFailInsights {
@@ -1717,8 +1829,8 @@ private struct StubCoachAPIClient: CoachAPIClient {
     func sendChat(
         locale: String,
         question: String,
-        conversationMessages: [CoachConversationMessage],
-        context: CoachContextPayload,
+        clientRecentTurns: [CoachConversationMessage],
+        snapshotEnvelope: CoachSnapshotEnvelope,
         capabilityScope: CoachCapabilityScope
     ) async throws -> CoachChatResponse {
         if shouldFailChat {
@@ -1732,6 +1844,8 @@ private struct StubCoachAPIClient: CoachAPIClient {
             suggestedChanges: []
         )
     }
+
+    func deleteRemoteState(installID: String) async throws {}
 }
 
 private actor ChatRequestRecorder {
@@ -1744,15 +1858,34 @@ private actor ChatRequestRecorder {
 
 private struct RecordedCoachChatRequest: Sendable {
     var question: String
-    var conversationMessages: [CoachConversationMessage]
+    var clientRecentTurns: [CoachConversationMessage]
+}
+
+private struct RecordedCoachSnapshotRequest: Sendable {
+    var snapshotEnvelope: CoachSnapshotEnvelope
+}
+
+private actor SnapshotRequestRecorder {
+    private(set) var requests: [RecordedCoachSnapshotRequest] = []
+
+    func record(_ request: RecordedCoachSnapshotRequest) {
+        requests.append(request)
+    }
 }
 
 private struct RecordingCoachAPIClient: CoachAPIClient {
     let recorder: ChatRequestRecorder
 
+    func syncSnapshot(_ request: CoachSnapshotSyncRequest) async throws -> CoachSnapshotSyncResponse {
+        CoachSnapshotSyncResponse(
+            acceptedHash: request.snapshotHash,
+            storedAt: request.snapshotUpdatedAt
+        )
+    }
+
     func fetchProfileInsights(
         locale: String,
-        context: CoachContextPayload,
+        snapshotEnvelope: CoachSnapshotEnvelope,
         capabilityScope: CoachCapabilityScope
     ) async throws -> CoachProfileInsights {
         CoachProfileInsights(
@@ -1765,14 +1898,14 @@ private struct RecordingCoachAPIClient: CoachAPIClient {
     func sendChat(
         locale: String,
         question: String,
-        conversationMessages: [CoachConversationMessage],
-        context: CoachContextPayload,
+        clientRecentTurns: [CoachConversationMessage],
+        snapshotEnvelope: CoachSnapshotEnvelope,
         capabilityScope: CoachCapabilityScope
     ) async throws -> CoachChatResponse {
         await recorder.record(
             RecordedCoachChatRequest(
                 question: question,
-                conversationMessages: conversationMessages
+                clientRecentTurns: clientRecentTurns
             )
         )
 
@@ -1783,6 +1916,52 @@ private struct RecordingCoachAPIClient: CoachAPIClient {
             suggestedChanges: []
         )
     }
+
+    func deleteRemoteState(installID: String) async throws {}
+}
+
+private struct RecordingSnapshotCoachAPIClient: CoachAPIClient {
+    let recorder: SnapshotRequestRecorder
+
+    func syncSnapshot(_ request: CoachSnapshotSyncRequest) async throws -> CoachSnapshotSyncResponse {
+        CoachSnapshotSyncResponse(
+            acceptedHash: request.snapshotHash,
+            storedAt: request.snapshotUpdatedAt
+        )
+    }
+
+    func fetchProfileInsights(
+        locale: String,
+        snapshotEnvelope: CoachSnapshotEnvelope,
+        capabilityScope: CoachCapabilityScope
+    ) async throws -> CoachProfileInsights {
+        await recorder.record(
+            RecordedCoachSnapshotRequest(snapshotEnvelope: snapshotEnvelope)
+        )
+
+        return CoachProfileInsights(
+            summary: "Remote summary",
+            recommendations: ["Remote recommendation"],
+            suggestedChanges: []
+        )
+    }
+
+    func sendChat(
+        locale: String,
+        question: String,
+        clientRecentTurns: [CoachConversationMessage],
+        snapshotEnvelope: CoachSnapshotEnvelope,
+        capabilityScope: CoachCapabilityScope
+    ) async throws -> CoachChatResponse {
+        CoachChatResponse(
+            answerMarkdown: "Coach answer",
+            responseID: "response-1",
+            followUps: ["Next question"],
+            suggestedChanges: []
+        )
+    }
+
+    func deleteRemoteState(installID: String) async throws {}
 }
 
 private enum StubCoachError: LocalizedError, Sendable {

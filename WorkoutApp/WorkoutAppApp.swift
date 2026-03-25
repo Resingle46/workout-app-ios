@@ -27,6 +27,7 @@ struct WorkoutAppApp: App {
                 .preferredColorScheme(.dark)
                 .task {
                     await store.handleAppLaunch()
+                    await coachStore.syncSnapshotIfNeeded(using: store)
                 }
         }
         .onChange(of: scenePhase) { _, newPhase in
@@ -35,6 +36,7 @@ struct WorkoutAppApp: App {
             }
 
             Task {
+                await coachStore.syncSnapshotIfNeeded(using: store)
                 await store.handleSceneDidEnterBackground()
             }
         }

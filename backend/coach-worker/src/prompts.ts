@@ -52,7 +52,7 @@ export function buildProfileInsightsMessages(
         `Capability scope: ${request.capabilityScope}`,
         "Return JSON that strictly matches the provided schema.",
         "Context JSON:",
-        JSON.stringify(request.context),
+        JSON.stringify(request.snapshot),
       ].join("\n\n"),
     },
   ];
@@ -72,7 +72,7 @@ export function buildChatMessages(
         "Include up to 4 follow-up questions that naturally continue the conversation.",
       ].join("\n\n"),
     },
-    ...request.conversationMessages.map((message) => ({
+    ...request.clientRecentTurns.map((message) => ({
       role: message.role,
       content: message.content,
     })),
@@ -83,7 +83,7 @@ export function buildChatMessages(
         `Question: ${request.question}`,
         "Return JSON that strictly matches the provided schema.",
         "Current app context JSON:",
-        JSON.stringify(request.context),
+        JSON.stringify(request.snapshot),
       ].join("\n\n"),
     },
   ];
@@ -109,7 +109,7 @@ export function buildFallbackProfileInsightsMessages(
       content: [
         `Capability scope: ${request.capabilityScope}`,
         "Current app context JSON:",
-        JSON.stringify(request.context),
+        JSON.stringify(request.snapshot),
       ].join("\n\n"),
     },
   ];
@@ -128,7 +128,7 @@ export function buildFallbackChatMessages(
         "Return a concise markdown answer only. Do not return JSON.",
       ].join("\n\n"),
     },
-    ...request.conversationMessages.map((message) => ({
+    ...request.clientRecentTurns.map((message) => ({
       role: message.role,
       content: message.content,
     })),
@@ -138,7 +138,7 @@ export function buildFallbackChatMessages(
         `Capability scope: ${request.capabilityScope}`,
         `Question: ${request.question}`,
         "Current app context JSON:",
-        JSON.stringify(request.context),
+        JSON.stringify(request.snapshot),
       ].join("\n\n"),
     },
   ];

@@ -7,6 +7,7 @@ import {
   type CoachInferenceService,
   type Env,
 } from "../src/openai";
+import { type CoachKVNamespace } from "../src/state";
 import type {
   CoachChatRequest,
   CoachChatResponse,
@@ -111,6 +112,87 @@ describe("coach worker app", () => {
     });
   });
 
+  it("syncs snapshot state through the dedicated endpoint", async () => {
+    const app = createApp({
+      createInferenceService: () => stubInferenceService(),
+    });
+    const fixture = makeProfileInsightsRequestFixture();
+
+    const response = await app.fetch(
+      new Request("https://coach.example.workers.dev/v1/coach/snapshot", {
+        method: "PUT",
+        headers: {
+          authorization: "Bearer internal-token",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          installID: fixture.installID,
+          snapshotHash: fixture.snapshotHash,
+          snapshot: fixture.snapshot,
+          snapshotUpdatedAt: fixture.snapshotUpdatedAt,
+        }),
+      }),
+      makeEnv()
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      acceptedHash: fixture.snapshotHash,
+    });
+  });
+
+  it("reuses cached profile insights without invoking the model again", async () => {
+    const service = stubInferenceService({
+      profileInsights: {
+        summary: "Cached summary.",
+        recommendations: ["Cached recommendation"],
+        suggestedChanges: [],
+      },
+    });
+    const app = createApp({
+      createInferenceService: () => service,
+    });
+    const env = makeEnv();
+    const initialRequest = makeProfileInsightsRequestFixture();
+
+    const firstResponse = await app.fetch(
+      new Request("https://coach.example.workers.dev/v1/coach/profile-insights", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer internal-token",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(initialRequest),
+      }),
+      env
+    );
+
+    expect(firstResponse.status).toBe(200);
+
+    const secondResponse = await app.fetch(
+      new Request("https://coach.example.workers.dev/v1/coach/profile-insights", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer internal-token",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          ...initialRequest,
+          snapshot: undefined,
+          snapshotUpdatedAt: undefined,
+        }),
+      }),
+      env
+    );
+
+    expect(secondResponse.status).toBe(200);
+    await expect(secondResponse.json()).resolves.toEqual({
+      summary: "Cached summary.",
+      recommendations: ["Cached recommendation"],
+      suggestedChanges: [],
+    });
+  });
+
   it("accepts valid chat request with replayed conversation messages", async () => {
     const service = stubInferenceService({
       chat: {
@@ -168,6 +250,95 @@ describe("coach worker app", () => {
         code: "invalid_request",
       },
     });
+  });
+
+  it("requires a snapshot on cold miss", async () => {
+    const app = createApp({
+      createInferenceService: () => stubInferenceService(),
+    });
+    const fixture = makeProfileInsightsRequestFixture();
+
+    const response = await app.fetch(
+      new Request("https://coach.example.workers.dev/v1/coach/profile-insights", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer internal-token",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          ...fixture,
+          snapshot: undefined,
+          snapshotUpdatedAt: undefined,
+        }),
+      }),
+      makeEnv()
+    );
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      error: {
+        code: "snapshot_required",
+      },
+    });
+  });
+
+  it("deletes stored state for an install ID", async () => {
+    const app = createApp({
+      createInferenceService: () => stubInferenceService(),
+    });
+    const env = makeEnv();
+    const fixture = makeProfileInsightsRequestFixture();
+
+    await app.fetch(
+      new Request("https://coach.example.workers.dev/v1/coach/snapshot", {
+        method: "PUT",
+        headers: {
+          authorization: "Bearer internal-token",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          installID: fixture.installID,
+          snapshotHash: fixture.snapshotHash,
+          snapshot: fixture.snapshot,
+          snapshotUpdatedAt: fixture.snapshotUpdatedAt,
+        }),
+      }),
+      env
+    );
+
+    const deleteResponse = await app.fetch(
+      new Request("https://coach.example.workers.dev/v1/coach/state", {
+        method: "DELETE",
+        headers: {
+          authorization: "Bearer internal-token",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          installID: fixture.installID,
+        }),
+      }),
+      env
+    );
+
+    expect(deleteResponse.status).toBe(200);
+
+    const postDeleteResponse = await app.fetch(
+      new Request("https://coach.example.workers.dev/v1/coach/profile-insights", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer internal-token",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          ...fixture,
+          snapshot: undefined,
+          snapshotUpdatedAt: undefined,
+        }),
+      }),
+      env
+    );
+
+    expect(postDeleteResponse.status).toBe(409);
   });
 
   it("maps upstream failures to stable 5xx errors", async () => {
@@ -409,6 +580,7 @@ function makeEnv(overrides: Partial<Env> = {}): Env {
     AI: {
       run: vi.fn(),
     },
+    COACH_STATE_KV: createInMemoryKVNamespace(),
     COACH_INTERNAL_TOKEN: "internal-token",
     AI_MODEL: DEFAULT_AI_MODEL,
     COACH_PROMPT_VERSION: "test.v1",
@@ -417,165 +589,163 @@ function makeEnv(overrides: Partial<Env> = {}): Env {
 }
 
 function makeProfileInsightsRequestFixture(): CoachProfileInsightsRequest {
-  return {
-    locale: "en",
-    capabilityScope: "draft_changes",
-    context: {
-      localeIdentifier: "en",
-      historyMode: "summary_recent_history",
-      profile: {
-        sex: "M",
-        age: 29,
-        weight: 86,
-        height: 182,
-        appLanguageCode: "en",
-        primaryGoal: "strength",
-        experienceLevel: "intermediate",
-        weeklyWorkoutTarget: 4,
-        targetBodyWeight: 88,
-      },
-      preferredProgram: {
-        id: "11111111-1111-4111-8111-111111111111",
-        title: "Upper Lower",
-        workoutCount: 4,
-        workouts: [
-          {
-            id: "22222222-2222-4222-8222-222222222222",
-            title: "Upper A",
-            focus: "Chest and back",
-            exerciseCount: 2,
-            exercises: [
-              {
-                templateExerciseID: "33333333-3333-4333-8333-333333333333",
-                exerciseID: "44444444-4444-4444-8444-444444444444",
-                exerciseName: "Barbell Bench Press",
-                setsCount: 4,
-                reps: 5,
-                suggestedWeight: 90,
-                groupKind: "regular",
-              },
-              {
-                templateExerciseID: "55555555-5555-4555-8555-555555555555",
-                exerciseID: "66666666-6666-4666-8666-666666666666",
-                exerciseName: "Barbell Row",
-                setsCount: 4,
-                reps: 6,
-                suggestedWeight: 80,
-                groupKind: "regular",
-              },
-            ],
-          },
-        ],
-      },
-      activeWorkout: {
-        workoutTemplateID: "22222222-2222-4222-8222-222222222222",
-        title: "Upper A",
-        startedAt: "2026-03-25T12:00:00.000Z",
-        exerciseCount: 2,
-        completedSetsCount: 3,
-        totalSetsCount: 8,
-      },
-      analytics: {
-        progress30Days: {
-          totalFinishedWorkouts: 14,
-          recentExercisesCount: 28,
-          recentVolume: 24680,
-          averageDurationSeconds: 4100,
-          lastWorkoutDate: "2026-03-24T18:30:00.000Z",
-        },
-        goal: {
-          primaryGoal: "strength",
-          currentWeight: 86,
-          targetBodyWeight: 88,
-          weeklyWorkoutTarget: 4,
-          safeWeeklyChangeLowerBound: 0.15,
-          safeWeeklyChangeUpperBound: 0.3,
-          etaWeeksLowerBound: 6,
-          etaWeeksUpperBound: 10,
-          usesCurrentWeightOnly: false,
-        },
-        training: {
-          currentWeeklyTarget: 4,
-          recommendedWeeklyTargetLowerBound: 3,
-          recommendedWeeklyTargetUpperBound: 5,
-          mainRepLowerBound: 3,
-          mainRepUpperBound: 6,
-          accessoryRepLowerBound: 6,
-          accessoryRepUpperBound: 10,
-          weeklySetsLowerBound: 10,
-          weeklySetsUpperBound: 14,
-          split: "upper_lower",
-          splitWorkoutDays: 4,
-          splitProgramTitle: "Upper Lower",
-          isGenericFallback: false,
-        },
-        compatibility: {
-          isAligned: true,
-          issues: [],
-        },
-        consistency: {
-          workoutsThisWeek: 3,
-          weeklyTarget: 4,
-          streakWeeks: 4,
-          mostFrequentWeekday: 2,
-          recentWeeklyActivity: [
-            {
-              weekStart: "2026-03-17T00:00:00.000Z",
-              workoutsCount: 4,
-              meetsTarget: true,
-            },
-          ],
-        },
-        recentPersonalRecords: [
-          {
-            exerciseID: "44444444-4444-4444-8444-444444444444",
-            exerciseName: "Barbell Bench Press",
-            achievedAt: "2026-03-20T18:00:00.000Z",
-            weight: 102.5,
-            previousWeight: 100,
-            delta: 2.5,
-          },
-        ],
-        relativeStrength: [
-          {
-            lift: "bench_press",
-            bestLoad: 102.5,
-            relativeToBodyWeight: 1.19,
-          },
-        ],
-      },
-      recentFinishedSessions: [
+  const snapshot = {
+    localeIdentifier: "en",
+    historyMode: "summary_recent_history",
+    profile: {
+      sex: "M",
+      age: 29,
+      weight: 86,
+      height: 182,
+      appLanguageCode: "en",
+      primaryGoal: "strength",
+      experienceLevel: "intermediate",
+      weeklyWorkoutTarget: 4,
+      targetBodyWeight: 88,
+    },
+    preferredProgram: {
+      id: "11111111-1111-4111-8111-111111111111",
+      title: "Upper Lower",
+      workoutCount: 4,
+      workouts: [
         {
-          id: "77777777-7777-4777-8777-777777777777",
-          workoutTemplateID: "22222222-2222-4222-8222-222222222222",
+          id: "22222222-2222-4222-8222-222222222222",
           title: "Upper A",
-          startedAt: "2026-03-24T17:00:00.000Z",
-          endedAt: "2026-03-24T18:15:00.000Z",
-          durationSeconds: 4500,
-          completedSetsCount: 8,
-          totalVolume: 6240,
+          focus: "Chest and back",
+          exerciseCount: 2,
           exercises: [
             {
               templateExerciseID: "33333333-3333-4333-8333-333333333333",
               exerciseID: "44444444-4444-4444-8444-444444444444",
               exerciseName: "Barbell Bench Press",
+              setsCount: 4,
+              reps: 5,
+              suggestedWeight: 90,
               groupKind: "regular",
-              completedSetsCount: 4,
-              bestWeight: 100,
-              totalVolume: 2000,
-              averageReps: 5,
-              performedSets: [
-                {
-                  reps: 5,
-                  weight: 100,
-                  completedAt: "2026-03-24T17:10:00.000Z",
-                },
-              ],
+            },
+            {
+              templateExerciseID: "55555555-5555-4555-8555-555555555555",
+              exerciseID: "66666666-6666-4666-8666-666666666666",
+              exerciseName: "Barbell Row",
+              setsCount: 4,
+              reps: 6,
+              suggestedWeight: 80,
+              groupKind: "regular",
             },
           ],
         },
       ],
     },
+    activeWorkout: {
+      workoutTemplateID: "22222222-2222-4222-8222-222222222222",
+      title: "Upper A",
+      startedAt: "2026-03-25T12:00:00.000Z",
+      exerciseCount: 2,
+      completedSetsCount: 3,
+      totalSetsCount: 8,
+    },
+    analytics: {
+      progress30Days: {
+        totalFinishedWorkouts: 14,
+        recentExercisesCount: 28,
+        recentVolume: 24680,
+        averageDurationSeconds: 4100,
+        lastWorkoutDate: "2026-03-24T18:30:00.000Z",
+      },
+      goal: {
+        primaryGoal: "strength",
+        currentWeight: 86,
+        targetBodyWeight: 88,
+        weeklyWorkoutTarget: 4,
+        safeWeeklyChangeLowerBound: 0.15,
+        safeWeeklyChangeUpperBound: 0.3,
+        etaWeeksLowerBound: 6,
+        etaWeeksUpperBound: 10,
+        usesCurrentWeightOnly: false,
+      },
+      training: {
+        currentWeeklyTarget: 4,
+        recommendedWeeklyTargetLowerBound: 3,
+        recommendedWeeklyTargetUpperBound: 5,
+        mainRepLowerBound: 3,
+        mainRepUpperBound: 6,
+        accessoryRepLowerBound: 6,
+        accessoryRepUpperBound: 10,
+        weeklySetsLowerBound: 10,
+        weeklySetsUpperBound: 14,
+        split: "upper_lower",
+        splitWorkoutDays: 4,
+        splitProgramTitle: "Upper Lower",
+        isGenericFallback: false,
+      },
+      compatibility: {
+        isAligned: true,
+        issues: [],
+      },
+      consistency: {
+        workoutsThisWeek: 3,
+        weeklyTarget: 4,
+        streakWeeks: 4,
+        mostFrequentWeekday: 2,
+        recentWeeklyActivity: [
+          {
+            weekStart: "2026-03-17T00:00:00.000Z",
+            workoutsCount: 4,
+            meetsTarget: true,
+          },
+        ],
+      },
+      recentPersonalRecords: [
+        {
+          exerciseID: "44444444-4444-4444-8444-444444444444",
+          exerciseName: "Barbell Bench Press",
+          achievedAt: "2026-03-20T18:00:00.000Z",
+          weight: 102.5,
+          previousWeight: 100,
+          delta: 2.5,
+        },
+      ],
+      relativeStrength: [
+        {
+          lift: "bench_press",
+          bestLoad: 102.5,
+          relativeToBodyWeight: 1.19,
+        },
+      ],
+    },
+    recentFinishedSessions: [
+      {
+        id: "77777777-7777-4777-8777-777777777777",
+        workoutTemplateID: "22222222-2222-4222-8222-222222222222",
+        title: "Upper A",
+        startedAt: "2026-03-24T17:00:00.000Z",
+        endedAt: "2026-03-24T18:15:00.000Z",
+        durationSeconds: 4500,
+        completedSetsCount: 8,
+        totalVolume: 6240,
+        exercises: [
+          {
+            templateExerciseID: "33333333-3333-4333-8333-333333333333",
+            exerciseID: "44444444-4444-4444-8444-444444444444",
+            exerciseName: "Barbell Bench Press",
+            groupKind: "regular",
+            completedSetsCount: 4,
+            bestWeight: 100,
+            totalVolume: 2000,
+            averageReps: 5,
+          },
+        ],
+      },
+    ],
+  } satisfies CoachProfileInsightsRequest["snapshot"];
+
+  return {
+    locale: "en",
+    installID: "install_001",
+    snapshotHash: "60b48036c3b446bf1cc8f0683ff3a11f402da4dbbb236a8a24d42d454e7907fc",
+    snapshot,
+    snapshotUpdatedAt: "2026-03-25T19:00:00.000Z",
+    capabilityScope: "draft_changes",
   };
 }
 
@@ -583,8 +753,7 @@ function makeChatRequestFixture(): CoachChatRequest {
   return {
     ...makeProfileInsightsRequestFixture(),
     question: "How should I progress next week?",
-    previousResponseID: "resp_prev_001",
-    conversationMessages: [
+    clientRecentTurns: [
       {
         role: "user",
         content: "Last week I was close to failure on my top sets.",
@@ -595,4 +764,80 @@ function makeChatRequestFixture(): CoachChatRequest {
       },
     ],
   };
+}
+
+function createInMemoryKVNamespace(): CoachKVNamespace {
+  return new InMemoryKVNamespace();
+}
+
+class InMemoryKVNamespace implements CoachKVNamespace {
+  private readonly values = new Map<
+    string,
+    { value: string; expiresAt?: number }
+  >();
+
+  async get<T = unknown>(
+    key: string,
+    type: "text" | "json"
+  ): Promise<T | string | null> {
+    const stored = this.values.get(key);
+    if (!stored) {
+      return null;
+    }
+
+    if (stored.expiresAt !== undefined && stored.expiresAt <= Date.now()) {
+      this.values.delete(key);
+      return null;
+    }
+
+    if (type === "json") {
+      return JSON.parse(stored.value) as T;
+    }
+
+    return stored.value;
+  }
+
+  async put(
+    key: string,
+    value: string,
+    options?: { expirationTtl?: number }
+  ): Promise<void> {
+    this.values.set(key, {
+      value,
+      expiresAt:
+        options?.expirationTtl !== undefined
+          ? Date.now() + options.expirationTtl * 1000
+          : undefined,
+    });
+  }
+
+  async delete(key: string): Promise<void> {
+    this.values.delete(key);
+  }
+
+  async list(options?: {
+    prefix?: string;
+    cursor?: string;
+    limit?: number;
+  }): Promise<{
+    keys: Array<{ name: string }>;
+    list_complete: boolean;
+    cursor?: string;
+  }> {
+    const prefix = options?.prefix ?? "";
+    const matchingKeys = Array.from(this.values.keys())
+      .filter((key) => key.startsWith(prefix))
+      .sort();
+    const startIndex = options?.cursor ? Number(options.cursor) || 0 : 0;
+    const limit = options?.limit ?? matchingKeys.length;
+    const page = matchingKeys.slice(startIndex, startIndex + limit);
+    const nextCursor =
+      startIndex + limit < matchingKeys.length ? String(startIndex + limit) : undefined;
+
+    return {
+      keys: page.map((name) => ({ name })),
+      list_complete: nextCursor === undefined,
+      cursor: nextCursor,
+    };
+  }
 }

@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Observation
 import SwiftUI
@@ -166,6 +167,66 @@ final class CoachRuntimeConfigurationStore {
     }
 }
 
+final class CoachLocalStateStore {
+    let installID: String
+
+    private let defaults: UserDefaults
+
+    convenience init(defaults: UserDefaults = .standard) {
+        self.init(defaults: defaults, generatedInstallID: UUID().uuidString)
+    }
+
+    init(defaults: UserDefaults, generatedInstallID: String) {
+        self.defaults = defaults
+
+        if let storedInstallID = defaults.string(forKey: PreferenceKey.installID)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .nilIfEmpty {
+            self.installID = storedInstallID
+        } else {
+            self.installID = generatedInstallID
+            defaults.set(generatedInstallID, forKey: PreferenceKey.installID)
+        }
+    }
+
+    var lastAcceptedSnapshotHash: String? {
+        defaults.string(forKey: PreferenceKey.lastAcceptedSnapshotHash)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .nilIfEmpty
+    }
+
+    var lastAcceptedSnapshotAt: Date? {
+        defaults.object(forKey: PreferenceKey.lastAcceptedSnapshotAt) as? Date
+    }
+
+    func markSnapshotAccepted(hash: String, at date: Date = .now) {
+        defaults.set(hash, forKey: PreferenceKey.lastAcceptedSnapshotHash)
+        defaults.set(date, forKey: PreferenceKey.lastAcceptedSnapshotAt)
+    }
+
+    func resetSnapshotAcknowledgement() {
+        defaults.removeObject(forKey: PreferenceKey.lastAcceptedSnapshotHash)
+        defaults.removeObject(forKey: PreferenceKey.lastAcceptedSnapshotAt)
+    }
+
+    private enum PreferenceKey {
+        static let installID = "coach.runtime.install_id"
+        static let lastAcceptedSnapshotHash = "coach.runtime.last_accepted_snapshot_hash"
+        static let lastAcceptedSnapshotAt = "coach.runtime.last_accepted_snapshot_at"
+    }
+}
+
+enum CoachSnapshotHashing {
+    static func hash(for snapshot: CompactCoachSnapshot) throws -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(snapshot)
+        let digest = SHA256.hash(data: data)
+        return digest.map { String(format: "%02x", $0) }.joined()
+    }
+}
+
 enum CoachClientError: LocalizedError, Equatable {
     case featureDisabled
     case missingBaseURL
@@ -202,32 +263,63 @@ enum CoachInsightsOrigin: Hashable, Sendable {
 }
 
 protocol CoachAPIClient: Sendable {
+    func syncSnapshot(_ request: CoachSnapshotSyncRequest) async throws -> CoachSnapshotSyncResponse
+
     func fetchProfileInsights(
         locale: String,
-        context: CoachContextPayload,
+        snapshotEnvelope: CoachSnapshotEnvelope,
         capabilityScope: CoachCapabilityScope
     ) async throws -> CoachProfileInsights
 
     func sendChat(
         locale: String,
         question: String,
-        conversationMessages: [CoachConversationMessage],
-        context: CoachContextPayload,
+        clientRecentTurns: [CoachConversationMessage],
+        snapshotEnvelope: CoachSnapshotEnvelope,
         capabilityScope: CoachCapabilityScope
     ) async throws -> CoachChatResponse
+
+    func deleteRemoteState(installID: String) async throws
+}
+
+typealias CompactCoachSnapshot = CoachContextPayload
+
+struct CoachSnapshotEnvelope: Hashable, Sendable {
+    var installID: String
+    var snapshotHash: String
+    var snapshot: CompactCoachSnapshot?
+    var snapshotUpdatedAt: Date?
+}
+
+struct CoachSnapshotSyncRequest: Codable, Sendable {
+    var installID: String
+    var snapshotHash: String
+    var snapshot: CompactCoachSnapshot
+    var snapshotUpdatedAt: Date
+}
+
+struct CoachSnapshotSyncResponse: Codable, Hashable, Sendable {
+    var acceptedHash: String
+    var storedAt: Date
 }
 
 struct CoachProfileInsightsRequest: Codable, Sendable {
     var locale: String
-    var context: CoachContextPayload
+    var installID: String
+    var snapshotHash: String
+    var snapshot: CompactCoachSnapshot?
+    var snapshotUpdatedAt: Date?
     var capabilityScope: CoachCapabilityScope
 }
 
 struct CoachChatRequest: Codable, Sendable {
     var locale: String
     var question: String
-    var conversationMessages: [CoachConversationMessage]
-    var context: CoachContextPayload
+    var installID: String
+    var snapshotHash: String
+    var snapshot: CompactCoachSnapshot?
+    var snapshotUpdatedAt: Date?
+    var clientRecentTurns: [CoachConversationMessage]
     var capabilityScope: CoachCapabilityScope
 }
 
@@ -474,13 +566,6 @@ struct CoachRecentSessionExerciseContext: Codable, Hashable, Sendable {
     var bestWeight: Double?
     var totalVolume: Double
     var averageReps: Double?
-    var performedSets: [CoachPerformedSetContext]
-}
-
-struct CoachPerformedSetContext: Codable, Hashable, Sendable {
-    var reps: Int
-    var weight: Double
-    var completedAt: Date
 }
 
 struct CoachAPIHTTPClient: CoachAPIClient {
@@ -498,16 +583,29 @@ struct CoachAPIHTTPClient: CoachAPIClient {
         self.session = session ?? Self.makeSession()
     }
 
+    func syncSnapshot(_ request: CoachSnapshotSyncRequest) async throws -> CoachSnapshotSyncResponse {
+        try await send(
+            path: "v1/coach/snapshot",
+            method: "PUT",
+            body: request,
+            responseType: CoachSnapshotSyncResponse.self
+        )
+    }
+
     func fetchProfileInsights(
         locale: String,
-        context: CoachContextPayload,
+        snapshotEnvelope: CoachSnapshotEnvelope,
         capabilityScope: CoachCapabilityScope
     ) async throws -> CoachProfileInsights {
         try await send(
             path: "v1/coach/profile-insights",
+            method: "POST",
             body: CoachProfileInsightsRequest(
                 locale: locale,
-                context: context,
+                installID: snapshotEnvelope.installID,
+                snapshotHash: snapshotEnvelope.snapshotHash,
+                snapshot: snapshotEnvelope.snapshot,
+                snapshotUpdatedAt: snapshotEnvelope.snapshotUpdatedAt,
                 capabilityScope: capabilityScope
             ),
             responseType: CoachProfileInsights.self
@@ -517,25 +615,43 @@ struct CoachAPIHTTPClient: CoachAPIClient {
     func sendChat(
         locale: String,
         question: String,
-        conversationMessages: [CoachConversationMessage],
-        context: CoachContextPayload,
+        clientRecentTurns: [CoachConversationMessage],
+        snapshotEnvelope: CoachSnapshotEnvelope,
         capabilityScope: CoachCapabilityScope
     ) async throws -> CoachChatResponse {
         try await send(
             path: "v1/coach/chat",
+            method: "POST",
             body: CoachChatRequest(
                 locale: locale,
                 question: question,
-                conversationMessages: conversationMessages,
-                context: context,
+                installID: snapshotEnvelope.installID,
+                snapshotHash: snapshotEnvelope.snapshotHash,
+                snapshot: snapshotEnvelope.snapshot,
+                snapshotUpdatedAt: snapshotEnvelope.snapshotUpdatedAt,
+                clientRecentTurns: clientRecentTurns,
                 capabilityScope: capabilityScope
             ),
             responseType: CoachChatResponse.self
         )
     }
 
+    func deleteRemoteState(installID: String) async throws {
+        struct DeleteRequest: Encodable {
+            let installID: String
+        }
+
+        let _: EmptyCoachResponse = try await send(
+            path: "v1/coach/state",
+            method: "DELETE",
+            body: DeleteRequest(installID: installID),
+            responseType: EmptyCoachResponse.self
+        )
+    }
+
     private func send<RequestBody: Encodable, ResponseBody: Decodable>(
         path: String,
+        method: String,
         body: RequestBody,
         responseType: ResponseBody.Type
     ) async throws -> ResponseBody {
@@ -550,7 +666,7 @@ struct CoachAPIHTTPClient: CoachAPIClient {
         }
 
         var request = URLRequest(url: baseURL.appending(path: path))
-        request.httpMethod = "POST"
+        request.httpMethod = method
         request.timeoutInterval = Self.requestTimeoutInterval
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -593,6 +709,8 @@ struct CoachAPIHTTPClient: CoachAPIClient {
         return URLSession(configuration: configuration)
     }
 }
+
+private struct EmptyCoachResponse: Decodable, Sendable {}
 
 struct CoachContextBuilder {
     private static let recentFinishedSessionsLimit = 8
@@ -747,34 +865,23 @@ struct CoachContextBuilder {
                     completedSetsCount: completedSets.count,
                     totalVolume: totalVolume,
                     exercises: session.exercises.map { exerciseLog in
-                        let performedSets = exerciseLog.sets.compactMap { set -> CoachPerformedSetContext? in
-                            guard let completedAt = set.completedAt else {
-                                return nil
-                            }
-
-                            return CoachPerformedSetContext(
-                                reps: set.reps,
-                                weight: set.weight,
-                                completedAt: completedAt
-                            )
-                        }
-                        let totalExerciseVolume = performedSets.reduce(0.0) { partialResult, set in
+                        let completedSets = exerciseLog.sets.filter { $0.completedAt != nil }
+                        let totalExerciseVolume = completedSets.reduce(0.0) { partialResult, set in
                             partialResult + (set.weight * Double(set.reps))
                         }
-                        let averageReps: Double? = performedSets.isEmpty
+                        let averageReps: Double? = completedSets.isEmpty
                             ? nil
-                            : performedSets.reduce(0.0) { $0 + Double($1.reps) } / Double(performedSets.count)
+                            : completedSets.reduce(0.0) { $0 + Double($1.reps) } / Double(completedSets.count)
 
                         return CoachRecentSessionExerciseContext(
                             templateExerciseID: exerciseLog.templateExerciseID,
                             exerciseID: exerciseLog.exerciseID,
                             exerciseName: store.exercise(for: exerciseLog.exerciseID)?.localizedName ?? exerciseLog.exerciseID.uuidString,
                             groupKind: exerciseLog.groupKind.rawValue,
-                            completedSetsCount: performedSets.count,
-                            bestWeight: performedSets.map(\.weight).max(),
+                            completedSetsCount: completedSets.count,
+                            bestWeight: completedSets.map(\.weight).max(),
                             totalVolume: totalExerciseVolume,
-                            averageReps: averageReps,
-                            performedSets: performedSets
+                            averageReps: averageReps
                         )
                     }
                 )
@@ -1024,17 +1131,20 @@ final class CoachStore {
 
     @ObservationIgnored private var client: any CoachAPIClient
     @ObservationIgnored private let contextBuilder: CoachContextBuilder
+    @ObservationIgnored private let localStateStore: CoachLocalStateStore
     private var configuration: CoachRuntimeConfiguration
     @ObservationIgnored private let capabilityScope: CoachCapabilityScope
 
     init(
         client: any CoachAPIClient,
         configuration: CoachRuntimeConfiguration,
+        localStateStore: CoachLocalStateStore = CoachLocalStateStore(),
         contextBuilder: CoachContextBuilder = CoachContextBuilder(),
         capabilityScope: CoachCapabilityScope = .draftChanges
     ) {
         self.client = client
         self.configuration = configuration
+        self.localStateStore = localStateStore
         self.contextBuilder = contextBuilder
         self.capabilityScope = capabilityScope
     }
@@ -1052,10 +1162,43 @@ final class CoachStore {
     func updateConfiguration(_ configuration: CoachRuntimeConfiguration) {
         self.configuration = configuration
         client = CoachAPIHTTPClient(configuration: configuration)
+        localStateStore.resetSnapshotAcknowledgement()
         profileInsights = nil
         profileInsightsOrigin = .fallback
         lastInsightsErrorDescription = nil
         resetConversation()
+    }
+
+    func syncSnapshotIfNeeded(using appStore: AppStore) async {
+        guard configuration.canUseRemoteCoach else {
+            return
+        }
+
+        do {
+            let snapshotPackage = try makeSnapshotPackage(
+                from: appStore,
+                forceInlineSnapshot: true
+            )
+            guard let snapshot = snapshotPackage.envelope.snapshot,
+                  let snapshotUpdatedAt = snapshotPackage.envelope.snapshotUpdatedAt else {
+                return
+            }
+
+            let response = try await client.syncSnapshot(
+                CoachSnapshotSyncRequest(
+                    installID: snapshotPackage.envelope.installID,
+                    snapshotHash: snapshotPackage.envelope.snapshotHash,
+                    snapshot: snapshot,
+                    snapshotUpdatedAt: snapshotUpdatedAt
+                )
+            )
+            localStateStore.markSnapshotAccepted(
+                hash: response.acceptedHash,
+                at: response.storedAt
+            )
+        } catch {
+            // Keep proactive sync silent; request paths will still fall back safely.
+        }
     }
 
     func refreshProfileInsights(using appStore: AppStore) async {
@@ -1072,15 +1215,16 @@ final class CoachStore {
         }
 
         do {
-            let context = contextBuilder.build(from: appStore)
+            let snapshotPackage = try makeSnapshotPackage(from: appStore)
             let remoteInsights = try await client.fetchProfileInsights(
                 locale: appStore.selectedLanguageCode,
-                context: context,
+                snapshotEnvelope: snapshotPackage.envelope,
                 capabilityScope: capabilityScope
             )
             profileInsights = remoteInsights
             profileInsightsOrigin = .remote
             lastInsightsErrorDescription = nil
+            markSnapshotAsAcceptedIfNeeded(snapshotPackage)
         } catch {
             profileInsights = fallbackInsights
             profileInsightsOrigin = .fallback
@@ -1114,12 +1258,12 @@ final class CoachStore {
         }
 
         do {
-            let context = contextBuilder.build(from: appStore)
+            let snapshotPackage = try makeSnapshotPackage(from: appStore)
             let response = try await client.sendChat(
                 locale: appStore.selectedLanguageCode,
                 question: trimmedQuestion,
-                conversationMessages: priorConversation,
-                context: context,
+                clientRecentTurns: priorConversation,
+                snapshotEnvelope: snapshotPackage.envelope,
                 capabilityScope: capabilityScope
             )
             messages.append(
@@ -1130,6 +1274,7 @@ final class CoachStore {
                     suggestedChanges: response.suggestedChanges
                 )
             )
+            markSnapshotAsAcceptedIfNeeded(snapshotPackage)
         } catch {
             let description = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             lastChatErrorDescription = description
@@ -1168,7 +1313,7 @@ final class CoachStore {
         isSendingMessage = false
     }
 
-    private func recentConversationMessages(limit: Int = 8) -> [CoachConversationMessage] {
+    private func recentConversationMessages(limit: Int = 6) -> [CoachConversationMessage] {
         Array(messages.suffix(limit)).map { message in
             CoachConversationMessage(
                 role: message.role,
@@ -1176,6 +1321,38 @@ final class CoachStore {
             )
         }
     }
+
+    private func makeSnapshotPackage(
+        from appStore: AppStore,
+        forceInlineSnapshot: Bool = false
+    ) throws -> CoachSnapshotPackage {
+        let snapshot = contextBuilder.build(from: appStore)
+        let snapshotHash = try CoachSnapshotHashing.hash(for: snapshot)
+        let shouldInlineSnapshot = forceInlineSnapshot || snapshotHash != localStateStore.lastAcceptedSnapshotHash
+
+        return CoachSnapshotPackage(
+            envelope: CoachSnapshotEnvelope(
+                installID: localStateStore.installID,
+                snapshotHash: snapshotHash,
+                snapshot: shouldInlineSnapshot ? snapshot : nil,
+                snapshotUpdatedAt: shouldInlineSnapshot ? Date() : nil
+            ),
+            includedInlineSnapshot: shouldInlineSnapshot
+        )
+    }
+
+    private func markSnapshotAsAcceptedIfNeeded(_ package: CoachSnapshotPackage) {
+        guard package.includedInlineSnapshot else {
+            return
+        }
+
+        localStateStore.markSnapshotAccepted(hash: package.envelope.snapshotHash)
+    }
+}
+
+private struct CoachSnapshotPackage {
+    var envelope: CoachSnapshotEnvelope
+    var includedInlineSnapshot: Bool
 }
 
 @MainActor

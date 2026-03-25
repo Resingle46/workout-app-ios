@@ -7,6 +7,8 @@ const isoDateTimeSchema = z.string().refine(
 );
 const nonEmptyStringSchema = z.string().trim().min(1);
 const optionalTrimmedStringSchema = z.string().trim().min(1).optional();
+const installIDSchema = z.string().trim().min(1).max(200);
+const snapshotHashSchema = z.string().trim().min(1).max(200);
 
 const userProfileSchema = z
   .object({
@@ -157,14 +159,6 @@ const relativeStrengthContextSchema = z
   })
   .strict();
 
-const performedSetContextSchema = z
-  .object({
-    reps: z.int().min(0),
-    weight: z.number().finite(),
-    completedAt: isoDateTimeSchema,
-  })
-  .strict();
-
 const recentSessionExerciseContextSchema = z
   .object({
     templateExerciseID: uuidSchema,
@@ -175,7 +169,6 @@ const recentSessionExerciseContextSchema = z
     bestWeight: z.number().finite().optional(),
     totalVolume: z.number().finite(),
     averageReps: z.number().finite().optional(),
-    performedSets: z.array(performedSetContextSchema),
   })
   .strict();
 
@@ -219,10 +212,29 @@ export const coachContextPayloadSchema = z
 
 export const capabilityScopeSchema = z.enum(["draft_changes"]);
 
+export const snapshotEnvelopeSchema = z
+  .object({
+    installID: installIDSchema,
+    snapshotHash: snapshotHashSchema,
+    snapshot: coachContextPayloadSchema.optional(),
+    snapshotUpdatedAt: isoDateTimeSchema.optional(),
+  })
+  .strict();
+
+const coachConversationTurnSchema = z
+  .object({
+    role: z.enum(["user", "assistant"]),
+    content: nonEmptyStringSchema.max(1200),
+  })
+  .strict();
+
 export const profileInsightsRequestSchema = z
   .object({
     locale: nonEmptyStringSchema,
-    context: coachContextPayloadSchema,
+    installID: installIDSchema,
+    snapshotHash: snapshotHashSchema,
+    snapshot: coachContextPayloadSchema.optional(),
+    snapshotUpdatedAt: isoDateTimeSchema.optional(),
     capabilityScope: capabilityScopeSchema,
   })
   .strict();
@@ -231,20 +243,34 @@ export const chatRequestSchema = z
   .object({
     locale: nonEmptyStringSchema,
     question: nonEmptyStringSchema,
-    previousResponseID: optionalTrimmedStringSchema,
-    conversationMessages: z
-      .array(
-        z
-          .object({
-            role: z.enum(["user", "assistant"]),
-            content: nonEmptyStringSchema.max(6000),
-          })
-          .strict()
-      )
-      .max(8)
-      .default([]),
-    context: coachContextPayloadSchema,
+    installID: installIDSchema,
+    snapshotHash: snapshotHashSchema,
+    snapshot: coachContextPayloadSchema.optional(),
+    snapshotUpdatedAt: isoDateTimeSchema.optional(),
+    clientRecentTurns: z.array(coachConversationTurnSchema).max(6).default([]),
     capabilityScope: capabilityScopeSchema,
+  })
+  .strict();
+
+export const snapshotSyncRequestSchema = z
+  .object({
+    installID: installIDSchema,
+    snapshotHash: snapshotHashSchema,
+    snapshot: coachContextPayloadSchema,
+    snapshotUpdatedAt: isoDateTimeSchema,
+  })
+  .strict();
+
+export const snapshotSyncResponseSchema = z
+  .object({
+    acceptedHash: snapshotHashSchema,
+    storedAt: isoDateTimeSchema,
+  })
+  .strict();
+
+export const stateDeleteRequestSchema = z
+  .object({
+    installID: installIDSchema,
   })
   .strict();
 
@@ -351,7 +377,14 @@ export type CoachProfileInsightsRequest = z.infer<
   typeof profileInsightsRequestSchema
 >;
 export type CoachChatRequest = z.infer<typeof chatRequestSchema>;
+export type CoachSnapshotSyncRequest = z.infer<typeof snapshotSyncRequestSchema>;
+export type CoachSnapshotSyncResponse = z.infer<
+  typeof snapshotSyncResponseSchema
+>;
+export type CoachStateDeleteRequest = z.infer<typeof stateDeleteRequestSchema>;
 export type CoachProfileInsightsResponse = z.infer<
   typeof profileInsightsResponseSchema
 >;
 export type CoachChatResponse = z.infer<typeof chatResponseSchema>;
+export type CompactCoachSnapshot = z.infer<typeof coachContextPayloadSchema>;
+export type CoachConversationTurn = z.infer<typeof coachConversationTurnSchema>;

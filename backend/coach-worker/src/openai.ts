@@ -11,6 +11,7 @@ import {
   buildFallbackChatMessages,
   buildFallbackProfileInsightsMessages,
 } from "./prompts";
+import type { CoachKVNamespace } from "./state";
 
 export const DEFAULT_AI_MODEL = "@cf/mistralai/mistral-small-3.1-24b-instruct";
 const PROFILE_INSIGHTS_PLAIN_TEXT_MAX_TOKENS = 220;
@@ -26,6 +27,7 @@ interface WorkersAI {
 
 export interface Env {
   AI?: WorkersAI;
+  COACH_STATE_KV?: CoachKVNamespace;
   COACH_INTERNAL_TOKEN: string;
   AI_MODEL?: string;
   COACH_PROMPT_VERSION?: string;
@@ -36,6 +38,8 @@ export interface InferenceResult<T> {
   responseId?: string;
   model: string;
   usage?: unknown;
+  promptBytes?: number;
+  modelDurationMs?: number;
 }
 
 export interface CoachInferenceService {
@@ -72,7 +76,7 @@ export class WorkersAICoachService implements CoachInferenceService {
     const localFallback = buildDeterministicProfileInsights(request);
 
     try {
-      const rawResponse = await this.runPlainText({
+      const invocation = await this.runPlainText({
         operation,
         messages: buildFallbackProfileInsightsMessages(request),
         maxTokens: PROFILE_INSIGHTS_PLAIN_TEXT_MAX_TOKENS,
@@ -81,11 +85,15 @@ export class WorkersAICoachService implements CoachInferenceService {
       });
       return {
         data: mergePlainAndDeterministicProfileInsights(
-          parsePlainProfileInsights(extractPlainText(rawResponse, "profile insights")),
+          parsePlainProfileInsights(
+            extractPlainText(invocation.rawResponse, "profile insights")
+          ),
           localFallback
         ),
         model: this.modelName,
-        usage: extractUsage(rawResponse),
+        usage: extractUsage(invocation.rawResponse),
+        promptBytes: invocation.promptBytes,
+        modelDurationMs: invocation.modelDurationMs,
       };
     } catch (error) {
       if (!(error instanceof CoachInferenceServiceError)) {
@@ -126,7 +134,7 @@ export class WorkersAICoachService implements CoachInferenceService {
       });
       const parsed = normalizeChatResponse(
         parseStructuredOutput(
-          rawResponse,
+          rawResponse.rawResponse,
           chatResponseModelOutputSchema,
           "chat",
           {
@@ -144,7 +152,9 @@ export class WorkersAICoachService implements CoachInferenceService {
         },
         responseId: turnID,
         model: this.modelName,
-        usage: extractUsage(rawResponse),
+        usage: extractUsage(rawResponse.rawResponse),
+        promptBytes: rawResponse.promptBytes,
+        modelDurationMs: rawResponse.modelDurationMs,
       };
     } catch (error) {
       if (!(error instanceof CoachInferenceServiceError)) {
@@ -171,7 +181,10 @@ export class WorkersAICoachService implements CoachInferenceService {
         maxTokens: CHAT_FALLBACK_MAX_TOKENS,
         timeoutMs: CHAT_FALLBACK_TIMEOUT_MS,
       });
-      const answerMarkdown = extractPlainText(fallbackResponse, "chat fallback");
+      const answerMarkdown = extractPlainText(
+        fallbackResponse.rawResponse,
+        "chat fallback"
+      );
 
       return {
         data: {
@@ -182,7 +195,9 @@ export class WorkersAICoachService implements CoachInferenceService {
         },
         responseId: turnID,
         model: this.modelName,
-        usage: extractUsage(fallbackResponse),
+        usage: extractUsage(fallbackResponse.rawResponse),
+        promptBytes: fallbackResponse.promptBytes,
+        modelDurationMs: fallbackResponse.modelDurationMs,
       };
     }
   }
@@ -197,7 +212,7 @@ export class WorkersAICoachService implements CoachInferenceService {
     schema: Record<string, unknown>;
     maxTokens: number;
     timeoutMs: number;
-  }): Promise<unknown> {
+  }): Promise<ModelInvocationResult> {
     return this.runModel(
       {
       messages: input.messages,
@@ -221,7 +236,7 @@ export class WorkersAICoachService implements CoachInferenceService {
     maxTokens: number;
     timeoutMs: number;
     includeFallbackNotice?: boolean;
-  }): Promise<unknown> {
+  }): Promise<ModelInvocationResult> {
     const messages = input.includeFallbackNotice === false
       ? input.messages
       : [
@@ -252,7 +267,7 @@ export class WorkersAICoachService implements CoachInferenceService {
   private async runModel(
     payload: Record<string, unknown>,
     details: Record<string, unknown>
-  ): Promise<unknown> {
+  ): Promise<ModelInvocationResult> {
     if (!this.env.AI) {
       throw new CoachInferenceServiceError(
         500,
@@ -264,7 +279,16 @@ export class WorkersAICoachService implements CoachInferenceService {
 
     try {
       const timeoutMs = parseTimeoutMs(details.timeoutMs);
-      return await withTimeout(this.env.AI.run(this.modelName, payload), timeoutMs);
+      const startedAt = Date.now();
+      const rawResponse = await withTimeout(
+        this.env.AI.run(this.modelName, payload),
+        timeoutMs
+      );
+      return {
+        rawResponse,
+        promptBytes: byteLength(payload.messages),
+        modelDurationMs: Date.now() - startedAt,
+      };
     } catch (error) {
       throw normalizeWorkersAIError(error, {
         ...details,
@@ -272,6 +296,12 @@ export class WorkersAICoachService implements CoachInferenceService {
       });
     }
   }
+}
+
+interface ModelInvocationResult {
+  rawResponse: unknown;
+  promptBytes: number;
+  modelDurationMs: number;
 }
 
 function shouldAttemptPlainTextFallback(
@@ -380,8 +410,17 @@ function mergePlainAndDeterministicProfileInsights(
 function buildDeterministicProfileInsights(
   request: CoachProfileInsightsRequest
 ): CoachProfileInsightsResponse {
+  const snapshot = request.snapshot;
+  if (!snapshot) {
+    throw new CoachInferenceServiceError(
+      400,
+      "snapshot_required",
+      "Coach snapshot is required for profile insights"
+    );
+  }
+
   const locale = request.locale;
-  const analytics = request.context.analytics;
+  const analytics = snapshot.analytics;
   const training = analytics.training;
   const compatibility = analytics.compatibility;
   const consistency = analytics.consistency;
@@ -442,10 +481,15 @@ function buildDeterministicProfileInsights(
 function buildDeterministicSuggestedChanges(
   request: CoachProfileInsightsRequest
 ): CoachProfileInsightsResponse["suggestedChanges"] {
+  const snapshot = request.snapshot;
+  if (!snapshot) {
+    return [];
+  }
+
   const locale = request.locale;
-  const training = request.context.analytics.training;
-  const goal = request.context.analytics.goal;
-  const preferredProgram = request.context.preferredProgram;
+  const training = snapshot.analytics.training;
+  const goal = snapshot.analytics.goal;
+  const preferredProgram = snapshot.preferredProgram;
   const result: CoachProfileInsightsResponse["suggestedChanges"] = [];
 
   const adjustedWeeklyTarget = clamp(
@@ -742,6 +786,10 @@ function describeResponseShape(rawResponse: unknown): Record<string, unknown> {
   };
 }
 
+function byteLength(value: unknown): number {
+  return new TextEncoder().encode(JSON.stringify(value)).length;
+}
+
 function localizedCoachText(
   locale: string,
   key:
@@ -835,7 +883,7 @@ function localizedCoachText(
 
 function buildGoalEtaRecommendation(
   locale: string,
-  goal: CoachProfileInsightsRequest["context"]["analytics"]["goal"]
+  goal: NonNullable<CoachProfileInsightsRequest["snapshot"]>["analytics"]["goal"]
 ): string | undefined {
   if (
     goal.etaWeeksLowerBound === undefined ||
