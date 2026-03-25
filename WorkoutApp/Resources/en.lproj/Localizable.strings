@@ -191,6 +191,60 @@
 "profile.card.goal.no_target" = "Set a target weight to track bodyweight progress here.";
 "profile.card.goal.target_reached" = "Target reached";
 "profile.card.goal.delta_format" = "%@ kg to target";
+"profile.card.goal.safe_pace" = "Safe pace";
+"profile.card.goal.eta" = "ETA";
+"profile.card.goal.safe_pace_format" = "%@-%@ kg/week";
+"profile.card.goal.eta_weeks" = "%d-%d weeks";
+"profile.card.goal.eta_months" = "%d-%d months";
+"profile.card.goal.from_current_only" = "ETA uses your current weight only; no bodyweight history is stored yet.";
+
+"profile.card.metabolism.eyebrow" = "Energy";
+"profile.card.metabolism.title" = "BMR & maintenance";
+"profile.card.metabolism.bmr" = "BMR";
+"profile.card.metabolism.maintenance" = "Maintenance";
+"profile.card.metabolism.activity_factor" = "Activity factor";
+"profile.card.metabolism.source_history" = "Estimated from recent workout frequency.";
+"profile.card.metabolism.source_target" = "Estimated from weekly target.";
+"profile.card.metabolism.note" = "Approximation only: steps and daily activity are not tracked.";
+
+"profile.card.recommendations.eyebrow" = "Guidance";
+"profile.card.recommendations.title" = "Training recommendations";
+"profile.card.recommendations.frequency" = "Frequency";
+"profile.card.recommendations.rep_range" = "Rep ranges";
+"profile.card.recommendations.volume" = "Weekly sets";
+"profile.card.recommendations.split" = "Split";
+"profile.card.recommendations.generic" = "Baseline plan";
+"profile.card.recommendations.complete_profile" = "Set goal and experience to personalize frequency, reps, and weekly volume.";
+"profile.card.recommendations.frequency_format" = "%d-%d / week";
+"profile.card.recommendations.frequency_single_format" = "%d / week";
+"profile.card.recommendations.rep_range_format" = "%d-%d main • %d-%d accessory";
+"profile.card.recommendations.volume_format" = "%d-%d hard sets";
+"profile.card.recommendations.split.full_body" = "Full body";
+"profile.card.recommendations.split.upper_lower_hybrid" = "Full body / upper-lower";
+"profile.card.recommendations.split.upper_lower" = "Upper / lower";
+"profile.card.recommendations.split.upper_lower_plus" = "Upper-lower + specialization";
+"profile.card.recommendations.split.high_frequency" = "High-frequency split";
+
+"profile.card.compatibility.eyebrow" = "Fit";
+"profile.card.compatibility.title" = "Goal compatibility";
+"profile.card.compatibility.aligned" = "Your goal, target, and weekly plan look broadly aligned.";
+"profile.card.compatibility.issue_goal_target" = "Goal and target weight point in different directions.";
+"profile.card.compatibility.issue_frequency_low" = "This goal usually needs at least %d workouts/week; current target is %d.";
+"profile.card.compatibility.issue_frequency_high_beginner" = "%d workouts/week is aggressive for a beginner; recovery is likely the limiter.";
+"profile.card.compatibility.issue_adherence_gap" = "Recent average is %@ workouts/week versus a target of %d.";
+"profile.card.compatibility.issue_long_eta" = "This weight target is likely a %d+ week phase; add smaller checkpoints.";
+"profile.card.compatibility.issue_missing_goal" = "Set a primary goal so recommendations and compatibility checks can become specific.";
+
+"profile.card.relative_strength.eyebrow" = "Strength";
+"profile.card.relative_strength.title" = "Relative strength";
+"profile.card.relative_strength.best_load" = "Best logged load relative to your current bodyweight.";
+"profile.card.relative_strength.ratio_format" = "%.2fx BW";
+"profile.card.relative_strength.empty" = "Log completed sets for bench, squat, deadlift, or overhead press to unlock this view.";
+"profile.card.relative_strength.missing_pr" = "No PR yet";
+"profile.card.relative_strength.lift.bench" = "Bench";
+"profile.card.relative_strength.lift.squat" = "Squat";
+"profile.card.relative_strength.lift.deadlift" = "Deadlift";
+"profile.card.relative_strength.lift.ohp" = "Overhead press";
 
 "backup.section" = "Backups";
 "backup.status" = "Status";

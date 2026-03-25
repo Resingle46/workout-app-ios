@@ -24,6 +24,22 @@ struct ProfileView: View {
         store.profileGoalSummary()
     }
 
+    private var metabolismSummary: ProfileMetabolismSummary {
+        store.profileMetabolismSummary()
+    }
+
+    private var trainingRecommendationSummary: ProfileTrainingRecommendationSummary {
+        store.profileTrainingRecommendationSummary()
+    }
+
+    private var goalCompatibilitySummary: ProfileGoalCompatibilitySummary {
+        store.profileGoalCompatibilitySummary()
+    }
+
+    private var strengthSummary: ProfileStrengthToBodyweightSummary {
+        store.profileStrengthToBodyweightSummary()
+    }
+
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 20) {
@@ -53,6 +69,36 @@ struct ProfileView: View {
                 .buttonStyle(AppInteractiveCardButtonStyle(pressedOpacity: 0.97))
 
                 Button {
+                    showingProfileEditor = true
+                } label: {
+                    ProfileGoalProgressCard(summary: goalSummary)
+                }
+                .buttonStyle(AppInteractiveCardButtonStyle(pressedOpacity: 0.97))
+
+                ProfileMetabolismCard(summary: metabolismSummary)
+
+                Button {
+                    showingProfileEditor = true
+                } label: {
+                    ProfileTrainingRecommendationsCard(summary: trainingRecommendationSummary)
+                }
+                .buttonStyle(AppInteractiveCardButtonStyle(pressedOpacity: 0.97))
+
+                Button {
+                    showingProfileEditor = true
+                } label: {
+                    ProfileGoalCompatibilityCard(summary: goalCompatibilitySummary)
+                }
+                .buttonStyle(AppInteractiveCardButtonStyle(pressedOpacity: 0.97))
+
+                Button {
+                    store.selectedTab = .statistics
+                } label: {
+                    ProfileRelativeStrengthCard(summary: strengthSummary)
+                }
+                .buttonStyle(AppInteractiveCardButtonStyle(pressedOpacity: 0.97))
+
+                Button {
                     store.selectedTab = .statistics
                 } label: {
                     ProfileProgressSnapshotCard(summary: progressSummary, locale: store.locale)
@@ -70,13 +116,6 @@ struct ProfileView: View {
                     summary: consistencySummary,
                     calendar: AppStore.statisticsCalendar(locale: store.locale)
                 )
-
-                Button {
-                    showingProfileEditor = true
-                } label: {
-                    ProfileGoalStatusCard(summary: goalSummary)
-                }
-                .buttonStyle(AppInteractiveCardButtonStyle(pressedOpacity: 0.97))
             }
             .padding(.horizontal, 20)
             .padding(.top, 0)
@@ -475,11 +514,13 @@ private struct ProfileConsistencyCard: View {
     }
 }
 
-private struct ProfileGoalStatusCard: View {
+private struct ProfileGoalProgressCard: View {
     let summary: ProfileGoalSummary
 
     private var accent: DashboardCardAccent {
         switch summary.primaryGoal {
+        case .fatLoss:
+            return .mint
         case .generalFitness:
             return .orange
         default:
@@ -497,6 +538,26 @@ private struct ProfileGoalStatusCard: View {
         }
 
         return String(format: localizedString("profile.card.goal.delta_format"), abs(delta).appNumberText)
+    }
+
+    private var safePaceText: String? {
+        guard let lowerBound = summary.safeWeeklyChangeLowerBound,
+              let upperBound = summary.safeWeeklyChangeUpperBound else {
+            return nil
+        }
+
+        return String(
+            format: localizedString("profile.card.goal.safe_pace_format"),
+            lowerBound.appNumberText,
+            upperBound.appNumberText
+        )
+    }
+
+    private var etaText: String? {
+        formattedProfileETA(
+            lowerWeeks: summary.etaWeeksLowerBound,
+            upperWeeks: summary.etaWeeksUpperBound
+        )
     }
 
     var body: some View {
@@ -518,7 +579,14 @@ private struct ProfileGoalStatusCard: View {
                     .foregroundStyle(accent.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
 
-                HStack(spacing: 12) {
+                if summary.usesCurrentWeightOnly, summary.targetBodyWeight != nil, !summary.hasReachedTarget {
+                    Text("profile.card.goal.from_current_only")
+                        .font(AppTypography.caption(size: 13, weight: .medium))
+                        .foregroundStyle(accent.secondaryText.opacity(0.95))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
                     ProfileMetricTile(
                         titleKey: "profile.card.goal.current_weight",
                         value: "\(summary.currentWeight.appNumberText) kg",
@@ -529,6 +597,292 @@ private struct ProfileGoalStatusCard: View {
                         value: summary.targetBodyWeight.map { "\($0.appNumberText) kg" } ?? localizedString("profile.value.not_set"),
                         accent: accent
                     )
+
+                    if let safePaceText {
+                        ProfileMetricTile(
+                            titleKey: "profile.card.goal.safe_pace",
+                            value: safePaceText,
+                            accent: accent
+                        )
+                    }
+
+                    if let etaText {
+                        ProfileMetricTile(
+                            titleKey: "profile.card.goal.eta",
+                            value: etaText,
+                            accent: accent
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct ProfileMetabolismCard: View {
+    let summary: ProfileMetabolismSummary
+
+    private var maintenanceText: String {
+        "\(summary.maintenanceCaloriesLowerBound)-\(summary.maintenanceCaloriesUpperBound) kcal"
+    }
+
+    private var activityFactorText: String {
+        "\(summary.activityFactorLowerBound.appNumberText)-\(summary.activityFactorUpperBound.appNumberText)"
+    }
+
+    private var sourceText: String {
+        localizedString(summary.estimateSource.sourceKey)
+    }
+
+    var body: some View {
+        ProfileAccentCard(accent: .cyan) {
+            VStack(alignment: .leading, spacing: 18) {
+                ProfileCardHeader(
+                    eyebrowKey: "profile.card.metabolism.eyebrow",
+                    titleKey: "profile.card.metabolism.title",
+                    systemImage: "flame.circle.fill",
+                    showsChevron: false
+                )
+
+                Text(maintenanceText)
+                    .font(AppTypography.metric(size: 34))
+                    .foregroundStyle(AppTheme.primaryText)
+                    .lineLimit(2)
+
+                Text("\(sourceText) \(localizedString("profile.card.metabolism.note"))")
+                    .font(AppTypography.body(size: 16, weight: .medium, relativeTo: .subheadline))
+                    .foregroundStyle(DashboardCardAccent.cyan.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                HStack(spacing: 12) {
+                    ProfileMetricTile(
+                        titleKey: "profile.card.metabolism.bmr",
+                        value: "\(summary.bmr) kcal",
+                        accent: .cyan
+                    )
+                    ProfileMetricTile(
+                        titleKey: "profile.card.metabolism.activity_factor",
+                        value: activityFactorText,
+                        accent: .cyan
+                    )
+                }
+            }
+        }
+    }
+}
+
+private struct ProfileTrainingRecommendationsCard: View {
+    let summary: ProfileTrainingRecommendationSummary
+
+    private var frequencyText: String {
+        if summary.recommendedWeeklyTargetLowerBound == summary.recommendedWeeklyTargetUpperBound {
+            return String(
+                format: localizedString("profile.card.recommendations.frequency_single_format"),
+                summary.recommendedWeeklyTargetLowerBound
+            )
+        }
+
+        return String(
+            format: localizedString("profile.card.recommendations.frequency_format"),
+            summary.recommendedWeeklyTargetLowerBound,
+            summary.recommendedWeeklyTargetUpperBound
+        )
+    }
+
+    private var repRangeText: String {
+        String(
+            format: localizedString("profile.card.recommendations.rep_range_format"),
+            summary.mainRepLowerBound,
+            summary.mainRepUpperBound,
+            summary.accessoryRepLowerBound,
+            summary.accessoryRepUpperBound
+        )
+    }
+
+    private var volumeText: String {
+        String(
+            format: localizedString("profile.card.recommendations.volume_format"),
+            summary.weeklySetsLowerBound,
+            summary.weeklySetsUpperBound
+        )
+    }
+
+    var body: some View {
+        ProfileAccentCard(accent: .orange) {
+            VStack(alignment: .leading, spacing: 18) {
+                ProfileCardHeader(
+                    eyebrowKey: "profile.card.recommendations.eyebrow",
+                    titleKey: "profile.card.recommendations.title",
+                    systemImage: "figure.strengthtraining.traditional"
+                )
+
+                Text(summary.isGenericFallback ? localizedString("profile.card.recommendations.generic") : summary.primaryGoal.localizedTitle)
+                    .font(AppTypography.metric(size: 32))
+                    .foregroundStyle(AppTheme.primaryText)
+                    .lineLimit(2)
+
+                if summary.isGenericFallback {
+                    Text("profile.card.recommendations.complete_profile")
+                        .font(AppTypography.body(size: 16, weight: .medium, relativeTo: .subheadline))
+                        .foregroundStyle(DashboardCardAccent.orange.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+                    ProfileMetricTile(
+                        titleKey: "profile.card.recommendations.frequency",
+                        value: frequencyText,
+                        accent: .orange
+                    )
+                    ProfileMetricTile(
+                        titleKey: "profile.card.recommendations.rep_range",
+                        value: repRangeText,
+                        accent: .orange
+                    )
+                    ProfileMetricTile(
+                        titleKey: "profile.card.recommendations.volume",
+                        value: volumeText,
+                        accent: .orange
+                    )
+                    ProfileMetricTile(
+                        titleKey: "profile.card.recommendations.split",
+                        value: summary.split.localizedTitle,
+                        accent: .orange
+                    )
+                }
+            }
+        }
+    }
+}
+
+private struct ProfileGoalCompatibilityCard: View {
+    let summary: ProfileGoalCompatibilitySummary
+
+    private var accent: DashboardCardAccent {
+        summary.isAligned ? .mint : .orange
+    }
+
+    var body: some View {
+        ProfileAccentCard(accent: accent) {
+            VStack(alignment: .leading, spacing: 18) {
+                ProfileCardHeader(
+                    eyebrowKey: "profile.card.compatibility.eyebrow",
+                    titleKey: "profile.card.compatibility.title",
+                    systemImage: summary.isAligned ? "checkmark.seal.fill" : "exclamationmark.bubble.fill"
+                )
+
+                if summary.isAligned {
+                    Text("profile.card.compatibility.aligned")
+                        .font(AppTypography.heading(size: 25))
+                        .foregroundStyle(AppTheme.primaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    VStack(spacing: 12) {
+                        ForEach(summary.issues) { issue in
+                            ProfileCompatibilityIssueRow(issue: issue)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct ProfileCompatibilityIssueRow: View {
+    let issue: ProfileGoalCompatibilityIssue
+
+    private var message: String {
+        switch issue.kind {
+        case .missingGoal:
+            return localizedString("profile.card.compatibility.issue_missing_goal")
+        case .goalTargetMismatch:
+            return localizedString("profile.card.compatibility.issue_goal_target")
+        case .frequencyTooLow:
+            return String(
+                format: localizedString("profile.card.compatibility.issue_frequency_low"),
+                issue.recommendedWeeklyTargetLowerBound ?? 0,
+                issue.currentWeeklyTarget ?? 0
+            )
+        case .frequencyTooHighForBeginner:
+            return String(
+                format: localizedString("profile.card.compatibility.issue_frequency_high_beginner"),
+                issue.currentWeeklyTarget ?? 0
+            )
+        case .adherenceGap:
+            return String(
+                format: localizedString("profile.card.compatibility.issue_adherence_gap"),
+                issue.observedWorkoutsPerWeek?.appNumberText ?? localizedString("common.no_data"),
+                issue.currentWeeklyTarget ?? 0
+            )
+        case .longGoalTimeline:
+            return String(
+                format: localizedString("profile.card.compatibility.issue_long_eta"),
+                issue.etaWeeksUpperBound ?? 0
+            )
+        }
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: issue.systemImage)
+                .font(AppTypography.icon(size: 16, weight: .semibold))
+                .foregroundStyle(AppTheme.primaryText)
+                .frame(width: 30, height: 30)
+                .background(Color.white.opacity(0.08), in: Circle())
+
+            Text(message)
+                .font(AppTypography.body(size: 16, weight: .medium, relativeTo: .subheadline))
+                .foregroundStyle(AppTheme.primaryText)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Spacer(minLength: 0)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .fill(Color.white.opacity(0.06))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+        )
+    }
+}
+
+private struct ProfileRelativeStrengthCard: View {
+    let summary: ProfileStrengthToBodyweightSummary
+
+    private var hasRecords: Bool {
+        summary.lifts.contains { $0.relativeToBodyWeight != nil }
+    }
+
+    var body: some View {
+        ProfileAccentCard(accent: .aqua) {
+            VStack(alignment: .leading, spacing: 18) {
+                ProfileCardHeader(
+                    eyebrowKey: "profile.card.relative_strength.eyebrow",
+                    titleKey: "profile.card.relative_strength.title",
+                    systemImage: "dumbbell.fill"
+                )
+
+                Text(hasRecords
+                    ? localizedString("profile.card.relative_strength.best_load")
+                    : localizedString("profile.card.relative_strength.empty"))
+                    .font(AppTypography.body(size: 16, weight: .medium, relativeTo: .subheadline))
+                    .foregroundStyle(DashboardCardAccent.aqua.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+                    ForEach(summary.lifts) { lift in
+                        ProfileMetricTile(
+                            titleKey: LocalizedStringKey(lift.lift.titleKey),
+                            value: lift.relativeToBodyWeight.map {
+                                String(format: localizedString("profile.card.relative_strength.ratio_format"), $0)
+                            } ?? localizedString("profile.card.relative_strength.missing_pr"),
+                            accent: .aqua
+                        )
+                    }
                 }
             }
         }
@@ -1420,6 +1774,53 @@ private extension ExperienceLevel {
     }
 }
 
+private extension MetabolismEstimateSource {
+    var sourceKey: String {
+        switch self {
+        case .history:
+            return "profile.card.metabolism.source_history"
+        case .target:
+            return "profile.card.metabolism.source_target"
+        }
+    }
+}
+
+private extension ProfileTrainingSplitRecommendation {
+    var titleKey: String {
+        switch self {
+        case .fullBody:
+            return "profile.card.recommendations.split.full_body"
+        case .upperLowerHybrid:
+            return "profile.card.recommendations.split.upper_lower_hybrid"
+        case .upperLower:
+            return "profile.card.recommendations.split.upper_lower"
+        case .upperLowerPlusSpecialization:
+            return "profile.card.recommendations.split.upper_lower_plus"
+        case .highFrequencySplit:
+            return "profile.card.recommendations.split.high_frequency"
+        }
+    }
+
+    var localizedTitle: String {
+        localizedString(titleKey)
+    }
+}
+
+private extension CanonicalStrengthLift {
+    var titleKey: String {
+        switch self {
+        case .benchPress:
+            return "profile.card.relative_strength.lift.bench"
+        case .backSquat:
+            return "profile.card.relative_strength.lift.squat"
+        case .deadlift:
+            return "profile.card.relative_strength.lift.deadlift"
+        case .overheadPress:
+            return "profile.card.relative_strength.lift.ohp"
+        }
+    }
+}
+
 private extension Double {
     var volumeValueText: String {
         if self >= 1000 {
@@ -1462,6 +1863,20 @@ private func formattedProfileDuration(_ duration: TimeInterval?) -> String {
     }
 
     return DateComponentsFormatter.workoutDurationShort.string(from: duration) ?? "00:00"
+}
+
+private func formattedProfileETA(lowerWeeks: Int?, upperWeeks: Int?) -> String? {
+    guard let lowerWeeks, let upperWeeks else {
+        return nil
+    }
+
+    if upperWeeks >= 8 {
+        let lowerMonths = max(Int(ceil(Double(lowerWeeks) / 4.345)), 1)
+        let upperMonths = max(Int(ceil(Double(upperWeeks) / 4.345)), lowerMonths)
+        return String(format: localizedString("profile.card.goal.eta_months"), lowerMonths, upperMonths)
+    }
+
+    return String(format: localizedString("profile.card.goal.eta_weeks"), lowerWeeks, upperWeeks)
 }
 
 private func localizedString(_ key: String) -> String {

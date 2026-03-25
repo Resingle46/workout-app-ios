@@ -231,15 +231,138 @@ struct ProfileConsistencySummary: Hashable, Sendable {
     var mostFrequentWeekday: Int?
 }
 
+enum ProfileGoalDirection: Hashable, Sendable {
+    case lose
+    case gain
+    case maintain
+}
+
 struct ProfileGoalSummary: Hashable, Sendable {
     var primaryGoal: TrainingGoal
     var currentWeight: Double
     var targetBodyWeight: Double?
     var weeklyWorkoutTarget: Int
+    var safeWeeklyChangeLowerBound: Double?
+    var safeWeeklyChangeUpperBound: Double?
+    var etaWeeksLowerBound: Int?
+    var etaWeeksUpperBound: Int?
+    var usesCurrentWeightOnly: Bool
 
     var remainingWeightDelta: Double? {
         targetBodyWeight.map { $0 - currentWeight }
     }
+
+    var direction: ProfileGoalDirection? {
+        guard let delta = remainingWeightDelta else {
+            return nil
+        }
+
+        if delta < 0 {
+            return .lose
+        }
+        if delta > 0 {
+            return .gain
+        }
+        return .maintain
+    }
+
+    var hasReachedTarget: Bool {
+        remainingWeightDelta == 0
+    }
+}
+
+enum MetabolismEstimateSource: Hashable, Sendable {
+    case history
+    case target
+}
+
+struct ProfileMetabolismSummary: Hashable, Sendable {
+    var bmr: Int
+    var maintenanceCaloriesLowerBound: Int
+    var maintenanceCaloriesUpperBound: Int
+    var activityFactorLowerBound: Double
+    var activityFactorUpperBound: Double
+    var averageWorkoutsPerWeek: Double
+    var estimateSource: MetabolismEstimateSource
+}
+
+enum ProfileTrainingSplitRecommendation: Hashable, Sendable {
+    case fullBody
+    case upperLowerHybrid
+    case upperLower
+    case upperLowerPlusSpecialization
+    case highFrequencySplit
+}
+
+struct ProfileTrainingRecommendationSummary: Hashable, Sendable {
+    var primaryGoal: TrainingGoal
+    var experienceLevel: ExperienceLevel
+    var currentWeeklyTarget: Int
+    var recommendedWeeklyTargetLowerBound: Int
+    var recommendedWeeklyTargetUpperBound: Int
+    var mainRepLowerBound: Int
+    var mainRepUpperBound: Int
+    var accessoryRepLowerBound: Int
+    var accessoryRepUpperBound: Int
+    var weeklySetsLowerBound: Int
+    var weeklySetsUpperBound: Int
+    var split: ProfileTrainingSplitRecommendation
+    var isGenericFallback: Bool
+}
+
+enum ProfileGoalCompatibilityIssueKind: String, Hashable, Sendable {
+    case missingGoal
+    case goalTargetMismatch
+    case frequencyTooLow
+    case frequencyTooHighForBeginner
+    case adherenceGap
+    case longGoalTimeline
+}
+
+struct ProfileGoalCompatibilityIssue: Identifiable, Hashable, Sendable {
+    let id: String
+    var kind: ProfileGoalCompatibilityIssueKind
+    var currentWeeklyTarget: Int?
+    var recommendedWeeklyTargetLowerBound: Int?
+    var observedWorkoutsPerWeek: Double?
+    var etaWeeksUpperBound: Int?
+    var systemImage: String
+}
+
+struct ProfileGoalCompatibilitySummary: Hashable, Sendable {
+    var primaryGoal: TrainingGoal
+    var currentWeight: Double
+    var targetBodyWeight: Double?
+    var weeklyWorkoutTarget: Int
+    var averageWorkoutsPerWeek: Double?
+    var usesObservedHistory: Bool
+    var issues: [ProfileGoalCompatibilityIssue]
+
+    var isAligned: Bool {
+        issues.isEmpty
+    }
+}
+
+enum CanonicalStrengthLift: String, CaseIterable, Hashable, Sendable {
+    case benchPress
+    case backSquat
+    case deadlift
+    case overheadPress
+}
+
+struct ProfileRelativeStrengthLift: Identifiable, Hashable, Sendable {
+    var lift: CanonicalStrengthLift
+    var bestLoad: Double?
+    var relativeToBodyWeight: Double?
+
+    var id: CanonicalStrengthLift {
+        lift
+    }
+}
+
+struct ProfileStrengthToBodyweightSummary: Hashable, Sendable {
+    var currentWeight: Double
+    var lifts: [ProfileRelativeStrengthLift]
 }
 
 struct UserProfile: Codable, Hashable, Sendable {

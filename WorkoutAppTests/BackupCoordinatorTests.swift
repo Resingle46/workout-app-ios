@@ -766,6 +766,281 @@ final class BackupCoordinatorTests: XCTestCase {
         XCTAssertEqual(averages[2].setsCount, 1)
     }
 
+    @MainActor
+    func testProfileGoalSummaryCalculatesSafePaceAndETAForTargetWeight() {
+        let store = AppStore()
+        var snapshot = makeStatisticsSnapshot(exercises: [], history: [])
+        snapshot.profile = UserProfile(
+            sex: "M",
+            age: 30,
+            weight: 80,
+            height: 180,
+            appLanguageCode: "en",
+            primaryGoal: .fatLoss,
+            experienceLevel: .intermediate,
+            weeklyWorkoutTarget: 3,
+            targetBodyWeight: 72
+        )
+        store.apply(snapshot: snapshot)
+
+        let summary = store.profileGoalSummary()
+
+        XCTAssertEqual(summary.direction, .lose)
+        XCTAssertEqual(try XCTUnwrap(summary.remainingWeightDelta), -8, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(summary.safeWeeklyChangeLowerBound), 0.2, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(summary.safeWeeklyChangeUpperBound), 0.6, accuracy: 0.001)
+        XCTAssertEqual(summary.etaWeeksLowerBound, 14)
+        XCTAssertEqual(summary.etaWeeksUpperBound, 40)
+        XCTAssertTrue(summary.usesCurrentWeightOnly)
+    }
+
+    @MainActor
+    func testProfileMetabolismSummaryUsesObservedHistoryWhenEnoughSessionsExist() {
+        let exercise = makeExercise(id: UUID(uuidString: "AAAA1111-1111-1111-1111-111111111111")!, name: "Bench")
+        let sessionDays = [3, 6, 10, 13, 17, 20, 23, 24]
+        let sessions = sessionDays.map { day in
+            makeSession(
+                startedAt: makeDate(year: 2024, month: 3, day: day, hour: 10),
+                endedAt: makeDate(year: 2024, month: 3, day: day, hour: 11),
+                exerciseLogs: [makeExerciseLog(exerciseID: exercise.id, sets: [(60, 5, true)])]
+            )
+        }
+
+        let store = AppStore()
+        var snapshot = makeStatisticsSnapshot(exercises: [exercise], history: sessions)
+        snapshot.profile = UserProfile(
+            sex: "M",
+            age: 30,
+            weight: 80,
+            height: 180,
+            appLanguageCode: "en",
+            primaryGoal: .strength,
+            experienceLevel: .intermediate,
+            weeklyWorkoutTarget: 4,
+            targetBodyWeight: nil
+        )
+        store.apply(snapshot: snapshot)
+
+        let summary = store.profileMetabolismSummary(
+            referenceDate: makeDate(year: 2024, month: 3, day: 25, hour: 12),
+            calendar: statisticsCalendar(localeIdentifier: "en_US")
+        )
+
+        XCTAssertEqual(summary.estimateSource, .history)
+        XCTAssertEqual(summary.averageWorkoutsPerWeek, 2, accuracy: 0.001)
+        XCTAssertEqual(summary.activityFactorLowerBound, 1.4, accuracy: 0.001)
+        XCTAssertEqual(summary.activityFactorUpperBound, 1.5, accuracy: 0.001)
+        XCTAssertEqual(summary.bmr, 1780)
+        XCTAssertEqual(summary.maintenanceCaloriesLowerBound, 2492)
+        XCTAssertEqual(summary.maintenanceCaloriesUpperBound, 2670)
+    }
+
+    @MainActor
+    func testProfileMetabolismSummaryFallsBackToWeeklyTargetWhenHistoryIsSparse() {
+        let store = AppStore()
+        var snapshot = makeStatisticsSnapshot(exercises: [], history: [])
+        snapshot.profile = UserProfile(
+            sex: "F",
+            age: 30,
+            weight: 60,
+            height: 165,
+            appLanguageCode: "en",
+            primaryGoal: .generalFitness,
+            experienceLevel: .beginner,
+            weeklyWorkoutTarget: 4,
+            targetBodyWeight: nil
+        )
+        store.apply(snapshot: snapshot)
+
+        let summary = store.profileMetabolismSummary(
+            referenceDate: makeDate(year: 2024, month: 3, day: 25, hour: 12),
+            calendar: statisticsCalendar(localeIdentifier: "en_US")
+        )
+
+        XCTAssertEqual(summary.estimateSource, .target)
+        XCTAssertEqual(summary.averageWorkoutsPerWeek, 4, accuracy: 0.001)
+        XCTAssertEqual(summary.activityFactorLowerBound, 1.5, accuracy: 0.001)
+        XCTAssertEqual(summary.activityFactorUpperBound, 1.6, accuracy: 0.001)
+        XCTAssertEqual(summary.bmr, 1320)
+    }
+
+    @MainActor
+    func testProfileTrainingRecommendationSummaryReturnsGenericFallbackWhenGoalIsNotSet() {
+        let store = AppStore()
+        var snapshot = makeStatisticsSnapshot(exercises: [], history: [])
+        snapshot.profile = UserProfile(
+            sex: "M",
+            age: 29,
+            weight: 88,
+            height: 182,
+            appLanguageCode: "en",
+            primaryGoal: .notSet,
+            experienceLevel: .notSet,
+            weeklyWorkoutTarget: 5,
+            targetBodyWeight: nil
+        )
+        store.apply(snapshot: snapshot)
+
+        let summary = store.profileTrainingRecommendationSummary()
+
+        XCTAssertTrue(summary.isGenericFallback)
+        XCTAssertEqual(summary.recommendedWeeklyTargetLowerBound, 3)
+        XCTAssertEqual(summary.recommendedWeeklyTargetUpperBound, 3)
+        XCTAssertEqual(summary.split, .fullBody)
+        XCTAssertEqual(summary.weeklySetsLowerBound, 6)
+        XCTAssertEqual(summary.weeklySetsUpperBound, 10)
+    }
+
+    @MainActor
+    func testProfileTrainingRecommendationSummaryReturnsStrengthRangesForIntermediate() {
+        let store = AppStore()
+        var snapshot = makeStatisticsSnapshot(exercises: [], history: [])
+        snapshot.profile = UserProfile(
+            sex: "M",
+            age: 29,
+            weight: 88,
+            height: 182,
+            appLanguageCode: "en",
+            primaryGoal: .strength,
+            experienceLevel: .intermediate,
+            weeklyWorkoutTarget: 4,
+            targetBodyWeight: nil
+        )
+        store.apply(snapshot: snapshot)
+
+        let summary = store.profileTrainingRecommendationSummary()
+
+        XCTAssertFalse(summary.isGenericFallback)
+        XCTAssertEqual(summary.recommendedWeeklyTargetLowerBound, 3)
+        XCTAssertEqual(summary.recommendedWeeklyTargetUpperBound, 5)
+        XCTAssertEqual(summary.mainRepLowerBound, 3)
+        XCTAssertEqual(summary.mainRepUpperBound, 6)
+        XCTAssertEqual(summary.accessoryRepLowerBound, 6)
+        XCTAssertEqual(summary.accessoryRepUpperBound, 10)
+        XCTAssertEqual(summary.weeklySetsLowerBound, 10)
+        XCTAssertEqual(summary.weeklySetsUpperBound, 14)
+        XCTAssertEqual(summary.split, .upperLower)
+    }
+
+    @MainActor
+    func testProfileGoalCompatibilitySummaryFlagsDirectionMismatchAndLowFrequency() {
+        let store = AppStore()
+        var snapshot = makeStatisticsSnapshot(exercises: [], history: [])
+        snapshot.profile = UserProfile(
+            sex: "M",
+            age: 29,
+            weight: 80,
+            height: 180,
+            appLanguageCode: "en",
+            primaryGoal: .fatLoss,
+            experienceLevel: .intermediate,
+            weeklyWorkoutTarget: 1,
+            targetBodyWeight: 85
+        )
+        store.apply(snapshot: snapshot)
+
+        let summary = store.profileGoalCompatibilitySummary(
+            referenceDate: makeDate(year: 2024, month: 3, day: 25, hour: 12),
+            calendar: statisticsCalendar(localeIdentifier: "en_US")
+        )
+
+        XCTAssertTrue(summary.issues.contains { $0.kind == .goalTargetMismatch })
+        XCTAssertTrue(summary.issues.contains { $0.kind == .frequencyTooLow })
+        XCTAssertFalse(summary.issues.contains { $0.kind == .adherenceGap })
+    }
+
+    @MainActor
+    func testProfileGoalCompatibilitySummaryFlagsAdherenceGapAndLongTimeline() {
+        let exercise = makeExercise(id: UUID(uuidString: "BBBB1111-1111-1111-1111-111111111111")!, name: "Bench")
+        let sessions = [
+            makeSession(
+                startedAt: makeDate(year: 2024, month: 3, day: 8, hour: 10),
+                endedAt: makeDate(year: 2024, month: 3, day: 8, hour: 11),
+                exerciseLogs: [makeExerciseLog(exerciseID: exercise.id, sets: [(60, 5, true)])]
+            ),
+            makeSession(
+                startedAt: makeDate(year: 2024, month: 3, day: 22, hour: 10),
+                endedAt: makeDate(year: 2024, month: 3, day: 22, hour: 11),
+                exerciseLogs: [makeExerciseLog(exerciseID: exercise.id, sets: [(60, 5, true)])]
+            )
+        ]
+
+        let store = AppStore()
+        var snapshot = makeStatisticsSnapshot(exercises: [exercise], history: sessions)
+        snapshot.profile = UserProfile(
+            sex: "M",
+            age: 29,
+            weight: 100,
+            height: 182,
+            appLanguageCode: "en",
+            primaryGoal: .fatLoss,
+            experienceLevel: .intermediate,
+            weeklyWorkoutTarget: 4,
+            targetBodyWeight: 80
+        )
+        store.apply(snapshot: snapshot)
+
+        let summary = store.profileGoalCompatibilitySummary(
+            referenceDate: makeDate(year: 2024, month: 3, day: 25, hour: 12),
+            calendar: statisticsCalendar(localeIdentifier: "en_US")
+        )
+
+        XCTAssertTrue(summary.issues.contains { $0.kind == .adherenceGap })
+        XCTAssertTrue(summary.issues.contains { $0.kind == .longGoalTimeline })
+        XCTAssertEqual(try XCTUnwrap(summary.averageWorkoutsPerWeek), 0.5, accuracy: 0.001)
+    }
+
+    @MainActor
+    func testProfileStrengthToBodyweightSummaryUsesBestCompletedLoadForCanonicalLifts() {
+        let bench = makeExercise(id: UUID(uuidString: "CCCC1111-1111-1111-1111-111111111111")!, name: "Barbell Bench Press")
+        let squat = makeExercise(id: UUID(uuidString: "DDDD1111-1111-1111-1111-111111111111")!, name: "Back Squat")
+        let sessions = [
+            makeSession(
+                startedAt: makeDate(year: 2024, month: 3, day: 10, hour: 10),
+                endedAt: makeDate(year: 2024, month: 3, day: 10, hour: 11),
+                exerciseLogs: [
+                    makeExerciseLog(exerciseID: bench.id, sets: [(95, 5, true)]),
+                    makeExerciseLog(exerciseID: squat.id, sets: [(130, 5, true)])
+                ]
+            ),
+            makeSession(
+                startedAt: makeDate(year: 2024, month: 3, day: 20, hour: 10),
+                endedAt: makeDate(year: 2024, month: 3, day: 20, hour: 11),
+                exerciseLogs: [
+                    makeExerciseLog(exerciseID: bench.id, sets: [(100, 3, true), (105, 3, false)]),
+                    makeExerciseLog(exerciseID: squat.id, sets: [(140, 3, true)])
+                ]
+            )
+        ]
+
+        let store = AppStore()
+        var snapshot = makeStatisticsSnapshot(exercises: [bench, squat], history: sessions)
+        snapshot.profile = UserProfile(
+            sex: "M",
+            age: 29,
+            weight: 80,
+            height: 182,
+            appLanguageCode: "en",
+            primaryGoal: .strength,
+            experienceLevel: .intermediate,
+            weeklyWorkoutTarget: 4,
+            targetBodyWeight: nil
+        )
+        store.apply(snapshot: snapshot)
+
+        let summary = store.profileStrengthToBodyweightSummary()
+        let benchLift = summary.lifts.first { $0.lift == .benchPress }
+        let squatLift = summary.lifts.first { $0.lift == .backSquat }
+        let deadliftLift = summary.lifts.first { $0.lift == .deadlift }
+
+        XCTAssertEqual(try XCTUnwrap(benchLift?.bestLoad), 100, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(benchLift?.relativeToBodyWeight), 1.25, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(squatLift?.bestLoad), 140, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(squatLift?.relativeToBodyWeight), 1.75, accuracy: 0.001)
+        XCTAssertNil(deadliftLift?.bestLoad)
+        XCTAssertNil(deadliftLift?.relativeToBodyWeight)
+    }
+
     private func backupFiles(in folderURL: URL) throws -> [URL] {
         try FileManager.default.contentsOfDirectory(
             at: folderURL,

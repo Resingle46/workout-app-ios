@@ -191,6 +191,60 @@
 "profile.card.goal.no_target" = "Задайте целевой вес, чтобы отслеживать прогресс по массе тела.";
 "profile.card.goal.target_reached" = "Цель достигнута";
 "profile.card.goal.delta_format" = "%@ кг до цели";
+"profile.card.goal.safe_pace" = "Безопасный темп";
+"profile.card.goal.eta" = "Срок";
+"profile.card.goal.safe_pace_format" = "%@-%@ кг/нед.";
+"profile.card.goal.eta_weeks" = "%d-%d нед.";
+"profile.card.goal.eta_months" = "%d-%d мес.";
+"profile.card.goal.from_current_only" = "Срок считается только от текущего веса; история массы тела пока не хранится.";
+
+"profile.card.metabolism.eyebrow" = "Энергия";
+"profile.card.metabolism.title" = "BMR и поддержание";
+"profile.card.metabolism.bmr" = "BMR";
+"profile.card.metabolism.maintenance" = "Поддержание";
+"profile.card.metabolism.activity_factor" = "Коэфф. активности";
+"profile.card.metabolism.source_history" = "Оценка по недавней частоте тренировок.";
+"profile.card.metabolism.source_target" = "Оценка по недельной цели тренировок.";
+"profile.card.metabolism.note" = "Это приблизительная оценка: шаги и бытовая активность не учитываются.";
+
+"profile.card.recommendations.eyebrow" = "Ориентир";
+"profile.card.recommendations.title" = "Тренировочные рекомендации";
+"profile.card.recommendations.frequency" = "Частота";
+"profile.card.recommendations.rep_range" = "Диапазон повторений";
+"profile.card.recommendations.volume" = "Недельный объём";
+"profile.card.recommendations.split" = "Сплит";
+"profile.card.recommendations.generic" = "Базовый план";
+"profile.card.recommendations.complete_profile" = "Задайте цель и уровень, чтобы персонализировать частоту, повторы и недельный объём.";
+"profile.card.recommendations.frequency_format" = "%d-%d / нед.";
+"profile.card.recommendations.frequency_single_format" = "%d / нед.";
+"profile.card.recommendations.rep_range_format" = "%d-%d осн. • %d-%d доп.";
+"profile.card.recommendations.volume_format" = "%d-%d подходов";
+"profile.card.recommendations.split.full_body" = "Фулбоди";
+"profile.card.recommendations.split.upper_lower_hybrid" = "Фулбоди / верх-низ";
+"profile.card.recommendations.split.upper_lower" = "Верх / низ";
+"profile.card.recommendations.split.upper_lower_plus" = "Верх-низ + специализация";
+"profile.card.recommendations.split.high_frequency" = "Высокочастотный сплит";
+
+"profile.card.compatibility.eyebrow" = "Проверка";
+"profile.card.compatibility.title" = "Совместимость цели";
+"profile.card.compatibility.aligned" = "Цель, целевой вес и недельный план в целом согласованы.";
+"profile.card.compatibility.issue_goal_target" = "Цель и целевой вес направлены в разные стороны.";
+"profile.card.compatibility.issue_frequency_low" = "Для этой цели обычно нужно минимум %d трен./нед.; сейчас стоит %d.";
+"profile.card.compatibility.issue_frequency_high_beginner" = "%d трен./нед. для новичка уже агрессивно; восстановление, скорее всего, будет узким местом.";
+"profile.card.compatibility.issue_adherence_gap" = "Недавний средний ритм: %@ трен./нед. при цели %d.";
+"profile.card.compatibility.issue_long_eta" = "Этот весовой таргет, скорее всего, займёт %d+ недель; лучше разбить его на этапы.";
+"profile.card.compatibility.issue_missing_goal" = "Задайте основную цель, чтобы рекомендации и проверки стали конкретными.";
+
+"profile.card.relative_strength.eyebrow" = "Сила";
+"profile.card.relative_strength.title" = "Сила к весу тела";
+"profile.card.relative_strength.best_load" = "Лучший зафиксированный вес относительно текущей массы тела.";
+"profile.card.relative_strength.ratio_format" = "%.2fx веса";
+"profile.card.relative_strength.empty" = "Зафиксируйте завершённые подходы в жиме, приседе, становой или жиме стоя, чтобы открыть этот блок.";
+"profile.card.relative_strength.missing_pr" = "PR ещё нет";
+"profile.card.relative_strength.lift.bench" = "Жим";
+"profile.card.relative_strength.lift.squat" = "Присед";
+"profile.card.relative_strength.lift.deadlift" = "Становая";
+"profile.card.relative_strength.lift.ohp" = "Жим стоя";
 
 "muscle.chest" = "Грудь";
 "muscle.back" = "Спина";

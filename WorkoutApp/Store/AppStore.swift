@@ -685,11 +685,255 @@ final class AppStore {
     }
 
     func profileGoalSummary() -> ProfileGoalSummary {
+        let safeWeightChangeRange = profile.targetBodyWeight.flatMap {
+            safeWeightChangeRange(currentWeight: profile.weight, targetWeight: $0)
+        }
+        let etaWeeksRange = profile.targetBodyWeight.flatMap { targetWeight -> (lower: Int, upper: Int)? in
+            guard let safeWeightChangeRange else {
+                return nil
+            }
+            return etaWeeksRange(
+                currentWeight: profile.weight,
+                targetWeight: targetWeight,
+                safeWeightChangeRange: safeWeightChangeRange
+            )
+        }
+
         ProfileGoalSummary(
             primaryGoal: profile.primaryGoal,
             currentWeight: profile.weight,
             targetBodyWeight: profile.targetBodyWeight,
-            weeklyWorkoutTarget: profile.weeklyWorkoutTarget
+            weeklyWorkoutTarget: profile.weeklyWorkoutTarget,
+            safeWeeklyChangeLowerBound: safeWeightChangeRange?.lower,
+            safeWeeklyChangeUpperBound: safeWeightChangeRange?.upper,
+            etaWeeksLowerBound: etaWeeksRange?.lower,
+            etaWeeksUpperBound: etaWeeksRange?.upper,
+            usesCurrentWeightOnly: true
+        )
+    }
+
+    func profileMetabolismSummary(
+        referenceDate: Date = .now,
+        calendar: Calendar? = nil
+    ) -> ProfileMetabolismSummary {
+        let workoutAverage = recentAverageWorkoutsPerWeek(referenceDate: referenceDate, calendar: calendar)
+        let baseActivityFactor = activityFactorBase(for: workoutAverage.average)
+        let activityFactorLowerBound = max(baseActivityFactor - 0.05, 1.2)
+        let activityFactorUpperBound = min(baseActivityFactor + 0.05, 1.75)
+        let weight = profile.weight
+        let height = profile.height
+        let age = Double(profile.age)
+        let baseBMR = (10 * weight) + (6.25 * height) - (5 * age)
+        let bmr = baseBMR + (profile.sex.uppercased() == "F" ? -161 : 5)
+
+        return ProfileMetabolismSummary(
+            bmr: Int(bmr.rounded()),
+            maintenanceCaloriesLowerBound: Int((bmr * activityFactorLowerBound).rounded()),
+            maintenanceCaloriesUpperBound: Int((bmr * activityFactorUpperBound).rounded()),
+            activityFactorLowerBound: activityFactorLowerBound,
+            activityFactorUpperBound: activityFactorUpperBound,
+            averageWorkoutsPerWeek: workoutAverage.average,
+            estimateSource: workoutAverage.source
+        )
+    }
+
+    func profileTrainingRecommendationSummary() -> ProfileTrainingRecommendationSummary {
+        let isGenericFallback = profile.primaryGoal == .notSet || profile.experienceLevel == .notSet
+        let split = isGenericFallback
+            ? ProfileTrainingSplitRecommendation.fullBody
+            : splitRecommendation(for: profile.weeklyWorkoutTarget)
+
+        if isGenericFallback {
+            return ProfileTrainingRecommendationSummary(
+                primaryGoal: profile.primaryGoal,
+                experienceLevel: profile.experienceLevel,
+                currentWeeklyTarget: profile.weeklyWorkoutTarget,
+                recommendedWeeklyTargetLowerBound: 3,
+                recommendedWeeklyTargetUpperBound: 3,
+                mainRepLowerBound: 6,
+                mainRepUpperBound: 12,
+                accessoryRepLowerBound: 6,
+                accessoryRepUpperBound: 12,
+                weeklySetsLowerBound: 6,
+                weeklySetsUpperBound: 10,
+                split: split,
+                isGenericFallback: true
+            )
+        }
+
+        let recommendation = recommendationRanges(
+            for: profile.primaryGoal,
+            experienceLevel: profile.experienceLevel
+        )
+
+        return ProfileTrainingRecommendationSummary(
+            primaryGoal: profile.primaryGoal,
+            experienceLevel: profile.experienceLevel,
+            currentWeeklyTarget: profile.weeklyWorkoutTarget,
+            recommendedWeeklyTargetLowerBound: recommendation.frequency.lower,
+            recommendedWeeklyTargetUpperBound: recommendation.frequency.upper,
+            mainRepLowerBound: recommendation.mainReps.lower,
+            mainRepUpperBound: recommendation.mainReps.upper,
+            accessoryRepLowerBound: recommendation.accessoryReps.lower,
+            accessoryRepUpperBound: recommendation.accessoryReps.upper,
+            weeklySetsLowerBound: recommendation.weeklySets.lower,
+            weeklySetsUpperBound: recommendation.weeklySets.upper,
+            split: split,
+            isGenericFallback: false
+        )
+    }
+
+    func profileGoalCompatibilitySummary(
+        referenceDate: Date = .now,
+        calendar: Calendar? = nil
+    ) -> ProfileGoalCompatibilitySummary {
+        let goalSummary = profileGoalSummary()
+        let workoutAverage = recentAverageWorkoutsPerWeek(referenceDate: referenceDate, calendar: calendar)
+        let usesObservedHistory = workoutAverage.source == .history
+        var issues: [ProfileGoalCompatibilityIssue] = []
+
+        if let targetBodyWeight = profile.targetBodyWeight {
+            switch profile.primaryGoal {
+            case .fatLoss where targetBodyWeight >= profile.weight:
+                issues.append(
+                    ProfileGoalCompatibilityIssue(
+                        id: ProfileGoalCompatibilityIssueKind.goalTargetMismatch.rawValue,
+                        kind: .goalTargetMismatch,
+                        currentWeeklyTarget: nil,
+                        recommendedWeeklyTargetLowerBound: nil,
+                        observedWorkoutsPerWeek: nil,
+                        etaWeeksUpperBound: nil,
+                        systemImage: "arrow.left.arrow.right.circle.fill"
+                    )
+                )
+            case .strength, .hypertrophy where targetBodyWeight < (profile.weight - 1):
+                issues.append(
+                    ProfileGoalCompatibilityIssue(
+                        id: ProfileGoalCompatibilityIssueKind.goalTargetMismatch.rawValue,
+                        kind: .goalTargetMismatch,
+                        currentWeeklyTarget: nil,
+                        recommendedWeeklyTargetLowerBound: nil,
+                        observedWorkoutsPerWeek: nil,
+                        etaWeeksUpperBound: nil,
+                        systemImage: "arrow.left.arrow.right.circle.fill"
+                    )
+                )
+            default:
+                break
+            }
+        }
+
+        switch profile.primaryGoal {
+        case .strength, .hypertrophy where profile.weeklyWorkoutTarget < 3:
+            issues.append(
+                ProfileGoalCompatibilityIssue(
+                    id: "\(ProfileGoalCompatibilityIssueKind.frequencyTooLow.rawValue)-3",
+                    kind: .frequencyTooLow,
+                    currentWeeklyTarget: profile.weeklyWorkoutTarget,
+                    recommendedWeeklyTargetLowerBound: 3,
+                    observedWorkoutsPerWeek: nil,
+                    etaWeeksUpperBound: nil,
+                    systemImage: "calendar.badge.exclamationmark"
+                )
+            )
+        case .fatLoss where profile.weeklyWorkoutTarget < 2:
+            issues.append(
+                ProfileGoalCompatibilityIssue(
+                    id: "\(ProfileGoalCompatibilityIssueKind.frequencyTooLow.rawValue)-2",
+                    kind: .frequencyTooLow,
+                    currentWeeklyTarget: profile.weeklyWorkoutTarget,
+                    recommendedWeeklyTargetLowerBound: 2,
+                    observedWorkoutsPerWeek: nil,
+                    etaWeeksUpperBound: nil,
+                    systemImage: "calendar.badge.exclamationmark"
+                )
+            )
+        default:
+            break
+        }
+
+        if profile.experienceLevel == .beginner, profile.weeklyWorkoutTarget > 5 {
+            issues.append(
+                ProfileGoalCompatibilityIssue(
+                    id: ProfileGoalCompatibilityIssueKind.frequencyTooHighForBeginner.rawValue,
+                    kind: .frequencyTooHighForBeginner,
+                    currentWeeklyTarget: profile.weeklyWorkoutTarget,
+                    recommendedWeeklyTargetLowerBound: 5,
+                    observedWorkoutsPerWeek: nil,
+                    etaWeeksUpperBound: nil,
+                    systemImage: "figure.cooldown"
+                )
+            )
+        }
+
+        if usesObservedHistory, workoutAverage.average < Double(max(profile.weeklyWorkoutTarget - 1, 0)) {
+            issues.append(
+                ProfileGoalCompatibilityIssue(
+                    id: ProfileGoalCompatibilityIssueKind.adherenceGap.rawValue,
+                    kind: .adherenceGap,
+                    currentWeeklyTarget: profile.weeklyWorkoutTarget,
+                    recommendedWeeklyTargetLowerBound: nil,
+                    observedWorkoutsPerWeek: workoutAverage.average,
+                    etaWeeksUpperBound: nil,
+                    systemImage: "chart.line.downtrend.xyaxis"
+                )
+            )
+        }
+
+        if let etaWeeksUpperBound = goalSummary.etaWeeksUpperBound, etaWeeksUpperBound > 24 {
+            issues.append(
+                ProfileGoalCompatibilityIssue(
+                    id: ProfileGoalCompatibilityIssueKind.longGoalTimeline.rawValue,
+                    kind: .longGoalTimeline,
+                    currentWeeklyTarget: nil,
+                    recommendedWeeklyTargetLowerBound: nil,
+                    observedWorkoutsPerWeek: nil,
+                    etaWeeksUpperBound: etaWeeksUpperBound,
+                    systemImage: "flag.pattern.checkered.2.crossed"
+                )
+            )
+        }
+
+        if profile.primaryGoal == .notSet {
+            issues.append(
+                ProfileGoalCompatibilityIssue(
+                    id: ProfileGoalCompatibilityIssueKind.missingGoal.rawValue,
+                    kind: .missingGoal,
+                    currentWeeklyTarget: nil,
+                    recommendedWeeklyTargetLowerBound: nil,
+                    observedWorkoutsPerWeek: nil,
+                    etaWeeksUpperBound: nil,
+                    systemImage: "questionmark.circle.fill"
+                )
+            )
+        }
+
+        return ProfileGoalCompatibilitySummary(
+            primaryGoal: profile.primaryGoal,
+            currentWeight: profile.weight,
+            targetBodyWeight: profile.targetBodyWeight,
+            weeklyWorkoutTarget: profile.weeklyWorkoutTarget,
+            averageWorkoutsPerWeek: usesObservedHistory ? workoutAverage.average : nil,
+            usesObservedHistory: usesObservedHistory,
+            issues: issues
+        )
+    }
+
+    func profileStrengthToBodyweightSummary() -> ProfileStrengthToBodyweightSummary {
+        let liftIDs = canonicalLiftIDs()
+        let bestLoads = bestCompletedWeightByExercise(for: Set(liftIDs.values))
+        let currentWeight = max(profile.weight, 1)
+
+        return ProfileStrengthToBodyweightSummary(
+            currentWeight: currentWeight,
+            lifts: CanonicalStrengthLift.allCases.map { lift in
+                let bestLoad = liftIDs[lift].flatMap { bestLoads[$0] }
+                return ProfileRelativeStrengthLift(
+                    lift: lift,
+                    bestLoad: bestLoad,
+                    relativeToBodyWeight: bestLoad.map { $0 / currentWeight }
+                )
+            }
         )
     }
 
@@ -742,6 +986,160 @@ final class AppStore {
 
     func lastUsedWeight(for exerciseID: UUID) -> Double? {
         lastUsedWeights(for: [exerciseID])[exerciseID]
+    }
+
+    private func recentAverageWorkoutsPerWeek(
+        referenceDate: Date = .now,
+        calendar: Calendar? = nil
+    ) -> (average: Double, source: MetabolismEstimateSource) {
+        let consistencySummary = profileConsistencySummary(referenceDate: referenceDate, calendar: calendar)
+        let observedWorkouts = consistencySummary.recentWeeklyActivity.reduce(0) { $0 + $1.workoutsCount }
+
+        if observedWorkouts >= 2 {
+            let weeksCount = max(consistencySummary.recentWeeklyActivity.count, 1)
+            return (Double(observedWorkouts) / Double(weeksCount), .history)
+        }
+
+        return (Double(max(profile.weeklyWorkoutTarget, 1)), .target)
+    }
+
+    private func activityFactorBase(for averageWorkoutsPerWeek: Double) -> Double {
+        switch averageWorkoutsPerWeek {
+        case ..<1.5:
+            return 1.35
+        case ..<3:
+            return 1.45
+        case ..<5:
+            return 1.55
+        default:
+            return 1.65
+        }
+    }
+
+    private func safeWeightChangeRange(
+        currentWeight: Double,
+        targetWeight: Double
+    ) -> (lower: Double, upper: Double)? {
+        guard targetWeight != currentWeight else {
+            return nil
+        }
+
+        if targetWeight < currentWeight {
+            let lower = max(currentWeight * 0.0025, 0.2)
+            let upper = min(max(currentWeight * 0.0075, lower), 0.9)
+            return (lower, upper)
+        }
+
+        let lower = max(currentWeight * 0.001, 0.1)
+        let upper = min(max(currentWeight * 0.0025, lower), 0.25)
+        return (lower, upper)
+    }
+
+    private func etaWeeksRange(
+        currentWeight: Double,
+        targetWeight: Double,
+        safeWeightChangeRange: (lower: Double, upper: Double)
+    ) -> (lower: Int, upper: Int)? {
+        let delta = abs(targetWeight - currentWeight)
+        guard delta > 0 else {
+            return nil
+        }
+
+        let minimumWeeks = Int(ceil(delta / safeWeightChangeRange.upper))
+        let maximumWeeks = Int(ceil(delta / safeWeightChangeRange.lower))
+        return (minimumWeeks, maximumWeeks)
+    }
+
+    private func recommendationRanges(
+        for goal: TrainingGoal,
+        experienceLevel: ExperienceLevel
+    ) -> (
+        frequency: (lower: Int, upper: Int),
+        mainReps: (lower: Int, upper: Int),
+        accessoryReps: (lower: Int, upper: Int),
+        weeklySets: (lower: Int, upper: Int)
+    ) {
+        switch (goal, experienceLevel) {
+        case (.strength, .beginner):
+            return ((3, 4), (3, 6), (6, 10), (8, 10))
+        case (.strength, .intermediate):
+            return ((3, 5), (3, 6), (6, 10), (10, 14))
+        case (.strength, .advanced):
+            return ((4, 6), (3, 6), (6, 10), (12, 16))
+        case (.hypertrophy, .beginner):
+            return ((3, 4), (6, 10), (10, 15), (8, 12))
+        case (.hypertrophy, .intermediate):
+            return ((4, 5), (6, 10), (10, 15), (10, 16))
+        case (.hypertrophy, .advanced):
+            return ((5, 6), (6, 10), (10, 15), (12, 20))
+        case (.fatLoss, .beginner):
+            return ((2, 4), (5, 8), (8, 15), (6, 10))
+        case (.fatLoss, .intermediate):
+            return ((3, 4), (5, 8), (8, 15), (8, 12))
+        case (.fatLoss, .advanced):
+            return ((3, 5), (5, 8), (8, 15), (8, 14))
+        case (.generalFitness, .beginner):
+            return ((2, 3), (6, 10), (10, 15), (6, 8))
+        case (.generalFitness, .intermediate):
+            return ((3, 4), (6, 10), (10, 15), (8, 10))
+        case (.generalFitness, .advanced):
+            return ((3, 5), (6, 10), (10, 15), (8, 12))
+        default:
+            return ((3, 3), (6, 12), (6, 12), (6, 10))
+        }
+    }
+
+    private func splitRecommendation(for weeklyWorkoutTarget: Int) -> ProfileTrainingSplitRecommendation {
+        switch weeklyWorkoutTarget {
+        case ...2:
+            return .fullBody
+        case 3:
+            return .upperLowerHybrid
+        case 4:
+            return .upperLower
+        case 5:
+            return .upperLowerPlusSpecialization
+        default:
+            return .highFrequencySplit
+        }
+    }
+
+    private func bestCompletedWeightByExercise(for exerciseIDs: Set<UUID>) -> [UUID: Double] {
+        guard !exerciseIDs.isEmpty else {
+            return [:]
+        }
+
+        return history
+            .filter(\.isFinished)
+            .reduce(into: [UUID: Double]()) { result, session in
+                for exerciseLog in session.exercises where exerciseIDs.contains(exerciseLog.exerciseID) {
+                    let bestLoad = exerciseLog.sets
+                        .filter { $0.completedAt != nil && $0.weight > 0 }
+                        .map(\.weight)
+                        .max()
+
+                    guard let bestLoad else {
+                        continue
+                    }
+
+                    result[exerciseLog.exerciseID] = max(result[exerciseLog.exerciseID] ?? 0, bestLoad)
+                }
+            }
+    }
+
+    private func canonicalLiftIDs() -> [CanonicalStrengthLift: UUID] {
+        let liftNames: [CanonicalStrengthLift: String] = [
+            .benchPress: "Barbell Bench Press",
+            .backSquat: "Back Squat",
+            .deadlift: "Deadlift",
+            .overheadPress: "Overhead Press"
+        ]
+
+        return liftNames.reduce(into: [CanonicalStrengthLift: UUID]()) { result, item in
+            if let exerciseID = exercises.first(where: { $0.name == item.value })?.id {
+                result[item.key] = exerciseID
+            }
+        }
     }
 
     private func scheduleAutomaticBackup() {
