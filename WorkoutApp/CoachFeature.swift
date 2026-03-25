@@ -484,15 +484,18 @@ struct CoachPerformedSetContext: Codable, Hashable, Sendable {
 }
 
 struct CoachAPIHTTPClient: CoachAPIClient {
+    private static let requestTimeoutInterval: TimeInterval = 20
+    private static let resourceTimeoutInterval: TimeInterval = 25
+
     private let configuration: CoachRuntimeConfiguration
     private let session: URLSession
 
     init(
         configuration: CoachRuntimeConfiguration,
-        session: URLSession = .shared
+        session: URLSession? = nil
     ) {
         self.configuration = configuration
-        self.session = session
+        self.session = session ?? Self.makeSession()
     }
 
     func fetchProfileInsights(
@@ -548,6 +551,7 @@ struct CoachAPIHTTPClient: CoachAPIClient {
 
         var request = URLRequest(url: baseURL.appending(path: path))
         request.httpMethod = "POST"
+        request.timeoutInterval = Self.requestTimeoutInterval
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("Bearer \(internalBearerToken)", forHTTPHeaderField: "Authorization")
@@ -580,6 +584,13 @@ struct CoachAPIHTTPClient: CoachAPIClient {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         return decoder
+    }
+
+    private static func makeSession() -> URLSession {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = requestTimeoutInterval
+        configuration.timeoutIntervalForResource = resourceTimeoutInterval
+        return URLSession(configuration: configuration)
     }
 }
 

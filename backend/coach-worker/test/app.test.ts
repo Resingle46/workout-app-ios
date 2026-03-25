@@ -222,7 +222,7 @@ describe("WorkersAICoachService", () => {
     const [model, payload] = aiRun.mock.calls[0] ?? [];
     expect(model).toBe(DEFAULT_AI_MODEL);
     expect(payload).toMatchObject({
-      max_tokens: 900,
+      max_tokens: 700,
       temperature: 0.2,
       guided_json: expect.any(Object),
     });
@@ -355,6 +355,34 @@ describe("WorkersAICoachService", () => {
       code: "upstream_timeout",
       status: 504,
     });
+  });
+
+  it("cuts off long-running profile insight requests before the client disconnects", async () => {
+    vi.useFakeTimers();
+    try {
+      const service = new WorkersAICoachService(
+        makeEnv({
+          AI: {
+            run: vi.fn().mockImplementation(
+              () => new Promise<unknown>(() => undefined)
+            ),
+          },
+        })
+      );
+
+      const requestPromise = service.generateProfileInsights(
+        makeProfileInsightsRequestFixture()
+      );
+      const expectation = expect(requestPromise).rejects.toMatchObject({
+        code: "upstream_timeout",
+        status: 504,
+      });
+
+      await vi.advanceTimersByTimeAsync(12_050);
+      await expectation;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

@@ -15,6 +15,14 @@ import {
 } from "./prompts";
 
 export const DEFAULT_AI_MODEL = "@cf/mistralai/mistral-small-3.1-24b-instruct";
+const PROFILE_INSIGHTS_STRUCTURED_MAX_TOKENS = 420;
+const PROFILE_INSIGHTS_FALLBACK_MAX_TOKENS = 260;
+const CHAT_STRUCTURED_MAX_TOKENS = 700;
+const CHAT_FALLBACK_MAX_TOKENS = 450;
+const PROFILE_INSIGHTS_STRUCTURED_TIMEOUT_MS = 12_000;
+const PROFILE_INSIGHTS_FALLBACK_TIMEOUT_MS = 8_000;
+const CHAT_STRUCTURED_TIMEOUT_MS = 15_000;
+const CHAT_FALLBACK_TIMEOUT_MS = 10_000;
 
 interface WorkersAI {
   run(model: string, inputs: Record<string, unknown>): Promise<unknown>;
@@ -70,7 +78,8 @@ export class WorkersAICoachService implements CoachInferenceService {
         operation,
         messages: buildProfileInsightsMessages(request),
         schema: profileInsightsJsonSchema,
-        maxTokens: 850,
+        maxTokens: PROFILE_INSIGHTS_STRUCTURED_MAX_TOKENS,
+        timeoutMs: PROFILE_INSIGHTS_STRUCTURED_TIMEOUT_MS,
       });
 
       const response = parseStructuredOutput(
@@ -91,6 +100,9 @@ export class WorkersAICoachService implements CoachInferenceService {
       if (!(error instanceof CoachInferenceServiceError)) {
         throw error;
       }
+      if (!shouldAttemptPlainTextFallback(error)) {
+        throw error;
+      }
 
       console.warn(
         JSON.stringify({
@@ -105,7 +117,8 @@ export class WorkersAICoachService implements CoachInferenceService {
       const fallbackResponse = await this.runPlainText({
         operation,
         messages: buildFallbackProfileInsightsMessages(request),
-        maxTokens: 700,
+        maxTokens: PROFILE_INSIGHTS_FALLBACK_MAX_TOKENS,
+        timeoutMs: PROFILE_INSIGHTS_FALLBACK_TIMEOUT_MS,
       });
       const content = extractPlainText(
         fallbackResponse,
@@ -132,7 +145,8 @@ export class WorkersAICoachService implements CoachInferenceService {
         operation,
         messages,
         schema: chatResponseJsonSchema,
-        maxTokens: 900,
+        maxTokens: CHAT_STRUCTURED_MAX_TOKENS,
+        timeoutMs: CHAT_STRUCTURED_TIMEOUT_MS,
       });
       const parsed = normalizeChatResponse(
         parseStructuredOutput(
@@ -160,6 +174,9 @@ export class WorkersAICoachService implements CoachInferenceService {
       if (!(error instanceof CoachInferenceServiceError)) {
         throw error;
       }
+      if (!shouldAttemptPlainTextFallback(error)) {
+        throw error;
+      }
 
       console.warn(
         JSON.stringify({
@@ -175,7 +192,8 @@ export class WorkersAICoachService implements CoachInferenceService {
       const fallbackResponse = await this.runPlainText({
         operation,
         messages: buildFallbackChatMessages(request),
-        maxTokens: 750,
+        maxTokens: CHAT_FALLBACK_MAX_TOKENS,
+        timeoutMs: CHAT_FALLBACK_TIMEOUT_MS,
       });
       const answerMarkdown = extractPlainText(fallbackResponse, "chat fallback");
 
@@ -202,6 +220,7 @@ export class WorkersAICoachService implements CoachInferenceService {
     messages: PromptMessage[];
     schema: Record<string, unknown>;
     maxTokens: number;
+    timeoutMs: number;
   }): Promise<unknown> {
     return this.runModel(
       {
@@ -215,6 +234,7 @@ export class WorkersAICoachService implements CoachInferenceService {
         mode: "structured",
         messageCount: input.messages.length,
         maxTokens: input.maxTokens,
+        timeoutMs: input.timeoutMs,
       }
     );
   }
@@ -223,6 +243,7 @@ export class WorkersAICoachService implements CoachInferenceService {
     operation: "profile_insights" | "chat";
     messages: PromptMessage[];
     maxTokens: number;
+    timeoutMs: number;
   }): Promise<unknown> {
     return this.runModel(
       {
@@ -242,6 +263,7 @@ export class WorkersAICoachService implements CoachInferenceService {
         mode: "plain_text_fallback",
         messageCount: input.messages.length,
         maxTokens: input.maxTokens,
+        timeoutMs: input.timeoutMs,
       }
     );
   }
@@ -260,7 +282,8 @@ export class WorkersAICoachService implements CoachInferenceService {
     }
 
     try {
-      return await this.env.AI.run(this.modelName, payload);
+      const timeoutMs = parseTimeoutMs(details.timeoutMs);
+      return await withTimeout(this.env.AI.run(this.modelName, payload), timeoutMs);
     } catch (error) {
       throw normalizeWorkersAIError(error, {
         ...details,
@@ -268,6 +291,12 @@ export class WorkersAICoachService implements CoachInferenceService {
       });
     }
   }
+}
+
+function shouldAttemptPlainTextFallback(
+  error: CoachInferenceServiceError
+): boolean {
+  return error.code !== "upstream_timeout";
 }
 
 function parseStructuredOutput<T>(
@@ -519,6 +548,35 @@ function normalizeWorkersAIError(
       providerMessage: message.slice(0, 200),
     }
   );
+}
+
+function parseTimeoutMs(value: unknown): number {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return value;
+  }
+
+  return 12_000;
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timeoutHandle = setTimeout(() => {
+          reject(
+            new Error(`Workers AI request timed out after ${timeoutMs}ms`)
+          );
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeoutHandle !== undefined) {
+      clearTimeout(timeoutHandle);
+    }
+  }
 }
 
 function normalizePotentialJSON(payload: string): string {
