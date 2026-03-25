@@ -76,7 +76,7 @@ final class CoachRuntimeConfigurationStore {
     private let defaultConfiguration: CoachRuntimeConfiguration
     private let defaults: UserDefaults
 
-    init(bundle: Bundle = .main, defaults: UserDefaults = .standard) {
+    convenience init(bundle: Bundle = .main, defaults: UserDefaults = .standard) {
         self.init(
             defaultConfiguration: CoachRuntimeConfiguration(bundle: bundle),
             defaults: defaults
