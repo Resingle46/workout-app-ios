@@ -699,7 +699,7 @@ final class AppStore {
             )
         }
 
-        ProfileGoalSummary(
+        return ProfileGoalSummary(
             primaryGoal: profile.primaryGoal,
             currentWeight: profile.weight,
             targetBodyWeight: profile.targetBodyWeight,
