@@ -685,17 +685,17 @@ final class AppStore {
     }
 
     func profileGoalSummary() -> ProfileGoalSummary {
-        let safeWeightChangeRange = profile.targetBodyWeight.flatMap {
-            safeWeightChangeRange(currentWeight: profile.weight, targetWeight: $0)
+        let safeWeightChange = profile.targetBodyWeight.flatMap { targetWeight in
+            safeWeightChangeRange(currentWeight: profile.weight, targetWeight: targetWeight)
         }
         let etaWeeksRange = profile.targetBodyWeight.flatMap { targetWeight -> (lower: Int, upper: Int)? in
-            guard let safeWeightChangeRange else {
+            guard let safeWeightChange else {
                 return nil
             }
             return etaWeeksRange(
                 currentWeight: profile.weight,
                 targetWeight: targetWeight,
-                safeWeightChangeRange: safeWeightChangeRange
+                safeWeightChangeRange: safeWeightChange
             )
         }
 
@@ -704,8 +704,8 @@ final class AppStore {
             currentWeight: profile.weight,
             targetBodyWeight: profile.targetBodyWeight,
             weeklyWorkoutTarget: profile.weeklyWorkoutTarget,
-            safeWeeklyChangeLowerBound: safeWeightChangeRange?.lower,
-            safeWeeklyChangeUpperBound: safeWeightChangeRange?.upper,
+            safeWeeklyChangeLowerBound: safeWeightChange?.lower,
+            safeWeeklyChangeUpperBound: safeWeightChange?.upper,
             etaWeeksLowerBound: etaWeeksRange?.lower,
             etaWeeksUpperBound: etaWeeksRange?.upper,
             usesCurrentWeightOnly: true
@@ -806,7 +806,8 @@ final class AppStore {
                         systemImage: "arrow.left.arrow.right.circle.fill"
                     )
                 )
-            case .strength, .hypertrophy where targetBodyWeight < (profile.weight - 1):
+            case .strength where targetBodyWeight < (profile.weight - 1),
+                 .hypertrophy where targetBodyWeight < (profile.weight - 1):
                 issues.append(
                     ProfileGoalCompatibilityIssue(
                         id: ProfileGoalCompatibilityIssueKind.goalTargetMismatch.rawValue,
@@ -824,7 +825,8 @@ final class AppStore {
         }
 
         switch profile.primaryGoal {
-        case .strength, .hypertrophy where profile.weeklyWorkoutTarget < 3:
+        case .strength where profile.weeklyWorkoutTarget < 3,
+             .hypertrophy where profile.weeklyWorkoutTarget < 3:
             issues.append(
                 ProfileGoalCompatibilityIssue(
                     id: "\(ProfileGoalCompatibilityIssueKind.frequencyTooLow.rawValue)-3",
