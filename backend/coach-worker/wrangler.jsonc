@@ -1,6 +1,7 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "workoutapp-ai-coach",
+  "account_id": "8a87a1cb61cc74cf30b914811e5d0022",
   "main": "src/index.ts",
   "compatibility_date": "2026-03-25",
   "workers_dev": true,
