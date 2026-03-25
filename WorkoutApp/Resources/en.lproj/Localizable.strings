@@ -149,6 +149,17 @@
 "profile.target_weight" = "Target weight";
 "profile.settings.title" = "Settings";
 "profile.settings.preferences" = "Preferences";
+"profile.settings.coach" = "AI Coach backend";
+"profile.settings.coach.enable" = "Enable remote AI Coach";
+"profile.settings.coach.url" = "Backend URL";
+"profile.settings.coach.url.placeholder" = "https://your-worker.workers.dev";
+"profile.settings.coach.token" = "Internal bearer token";
+"profile.settings.coach.token.placeholder" = "Enter the same token as COACH_INTERNAL_TOKEN";
+"profile.settings.coach.note" = "Use the production workers.dev URL, not a preview URL. The token is saved only on this device and is not included in workout backups.";
+"profile.settings.coach.invalid_url" = "Enter a valid absolute backend URL starting with https:// or http://.";
+"profile.settings.coach.saved" = "Coach settings saved.";
+"profile.settings.coach.reset" = "Reset local Coach config";
+"profile.settings.coach.reset_done" = "Local Coach config reset.";
 "profile.editor.title" = "Edit Profile";
 "profile.sex.male" = "Male";
 "profile.sex.female" = "Female";

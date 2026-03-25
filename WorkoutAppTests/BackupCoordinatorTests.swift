@@ -1400,6 +1400,65 @@ final class BackupCoordinatorTests: XCTestCase {
         XCTAssertTrue(coachStore.messages.isEmpty)
     }
 
+    @MainActor
+    func testCoachRuntimeConfigurationStorePersistsOverridesOutsideSnapshot() throws {
+        let suiteName = "CoachRuntimeConfigurationStoreTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        let defaultConfiguration = CoachRuntimeConfiguration(
+            isFeatureEnabled: false,
+            backendBaseURL: nil,
+            internalBearerToken: nil
+        )
+        let configurationStore = CoachRuntimeConfigurationStore(
+            defaultConfiguration: defaultConfiguration,
+            defaults: defaults
+        )
+
+        configurationStore.isFeatureEnabled = true
+        configurationStore.backendBaseURLText = " https://workoutapp-ai-coach.dmitry-grinko46.workers.dev "
+        configurationStore.internalBearerToken = " internal-secret-token "
+
+        let savedConfiguration = configurationStore.save()
+
+        XCTAssertTrue(savedConfiguration.canUseRemoteCoach)
+        XCTAssertEqual(
+            savedConfiguration.backendBaseURL?.absoluteString,
+            "https://workoutapp-ai-coach.dmitry-grinko46.workers.dev"
+        )
+        XCTAssertEqual(savedConfiguration.internalBearerToken, "internal-secret-token")
+        XCTAssertTrue(configurationStore.hasLocalOverrides)
+
+        let reloadedStore = CoachRuntimeConfigurationStore(
+            defaultConfiguration: defaultConfiguration,
+            defaults: defaults
+        )
+
+        XCTAssertTrue(reloadedStore.isFeatureEnabled)
+        XCTAssertEqual(
+            reloadedStore.backendBaseURLText,
+            "https://workoutapp-ai-coach.dmitry-grinko46.workers.dev"
+        )
+        XCTAssertEqual(reloadedStore.internalBearerToken, "internal-secret-token")
+        XCTAssertTrue(reloadedStore.runtimeConfiguration.canUseRemoteCoach)
+
+        let appStore = AppStore()
+        appStore.apply(snapshot: makeSnapshot())
+        let snapshotData = try JSONEncoder().encode(appStore.currentSnapshot())
+        let snapshotJSON = String(data: snapshotData, encoding: .utf8) ?? ""
+        XCTAssertFalse(snapshotJSON.contains("workoutapp-ai-coach.dmitry-grinko46.workers.dev"))
+        XCTAssertFalse(snapshotJSON.contains("internal-secret-token"))
+
+        let resetConfiguration = reloadedStore.resetToDefaults()
+        XCTAssertFalse(resetConfiguration.isFeatureEnabled)
+        XCTAssertFalse(reloadedStore.hasLocalOverrides)
+        XCTAssertEqual(reloadedStore.backendBaseURLText, "")
+        XCTAssertEqual(reloadedStore.internalBearerToken, "")
+    }
+
     private func backupFiles(in folderURL: URL) throws -> [URL] {
         try FileManager.default.contentsOfDirectory(
             at: folderURL,

@@ -194,6 +194,8 @@ private struct ProfileSettingsView: View {
                     }
                 }
 
+                CoachBackendSettingsCard()
+
                 BackupControlsCard()
             }
             .padding(.horizontal, 20)
@@ -203,6 +205,220 @@ private struct ProfileSettingsView: View {
         .navigationTitle("profile.settings.title")
         .navigationBarTitleDisplayMode(.inline)
         .appScreenBackground()
+    }
+}
+
+@MainActor
+private struct CoachBackendSettingsCard: View {
+    @Environment(AppStore.self) private var store
+    @Environment(CoachStore.self) private var coachStore
+    @Environment(CoachRuntimeConfigurationStore.self) private var coachConfigurationStore
+
+    @State private var isFeatureEnabled = false
+    @State private var backendBaseURLText = ""
+    @State private var internalBearerToken = ""
+    @State private var didLoadDraft = false
+    @State private var statusMessage: String?
+    @State private var validationMessage: String?
+
+    private var hasDraftChanges: Bool {
+        isFeatureEnabled != coachConfigurationStore.isFeatureEnabled ||
+        backendBaseURLText.trimmingCharacters(in: .whitespacesAndNewlines) != coachConfigurationStore.backendBaseURLText ||
+        internalBearerToken.trimmingCharacters(in: .whitespacesAndNewlines) != coachConfigurationStore.internalBearerToken
+    }
+
+    private var statusKey: LocalizedStringKey {
+        coachStore.canUseRemoteCoach ? "coach.status.remote" : "coach.status.fallback"
+    }
+
+    private var statusDescriptionKey: LocalizedStringKey {
+        coachStore.canUseRemoteCoach ? "coach.status.remote_description" : "coach.status.fallback_description"
+    }
+
+    var body: some View {
+        AppCard {
+            VStack(alignment: .leading, spacing: 16) {
+                AppSectionTitle(titleKey: "profile.settings.coach")
+
+                HStack(spacing: 10) {
+                    Circle()
+                        .fill(coachStore.canUseRemoteCoach ? AppTheme.success : AppTheme.warning)
+                        .frame(width: 10, height: 10)
+
+                    Text(statusKey)
+                        .font(AppTypography.body(size: 16, weight: .semibold))
+                        .foregroundStyle(AppTheme.primaryText)
+                }
+
+                Text(statusDescriptionKey)
+                    .font(AppTypography.body(size: 15, weight: .medium, relativeTo: .subheadline))
+                    .foregroundStyle(AppTheme.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Toggle(isOn: $isFeatureEnabled) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("profile.settings.coach.enable")
+                            .font(AppTypography.body(size: 16, weight: .semibold))
+                            .foregroundStyle(AppTheme.primaryText)
+
+                        Text("profile.settings.coach.note")
+                            .font(AppTypography.caption(size: 13, weight: .medium))
+                            .foregroundStyle(AppTheme.secondaryText)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .tint(AppTheme.accent)
+
+                CoachSettingsTextField(
+                    titleKey: "profile.settings.coach.url",
+                    placeholderKey: "profile.settings.coach.url.placeholder",
+                    text: $backendBaseURLText,
+                    isSecure: false
+                )
+
+                CoachSettingsTextField(
+                    titleKey: "profile.settings.coach.token",
+                    placeholderKey: "profile.settings.coach.token.placeholder",
+                    text: $internalBearerToken,
+                    isSecure: true
+                )
+
+                if let validationMessage, !validationMessage.isEmpty {
+                    Text(validationMessage)
+                        .font(AppTypography.caption(size: 13, weight: .medium))
+                        .foregroundStyle(AppTheme.warning)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                if let statusMessage, !statusMessage.isEmpty {
+                    Text(statusMessage)
+                        .font(AppTypography.caption(size: 13, weight: .medium))
+                        .foregroundStyle(AppTheme.success)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                VStack(spacing: 12) {
+                    Button("action.save") {
+                        saveConfiguration()
+                    }
+                    .buttonStyle(AppPrimaryButtonStyle())
+                    .disabled(!hasDraftChanges)
+                    .opacity(hasDraftChanges ? 1 : 0.55)
+
+                    Button("profile.settings.coach.reset") {
+                        resetConfiguration()
+                    }
+                    .buttonStyle(AppSecondaryButtonStyle())
+                }
+            }
+        }
+        .task {
+            loadDraftFromStoreIfNeeded()
+        }
+    }
+
+    private func loadDraftFromStoreIfNeeded() {
+        guard !didLoadDraft else {
+            return
+        }
+
+        didLoadDraft = true
+        isFeatureEnabled = coachConfigurationStore.isFeatureEnabled
+        backendBaseURLText = coachConfigurationStore.backendBaseURLText
+        internalBearerToken = coachConfigurationStore.internalBearerToken
+    }
+
+    private func saveConfiguration() {
+        validationMessage = nil
+        statusMessage = nil
+
+        let trimmedBaseURLText = backendBaseURLText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedToken = internalBearerToken.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if isFeatureEnabled {
+            guard !trimmedBaseURLText.isEmpty else {
+                validationMessage = localizedString("coach.error.missing_base_url")
+                return
+            }
+            guard CoachRuntimeConfiguration.parseBackendBaseURL(trimmedBaseURLText) != nil else {
+                validationMessage = localizedString("profile.settings.coach.invalid_url")
+                return
+            }
+            guard !trimmedToken.isEmpty else {
+                validationMessage = localizedString("coach.error.missing_auth_token")
+                return
+            }
+        }
+
+        coachConfigurationStore.isFeatureEnabled = isFeatureEnabled
+        coachConfigurationStore.backendBaseURLText = trimmedBaseURLText
+        coachConfigurationStore.internalBearerToken = trimmedToken
+        let configuration = coachConfigurationStore.save()
+
+        backendBaseURLText = coachConfigurationStore.backendBaseURLText
+        internalBearerToken = coachConfigurationStore.internalBearerToken
+
+        coachStore.updateConfiguration(configuration)
+        statusMessage = localizedString("profile.settings.coach.saved")
+
+        Task {
+            await coachStore.refreshProfileInsights(using: store)
+        }
+    }
+
+    private func resetConfiguration() {
+        validationMessage = nil
+        statusMessage = localizedString("profile.settings.coach.reset_done")
+
+        let configuration = coachConfigurationStore.resetToDefaults()
+        isFeatureEnabled = coachConfigurationStore.isFeatureEnabled
+        backendBaseURLText = coachConfigurationStore.backendBaseURLText
+        internalBearerToken = coachConfigurationStore.internalBearerToken
+
+        coachStore.updateConfiguration(configuration)
+
+        Task {
+            await coachStore.refreshProfileInsights(using: store)
+        }
+    }
+
+}
+
+private struct CoachSettingsTextField: View {
+    let titleKey: LocalizedStringKey
+    let placeholderKey: LocalizedStringKey
+    @Binding var text: String
+    let isSecure: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(titleKey)
+                .font(AppTypography.body(size: 15, weight: .semibold))
+                .foregroundStyle(AppTheme.primaryText)
+
+            Group {
+                if isSecure {
+                    SecureField(placeholderKey, text: $text)
+                } else {
+                    TextField(placeholderKey, text: $text)
+                        .keyboardType(.URL)
+                }
+            }
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .font(AppTypography.body(size: 15))
+            .foregroundStyle(AppTheme.primaryText)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(AppTheme.surface)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(AppTheme.border, lineWidth: 1)
+            )
+        }
     }
 }
 

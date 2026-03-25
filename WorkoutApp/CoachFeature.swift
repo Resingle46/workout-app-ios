@@ -22,22 +22,33 @@ struct CoachRuntimeConfiguration: Hashable, Sendable {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let internalBearerToken = (infoDictionary["CoachInternalBearerToken"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        let backendBaseURL: URL?
-        if let baseURLString, !baseURLString.isEmpty {
-            backendBaseURL = URL(string: baseURLString)
-        } else {
-            backendBaseURL = nil
-        }
-
         self.init(
             isFeatureEnabled: isFeatureEnabled,
-            backendBaseURL: backendBaseURL,
+            backendBaseURL: Self.parseBackendBaseURL(baseURLString),
             internalBearerToken: internalBearerToken
         )
     }
 
     var canUseRemoteCoach: Bool {
         isFeatureEnabled && backendBaseURL != nil && internalBearerToken != nil
+    }
+
+    var backendBaseURLString: String {
+        backendBaseURL?.absoluteString ?? ""
+    }
+
+    static func parseBackendBaseURL(_ value: String?) -> URL? {
+        guard let trimmedValue = value?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .nilIfEmpty,
+              let url = URL(string: trimmedValue),
+              let scheme = url.scheme?.lowercased(),
+              (scheme == "https" || scheme == "http"),
+              url.host != nil else {
+            return nil
+        }
+
+        return url
     }
 
     private static func parseBoolean(_ value: Any?) -> Bool {
@@ -54,6 +65,105 @@ struct CoachRuntimeConfiguration: Hashable, Sendable {
         default:
             return false
         }
+    }
+}
+
+@Observable
+final class CoachRuntimeConfigurationStore {
+    var isFeatureEnabled: Bool
+    var backendBaseURLText: String
+    var internalBearerToken: String
+
+    @ObservationIgnored private let defaultConfiguration: CoachRuntimeConfiguration
+    @ObservationIgnored private let defaults: UserDefaults
+
+    init(bundle: Bundle = .main, defaults: UserDefaults = .standard) {
+        self.init(
+            defaultConfiguration: CoachRuntimeConfiguration(bundle: bundle),
+            defaults: defaults
+        )
+    }
+
+    init(
+        defaultConfiguration: CoachRuntimeConfiguration,
+        defaults: UserDefaults = .standard
+    ) {
+        self.defaultConfiguration = defaultConfiguration
+        self.defaults = defaults
+
+        if let storedValue = defaults.object(forKey: PreferenceKey.featureEnabled) as? Bool {
+            self.isFeatureEnabled = storedValue
+        } else {
+            self.isFeatureEnabled = defaultConfiguration.isFeatureEnabled
+        }
+
+        self.backendBaseURLText = (
+            defaults.string(forKey: PreferenceKey.backendBaseURL)
+            ?? defaultConfiguration.backendBaseURLString
+        )
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        self.internalBearerToken = (
+            defaults.string(forKey: PreferenceKey.internalBearerToken)
+            ?? defaultConfiguration.internalBearerToken
+            ?? ""
+        )
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var runtimeConfiguration: CoachRuntimeConfiguration {
+        CoachRuntimeConfiguration(
+            isFeatureEnabled: isFeatureEnabled,
+            backendBaseURL: CoachRuntimeConfiguration.parseBackendBaseURL(backendBaseURLText),
+            internalBearerToken: internalBearerToken
+        )
+    }
+
+    var hasLocalOverrides: Bool {
+        defaults.object(forKey: PreferenceKey.featureEnabled) != nil ||
+        defaults.object(forKey: PreferenceKey.backendBaseURL) != nil ||
+        defaults.object(forKey: PreferenceKey.internalBearerToken) != nil
+    }
+
+    @discardableResult
+    func save() -> CoachRuntimeConfiguration {
+        backendBaseURLText = backendBaseURLText.trimmingCharacters(in: .whitespacesAndNewlines)
+        internalBearerToken = internalBearerToken.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        defaults.set(isFeatureEnabled, forKey: PreferenceKey.featureEnabled)
+
+        if backendBaseURLText.isEmpty {
+            defaults.removeObject(forKey: PreferenceKey.backendBaseURL)
+        } else {
+            defaults.set(backendBaseURLText, forKey: PreferenceKey.backendBaseURL)
+        }
+
+        if internalBearerToken.isEmpty {
+            defaults.removeObject(forKey: PreferenceKey.internalBearerToken)
+        } else {
+            defaults.set(internalBearerToken, forKey: PreferenceKey.internalBearerToken)
+        }
+
+        return runtimeConfiguration
+    }
+
+    @discardableResult
+    func resetToDefaults() -> CoachRuntimeConfiguration {
+        defaults.removeObject(forKey: PreferenceKey.featureEnabled)
+        defaults.removeObject(forKey: PreferenceKey.backendBaseURL)
+        defaults.removeObject(forKey: PreferenceKey.internalBearerToken)
+
+        isFeatureEnabled = defaultConfiguration.isFeatureEnabled
+        backendBaseURLText = defaultConfiguration.backendBaseURLString
+        internalBearerToken = defaultConfiguration.internalBearerToken ?? ""
+
+        return runtimeConfiguration
+    }
+
+    private enum PreferenceKey {
+        static let featureEnabled = "coach.runtime.feature_enabled"
+        static let backendBaseURL = "coach.runtime.backend_base_url"
+        static let internalBearerToken = "coach.runtime.internal_bearer_token"
     }
 }
 
@@ -897,9 +1007,9 @@ final class CoachStore {
     var lastChatErrorDescription: String?
     var pendingSuggestedChange: CoachSuggestedChange?
 
-    @ObservationIgnored private let client: any CoachAPIClient
+    @ObservationIgnored private var client: any CoachAPIClient
     @ObservationIgnored private let contextBuilder: CoachContextBuilder
-    @ObservationIgnored private let configuration: CoachRuntimeConfiguration
+    private var configuration: CoachRuntimeConfiguration
     @ObservationIgnored private let capabilityScope: CoachCapabilityScope
     @ObservationIgnored private var previousResponseID: String?
 
@@ -923,6 +1033,15 @@ final class CoachStore {
         let chatChanges = messages.reversed().flatMap(\.suggestedChanges)
         let insightChanges = profileInsights?.suggestedChanges ?? []
         return (chatChanges + insightChanges).deduplicatedCoachChanges()
+    }
+
+    func updateConfiguration(_ configuration: CoachRuntimeConfiguration) {
+        self.configuration = configuration
+        client = CoachAPIHTTPClient(configuration: configuration)
+        profileInsights = nil
+        profileInsightsOrigin = .fallback
+        lastInsightsErrorDescription = nil
+        resetConversation()
     }
 
     func refreshProfileInsights(using appStore: AppStore) async {

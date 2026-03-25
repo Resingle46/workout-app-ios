@@ -149,6 +149,17 @@
 "profile.target_weight" = "Целевой вес";
 "profile.settings.title" = "Настройки";
 "profile.settings.preferences" = "Предпочтения";
+"profile.settings.coach" = "Backend AI Coach";
+"profile.settings.coach.enable" = "Включить удалённый AI Coach";
+"profile.settings.coach.url" = "URL backend";
+"profile.settings.coach.url.placeholder" = "https://your-worker.workers.dev";
+"profile.settings.coach.token" = "Внутренний bearer token";
+"profile.settings.coach.token.placeholder" = "Введите тот же токен, что и в COACH_INTERNAL_TOKEN";
+"profile.settings.coach.note" = "Используйте основной workers.dev URL, а не preview URL. Токен сохраняется только на этом устройстве и не попадает в резервные копии тренировок.";
+"profile.settings.coach.invalid_url" = "Введите корректный абсолютный URL backend, который начинается с https:// или http://.";
+"profile.settings.coach.saved" = "Настройки Coach сохранены.";
+"profile.settings.coach.reset" = "Сбросить локальную конфигурацию Coach";
+"profile.settings.coach.reset_done" = "Локальная конфигурация Coach сброшена.";
 "profile.editor.title" = "Редактировать профиль";
 "profile.sex.male" = "Мужской";
 "profile.sex.female" = "Женский";
