@@ -352,19 +352,25 @@ struct CoachChatMessage: Identifiable, Hashable, Sendable {
     var content: String
     var followUps: [String]
     var suggestedChanges: [CoachSuggestedChange]
+    var isLoading: Bool
+    var isStatus: Bool
 
     init(
         id: String = UUID().uuidString,
         role: CoachChatRole,
         content: String,
         followUps: [String] = [],
-        suggestedChanges: [CoachSuggestedChange] = []
+        suggestedChanges: [CoachSuggestedChange] = [],
+        isLoading: Bool = false,
+        isStatus: Bool = false
     ) {
         self.id = id
         self.role = role
         self.content = content
         self.followUps = followUps
         self.suggestedChanges = suggestedChanges
+        self.isLoading = isLoading
+        self.isStatus = isStatus
     }
 }
 
@@ -420,6 +426,7 @@ struct CoachContextPayload: Codable, Hashable, Sendable {
     var localeIdentifier: String
     var historyMode: String
     var profile: UserProfile
+    var coachAnalysisSettings: CoachAnalysisSettings
     var preferredProgram: CoachProgramContext?
     var activeWorkout: CoachActiveWorkoutContext?
     var analytics: CoachAnalyticsContext
@@ -569,18 +576,29 @@ struct CoachRecentSessionExerciseContext: Codable, Hashable, Sendable {
 }
 
 struct CoachAPIHTTPClient: CoachAPIClient {
-    private static let requestTimeoutInterval: TimeInterval = 20
-    private static let resourceTimeoutInterval: TimeInterval = 25
+    private static let standardRequestTimeoutInterval: TimeInterval = 20
+    private static let standardResourceTimeoutInterval: TimeInterval = 25
+    private static let chatRequestTimeoutInterval: TimeInterval = 30
+    private static let chatResourceTimeoutInterval: TimeInterval = 35
 
     private let configuration: CoachRuntimeConfiguration
-    private let session: URLSession
+    private let standardSession: URLSession
+    private let chatSession: URLSession
 
     init(
         configuration: CoachRuntimeConfiguration,
-        session: URLSession? = nil
+        session: URLSession? = nil,
+        chatSession: URLSession? = nil
     ) {
         self.configuration = configuration
-        self.session = session ?? Self.makeSession()
+        self.standardSession = session ?? Self.makeSession(
+            requestTimeoutInterval: Self.standardRequestTimeoutInterval,
+            resourceTimeoutInterval: Self.standardResourceTimeoutInterval
+        )
+        self.chatSession = chatSession ?? Self.makeSession(
+            requestTimeoutInterval: Self.chatRequestTimeoutInterval,
+            resourceTimeoutInterval: Self.chatResourceTimeoutInterval
+        )
     }
 
     func syncSnapshot(_ request: CoachSnapshotSyncRequest) async throws -> CoachSnapshotSyncResponse {
@@ -588,6 +606,8 @@ struct CoachAPIHTTPClient: CoachAPIClient {
             path: "v1/coach/snapshot",
             method: "PUT",
             body: request,
+            session: standardSession,
+            timeoutInterval: Self.standardRequestTimeoutInterval,
             responseType: CoachSnapshotSyncResponse.self
         )
     }
@@ -608,6 +628,8 @@ struct CoachAPIHTTPClient: CoachAPIClient {
                 snapshotUpdatedAt: snapshotEnvelope.snapshotUpdatedAt,
                 capabilityScope: capabilityScope
             ),
+            session: standardSession,
+            timeoutInterval: Self.standardRequestTimeoutInterval,
             responseType: CoachProfileInsights.self
         )
     }
@@ -632,6 +654,8 @@ struct CoachAPIHTTPClient: CoachAPIClient {
                 clientRecentTurns: clientRecentTurns,
                 capabilityScope: capabilityScope
             ),
+            session: chatSession,
+            timeoutInterval: Self.chatRequestTimeoutInterval,
             responseType: CoachChatResponse.self
         )
     }
@@ -645,6 +669,8 @@ struct CoachAPIHTTPClient: CoachAPIClient {
             path: "v1/coach/state",
             method: "DELETE",
             body: DeleteRequest(installID: installID),
+            session: standardSession,
+            timeoutInterval: Self.standardRequestTimeoutInterval,
             responseType: EmptyCoachResponse.self
         )
     }
@@ -653,6 +679,8 @@ struct CoachAPIHTTPClient: CoachAPIClient {
         path: String,
         method: String,
         body: RequestBody,
+        session: URLSession,
+        timeoutInterval: TimeInterval,
         responseType: ResponseBody.Type
     ) async throws -> ResponseBody {
         guard configuration.isFeatureEnabled else {
@@ -667,7 +695,7 @@ struct CoachAPIHTTPClient: CoachAPIClient {
 
         var request = URLRequest(url: baseURL.appending(path: path))
         request.httpMethod = method
-        request.timeoutInterval = Self.requestTimeoutInterval
+        request.timeoutInterval = timeoutInterval
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("Bearer \(internalBearerToken)", forHTTPHeaderField: "Authorization")
@@ -702,7 +730,10 @@ struct CoachAPIHTTPClient: CoachAPIClient {
         return decoder
     }
 
-    private static func makeSession() -> URLSession {
+    private static func makeSession(
+        requestTimeoutInterval: TimeInterval,
+        resourceTimeoutInterval: TimeInterval
+    ) -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = requestTimeoutInterval
         configuration.timeoutIntervalForResource = resourceTimeoutInterval
@@ -724,7 +755,10 @@ struct CoachContextBuilder {
         let consistencySummary = store.profileConsistencySummary()
         let recentPersonalRecords = store.recentPersonalRecords()
         let relativeStrengthSummary = store.profileStrengthToBodyweightSummary()
-        let preferredProgram = CoachPreferredProgramResolver.resolve(from: store)
+        let preferredProgram = CoachPreferredProgramResolver.resolve(
+            from: store,
+            preferredProgramID: store.coachAnalysisSettings.selectedProgramID
+        )
         let recentSessions = store.history
             .filter(\.isFinished)
             .prefix(Self.recentFinishedSessionsLimit)
@@ -733,6 +767,7 @@ struct CoachContextBuilder {
             localeIdentifier: store.selectedLanguageCode,
             historyMode: "summary_recent_history",
             profile: store.profile,
+            coachAnalysisSettings: store.coachAnalysisSettings,
             preferredProgram: preferredProgram.map { program in
                 CoachProgramContext(
                     id: program.id,
@@ -896,7 +931,10 @@ struct CoachFallbackInsightsFactory {
         let goalSummary = store.profileGoalSummary()
         let trainingSummary = store.profileTrainingRecommendationSummary()
         let compatibilitySummary = store.profileGoalCompatibilitySummary()
-        let preferredProgram = CoachPreferredProgramResolver.resolve(from: store)
+        let preferredProgram = CoachPreferredProgramResolver.resolve(
+            from: store,
+            preferredProgramID: store.coachAnalysisSettings.selectedProgramID
+        )
 
         var recommendations: [String] = [
             fallbackFrequencyText(trainingSummary),
@@ -1090,7 +1128,15 @@ struct CoachFallbackInsightsFactory {
 
 private struct CoachPreferredProgramResolver {
     @MainActor
-    static func resolve(from store: AppStore) -> WorkoutProgram? {
+    static func resolve(
+        from store: AppStore,
+        preferredProgramID: UUID? = nil
+    ) -> WorkoutProgram? {
+        if let preferredProgramID,
+           let preferredProgram = store.program(for: preferredProgramID) {
+            return preferredProgram
+        }
+
         if let workoutTemplateID = store.activeSession?.workoutTemplateID,
            let program = program(containing: workoutTemplateID, in: store.programs) {
             return program
@@ -1124,10 +1170,11 @@ final class CoachStore {
     var messages: [CoachChatMessage] = []
     var isLoadingProfileInsights = false
     var isSendingMessage = false
-    var isApplyingSuggestedChange = false
+    var isSavingAnalysisSettings = false
     var lastInsightsErrorDescription: String?
     var lastChatErrorDescription: String?
-    var pendingSuggestedChange: CoachSuggestedChange?
+    var selectedProgramIDDraft: UUID?
+    var programCommentDraft: String = ""
 
     @ObservationIgnored private var client: any CoachAPIClient
     @ObservationIgnored private let contextBuilder: CoachContextBuilder
@@ -1153,12 +1200,6 @@ final class CoachStore {
         configuration.canUseRemoteCoach
     }
 
-    var aggregatedSuggestedChanges: [CoachSuggestedChange] {
-        let chatChanges = messages.reversed().flatMap(\.suggestedChanges)
-        let insightChanges = profileInsights?.suggestedChanges ?? []
-        return (chatChanges + insightChanges).deduplicatedCoachChanges()
-    }
-
     func updateConfiguration(_ configuration: CoachRuntimeConfiguration) {
         self.configuration = configuration
         client = CoachAPIHTTPClient(configuration: configuration)
@@ -1167,6 +1208,17 @@ final class CoachStore {
         profileInsightsOrigin = .fallback
         lastInsightsErrorDescription = nil
         resetConversation()
+    }
+
+    func syncAnalysisSettingsDrafts(using appStore: AppStore) {
+        let savedSettings = appStore.coachAnalysisSettings
+        let resolvedProgram = CoachPreferredProgramResolver.resolve(
+            from: appStore,
+            preferredProgramID: savedSettings.selectedProgramID
+        )
+
+        selectedProgramIDDraft = savedSettings.selectedProgramID ?? resolvedProgram?.id
+        programCommentDraft = savedSettings.programComment
     }
 
     func syncSnapshotIfNeeded(using appStore: AppStore) async {
@@ -1232,6 +1284,28 @@ final class CoachStore {
         }
     }
 
+    func saveAnalysisSettings(using appStore: AppStore) async {
+        isSavingAnalysisSettings = true
+        defer { isSavingAnalysisSettings = false }
+
+        let normalizedComment = String(
+            programCommentDraft
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .prefix(500)
+        )
+        let selectedProgramID = selectedProgramIDDraft.flatMap { programID in
+            appStore.program(for: programID) != nil ? programID : nil
+        }
+
+        appStore.updateCoachAnalysisSettings { settings in
+            settings.selectedProgramID = selectedProgramID
+            settings.programComment = normalizedComment
+        }
+        syncAnalysisSettingsDrafts(using: appStore)
+        await syncSnapshotIfNeeded(using: appStore)
+        await refreshProfileInsights(using: appStore)
+    }
+
     func sendMessage(_ question: String, using appStore: AppStore) async {
         let trimmedQuestion = question.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedQuestion.isEmpty, !isSendingMessage else {
@@ -1239,11 +1313,21 @@ final class CoachStore {
         }
 
         let priorConversation = recentConversationMessages()
+        let placeholderID = UUID().uuidString
 
         messages.append(
             CoachChatMessage(
                 role: .user,
                 content: trimmedQuestion
+            )
+        )
+        messages.append(
+            CoachChatMessage(
+                id: placeholderID,
+                role: .assistant,
+                content: coachLocalizedString("coach.loading.response"),
+                isLoading: true,
+                isStatus: true
             )
         )
         isSendingMessage = true
@@ -1252,7 +1336,15 @@ final class CoachStore {
 
         guard configuration.canUseRemoteCoach else {
             let message = coachLocalizedString("coach.error.chat_unavailable")
-            messages.append(CoachChatMessage(role: .assistant, content: message))
+            replaceMessage(
+                id: placeholderID,
+                with: CoachChatMessage(
+                    id: placeholderID,
+                    role: .assistant,
+                    content: message,
+                    isStatus: true
+                )
+            )
             lastChatErrorDescription = message
             return
         }
@@ -1266,8 +1358,11 @@ final class CoachStore {
                 snapshotEnvelope: snapshotPackage.envelope,
                 capabilityScope: capabilityScope
             )
-            messages.append(
+            replaceMessage(
+                id: placeholderID,
+                with:
                 CoachChatMessage(
+                    id: placeholderID,
                     role: .assistant,
                     content: response.answerMarkdown,
                     followUps: response.followUps,
@@ -1278,43 +1373,30 @@ final class CoachStore {
         } catch {
             let description = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             lastChatErrorDescription = description
-            messages.append(CoachChatMessage(role: .assistant, content: description))
+            replaceMessage(
+                id: placeholderID,
+                with: CoachChatMessage(
+                    id: placeholderID,
+                    role: .assistant,
+                    content: description,
+                    isStatus: true
+                )
+            )
         }
-    }
-
-    func requestSuggestedChangeReview(_ change: CoachSuggestedChange) {
-        pendingSuggestedChange = change
-    }
-
-    func cancelSuggestedChangeReview() {
-        pendingSuggestedChange = nil
-    }
-
-    func confirmPendingSuggestedChange(using appStore: AppStore) async -> Bool {
-        guard let pendingSuggestedChange else {
-            return false
-        }
-
-        isApplyingSuggestedChange = true
-        defer { isApplyingSuggestedChange = false }
-
-        let applied = appStore.applyCoachSuggestedChange(pendingSuggestedChange)
-        if applied {
-            self.pendingSuggestedChange = nil
-            await refreshProfileInsights(using: appStore)
-        }
-        return applied
     }
 
     func resetConversation() {
         messages = []
         lastChatErrorDescription = nil
-        pendingSuggestedChange = nil
         isSendingMessage = false
     }
 
     private func recentConversationMessages(limit: Int = 6) -> [CoachConversationMessage] {
-        Array(messages.suffix(limit)).map { message in
+        Array(
+            messages
+                .filter { !$0.isLoading && !$0.isStatus }
+                .suffix(limit)
+        ).map { message in
             CoachConversationMessage(
                 role: message.role,
                 content: message.content
@@ -1348,6 +1430,14 @@ final class CoachStore {
 
         localStateStore.markSnapshotAccepted(hash: package.envelope.snapshotHash)
     }
+
+    private func replaceMessage(id: String, with message: CoachChatMessage) {
+        if let index = messages.firstIndex(where: { $0.id == id }) {
+            messages[index] = message
+        } else {
+            messages.append(message)
+        }
+    }
 }
 
 private struct CoachSnapshotPackage {
@@ -1361,6 +1451,7 @@ struct CoachView: View {
     @Environment(CoachStore.self) private var coachStore
     @Environment(\.appBottomRailInset) private var bottomRailInset
     @State private var draftQuestion = ""
+    @State private var refreshButtonScale: CGFloat = 1
 
     private var quickPrompts: [String] {
         [
@@ -1371,6 +1462,10 @@ struct CoachView: View {
         ]
     }
 
+    private var availablePrograms: [WorkoutProgram] {
+        store.programs
+    }
+
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 20) {
@@ -1379,6 +1474,7 @@ struct CoachView: View {
                     subtitleKey: "header.coach.subtitle"
                 ) {
                     Button {
+                        animateRefreshTap()
                         Task {
                             await coachStore.refreshProfileInsights(using: store)
                         }
@@ -1392,6 +1488,14 @@ struct CoachView: View {
                                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                                     .stroke(AppTheme.border, lineWidth: 1)
                             )
+                            .scaleEffect(refreshButtonScale)
+                            .rotationEffect(.degrees(coachStore.isLoadingProfileInsights ? 360 : 0))
+                            .animation(
+                                coachStore.isLoadingProfileInsights
+                                ? .linear(duration: 0.9).repeatForever(autoreverses: false)
+                                : .easeOut(duration: 0.2),
+                                value: coachStore.isLoadingProfileInsights
+                            )
                     }
                     .buttonStyle(.plain)
                     .disabled(coachStore.isLoadingProfileInsights || coachStore.isSendingMessage)
@@ -1401,6 +1505,23 @@ struct CoachView: View {
                     isRemoteAvailable: coachStore.canUseRemoteCoach,
                     lastErrorDescription: coachStore.lastInsightsErrorDescription
                 )
+
+                CoachContextPreferencesCard(
+                    selectedProgramID: Binding(
+                        get: { coachStore.selectedProgramIDDraft },
+                        set: { coachStore.selectedProgramIDDraft = $0 }
+                    ),
+                    programComment: Binding(
+                        get: { coachStore.programCommentDraft },
+                        set: { coachStore.programCommentDraft = String($0.prefix(500)) }
+                    ),
+                    programs: availablePrograms,
+                    isSaving: coachStore.isSavingAnalysisSettings
+                ) {
+                    Task {
+                        await coachStore.saveAnalysisSettings(using: store)
+                    }
+                }
 
                 if let profileInsights = coachStore.profileInsights {
                     CoachInsightsOverviewCard(
@@ -1423,59 +1544,13 @@ struct CoachView: View {
 
                 AppCard {
                     VStack(alignment: .leading, spacing: 16) {
-                        AppSectionTitle(titleKey: "coach.quick_prompt.title")
-
-                        FlowLayout(spacing: 10) {
-                            ForEach(quickPrompts, id: \.self) { prompt in
-                                Button(prompt) {
-                                    sendQuestion(prompt)
-                                }
-                                .buttonStyle(CoachPromptButtonStyle())
-                                .disabled(!coachStore.canUseRemoteCoach || coachStore.isSendingMessage)
-                                .opacity(coachStore.canUseRemoteCoach ? 1 : 0.55)
-                            }
-                        }
-                    }
-                }
-
-                if !coachStore.messages.isEmpty {
-                    AppCard {
-                        VStack(alignment: .leading, spacing: 16) {
-                            AppSectionTitle(titleKey: "coach.chat.title")
-
-                            ForEach(coachStore.messages) { message in
-                                CoachChatMessageCard(message: message) { followUp in
-                                    sendQuestion(followUp)
-                                } onReviewChange: { change in
-                                    coachStore.requestSuggestedChangeReview(change)
-                                }
-                            }
-                        }
-                    }
-                }
-
-                if !coachStore.aggregatedSuggestedChanges.isEmpty {
-                    AppCard {
-                        VStack(alignment: .leading, spacing: 16) {
-                            AppSectionTitle(titleKey: "coach.suggested_changes.title")
-                            CoachSuggestedChangesList(
-                                changes: coachStore.aggregatedSuggestedChanges,
-                                applyButtonTitle: coachLocalizedString("coach.action.review_apply")
-                            ) { change in
-                                coachStore.requestSuggestedChangeReview(change)
-                            }
-                        }
-                    }
-                }
-
-                AppCard {
-                    VStack(alignment: .leading, spacing: 16) {
                         AppSectionTitle(titleKey: "coach.ask.title")
 
                         TextField("coach.ask.placeholder", text: $draftQuestion, axis: .vertical)
                             .textFieldStyle(.plain)
                             .font(AppTypography.body(size: 16))
                             .foregroundStyle(AppTheme.primaryText)
+                            .disabled(coachStore.isSendingMessage)
                             .padding(16)
                             .background(
                                 RoundedRectangle(cornerRadius: 20, style: .continuous)
@@ -1486,16 +1561,44 @@ struct CoachView: View {
                                     .stroke(AppTheme.border, lineWidth: 1)
                             )
 
-                        Button("coach.action.send") {
+                        Button {
                             sendQuestion(draftQuestion)
+                        } label: {
+                            HStack(spacing: 10) {
+                                if coachStore.isSendingMessage {
+                                    ProgressView()
+                                        .tint(.white)
+                                }
+
+                                if coachStore.isSendingMessage {
+                                    Text("coach.loading.response_short")
+                                } else {
+                                    Text("coach.action.send")
+                                }
+                            }
                         }
                         .buttonStyle(AppPrimaryButtonStyle())
                         .disabled(draftQuestion.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || coachStore.isSendingMessage || !coachStore.canUseRemoteCoach)
                         .opacity(
                             draftQuestion.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !coachStore.canUseRemoteCoach
                             ? 0.55
-                            : 1
+                                : 1
                         )
+
+                        FlowLayout(spacing: 10) {
+                            ForEach(quickPrompts, id: \.self) { prompt in
+                                Button(prompt) {
+                                    sendQuestion(prompt)
+                                }
+                                .buttonStyle(CoachPromptButtonStyle())
+                                .disabled(!coachStore.canUseRemoteCoach || coachStore.isSendingMessage)
+                                .opacity(
+                                    coachStore.canUseRemoteCoach && !coachStore.isSendingMessage
+                                    ? 1
+                                    : 0.55
+                                )
+                            }
+                        }
 
                         if let chatError = coachStore.lastChatErrorDescription, !chatError.isEmpty {
                             Text(chatError)
@@ -1505,38 +1608,22 @@ struct CoachView: View {
                         }
                     }
                 }
+
+                CoachConversationCard(messages: coachStore.messages) { followUp in
+                    sendQuestion(followUp)
+                }
             }
             .padding(.horizontal, 20)
             .padding(.top, 0)
             .padding(.bottom, 24 + bottomRailInset)
         }
         .task(id: store.selectedTab) {
-            if store.selectedTab == .coach, coachStore.profileInsights == nil {
-                await coachStore.refreshProfileInsights(using: store)
-            }
-        }
-        .alert(
-            Text("coach.apply.alert.title"),
-            isPresented: Binding(
-                get: { coachStore.pendingSuggestedChange != nil },
-                set: { newValue in
-                    if !newValue {
-                        coachStore.cancelSuggestedChangeReview()
-                    }
-                }
-            ),
-            presenting: coachStore.pendingSuggestedChange
-        ) { _ in
-            Button("coach.action.apply") {
-                Task {
-                    _ = await coachStore.confirmPendingSuggestedChange(using: store)
+            if store.selectedTab == .coach {
+                coachStore.syncAnalysisSettingsDrafts(using: store)
+                if coachStore.profileInsights == nil {
+                    await coachStore.refreshProfileInsights(using: store)
                 }
             }
-            Button("action.cancel", role: .cancel) {
-                coachStore.cancelSuggestedChangeReview()
-            }
-        } message: { change in
-            Text(change.summary)
         }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .navigationBar)
@@ -1552,6 +1639,16 @@ struct CoachView: View {
         draftQuestion = ""
         Task {
             await coachStore.sendMessage(trimmedQuestion, using: store)
+        }
+    }
+
+    private func animateRefreshTap() {
+        withAnimation(.easeOut(duration: 0.12)) {
+            refreshButtonScale = 0.88
+        }
+
+        withAnimation(.spring(response: 0.28, dampingFraction: 0.58).delay(0.12)) {
+            refreshButtonScale = 1
         }
     }
 }
@@ -1651,10 +1748,157 @@ private struct CoachInsightsOverviewCard: View {
     }
 }
 
+private struct CoachContextPreferencesCard: View {
+    @Binding var selectedProgramID: UUID?
+    @Binding var programComment: String
+
+    let programs: [WorkoutProgram]
+    let isSaving: Bool
+    let onSave: () -> Void
+
+    var body: some View {
+        AppCard {
+            VStack(alignment: .leading, spacing: 16) {
+                AppSectionTitle(titleKey: "coach.context.title")
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("coach.context.program")
+                        .font(AppTypography.caption(size: 13, weight: .semibold))
+                        .foregroundStyle(AppTheme.secondaryText)
+
+                    Picker(
+                        coachLocalizedString("coach.context.program"),
+                        selection: $selectedProgramID
+                    ) {
+                        if programs.isEmpty {
+                            Text("coach.context.program.none")
+                                .tag(Optional<UUID>.none)
+                        } else {
+                            ForEach(programs) { program in
+                                Text(program.title)
+                                    .tag(Optional(program.id))
+                            }
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .disabled(programs.isEmpty)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 14)
+                    .background(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .fill(AppTheme.surface)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .stroke(AppTheme.border, lineWidth: 1)
+                    )
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("coach.context.comment")
+                        .font(AppTypography.caption(size: 13, weight: .semibold))
+                        .foregroundStyle(AppTheme.secondaryText)
+
+                    TextField("coach.context.comment.placeholder", text: $programComment, axis: .vertical)
+                        .textFieldStyle(.plain)
+                        .font(AppTypography.body(size: 16))
+                        .foregroundStyle(AppTheme.primaryText)
+                        .lineLimit(3...5)
+                        .padding(16)
+                        .background(
+                            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                                .fill(AppTheme.surface)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                                .stroke(AppTheme.border, lineWidth: 1)
+                        )
+
+                    Text("coach.context.comment.hint")
+                        .font(AppTypography.caption(size: 12, weight: .medium))
+                        .foregroundStyle(AppTheme.secondaryText)
+                }
+
+                Button {
+                    onSave()
+                } label: {
+                    HStack(spacing: 10) {
+                        if isSaving {
+                            ProgressView()
+                                .tint(.white)
+                        }
+
+                        if isSaving {
+                            Text("coach.context.saving")
+                        } else {
+                            Text("action.save")
+                        }
+                    }
+                }
+                .buttonStyle(AppPrimaryButtonStyle())
+                .disabled(isSaving)
+                .opacity(isSaving ? 0.75 : 1)
+            }
+        }
+    }
+}
+
+private struct CoachConversationCard: View {
+    let messages: [CoachChatMessage]
+    let onFollowUpTap: (String) -> Void
+
+    private let cardHeight: CGFloat = 340
+
+    var body: some View {
+        AppCard {
+            VStack(alignment: .leading, spacing: 16) {
+                AppSectionTitle(titleKey: "coach.chat.title")
+
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 14) {
+                            if messages.isEmpty {
+                                Text("coach.chat.empty")
+                                    .font(AppTypography.body(size: 15, weight: .medium, relativeTo: .subheadline))
+                                    .foregroundStyle(AppTheme.secondaryText)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            } else {
+                                ForEach(messages) { message in
+                                    CoachChatMessageCard(message: message) { followUp in
+                                        onFollowUpTap(followUp)
+                                    }
+                                    .id(message.id)
+                                }
+                            }
+                        }
+                    }
+                    .frame(height: cardHeight)
+                    .onChange(of: messages.last?.id) { _, lastMessageID in
+                        guard let lastMessageID else {
+                            return
+                        }
+
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            proxy.scrollTo(lastMessageID, anchor: .bottom)
+                        }
+                    }
+                    .task(id: messages.last?.id) {
+                        guard let lastMessageID = messages.last?.id else {
+                            return
+                        }
+
+                        proxy.scrollTo(lastMessageID, anchor: .bottom)
+                    }
+                }
+            }
+        }
+    }
+}
+
 private struct CoachChatMessageCard: View {
     let message: CoachChatMessage
     let onFollowUpTap: (String) -> Void
-    let onReviewChange: (CoachSuggestedChange) -> Void
 
     private var isAssistant: Bool {
         message.role == .assistant
@@ -1667,7 +1911,7 @@ private struct CoachChatMessageCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 10) {
-                Image(systemName: isAssistant ? "sparkles" : "person.fill")
+                Image(systemName: leadingSystemImage)
                     .font(AppTypography.icon(size: 14, weight: .semibold))
                     .foregroundStyle(AppTheme.primaryText)
                     .frame(width: 32, height: 32)
@@ -1681,7 +1925,23 @@ private struct CoachChatMessageCard: View {
                     .foregroundStyle(AppTheme.primaryText)
             }
 
-            CoachMarkdownText(content: message.content, isAssistant: isAssistant)
+            if message.isLoading {
+                HStack(spacing: 10) {
+                    ProgressView()
+                        .tint(AppTheme.accent)
+
+                    Text(message.content)
+                        .font(AppTypography.body(size: 15, weight: .medium, relativeTo: .subheadline))
+                        .foregroundStyle(AppTheme.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            } else {
+                CoachMarkdownText(
+                    content: message.content,
+                    isAssistant: isAssistant,
+                    isStatus: message.isStatus
+                )
+            }
 
             if !message.followUps.isEmpty {
                 FlowLayout(spacing: 8) {
@@ -1693,72 +1953,44 @@ private struct CoachChatMessageCard: View {
                     }
                 }
             }
-
-            if !message.suggestedChanges.isEmpty {
-                CoachSuggestedChangesList(
-                    changes: message.suggestedChanges,
-                    applyButtonTitle: coachLocalizedString("coach.action.review_apply")
-                ) { change in
-                    onReviewChange(change)
-                }
-            }
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .fill(isAssistant ? AppTheme.surfaceElevated : AppTheme.surface)
+                .fill(backgroundColor)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 22, style: .continuous)
                 .stroke(AppTheme.border, lineWidth: 1)
         )
     }
-}
 
-struct CoachSuggestedChangesList: View {
-    let changes: [CoachSuggestedChange]
-    let applyButtonTitle: String
-    let onReviewChange: (CoachSuggestedChange) -> Void
-
-    var body: some View {
-        VStack(spacing: 12) {
-            ForEach(changes) { change in
-                VStack(alignment: .leading, spacing: 10) {
-                    Text(change.title)
-                        .font(AppTypography.body(size: 16, weight: .semibold))
-                        .foregroundStyle(AppTheme.primaryText)
-
-                    Text(change.summary)
-                        .font(AppTypography.body(size: 15, weight: .medium, relativeTo: .subheadline))
-                        .foregroundStyle(AppTheme.secondaryText)
-                        .fixedSize(horizontal: false, vertical: true)
-
-                    Button(applyButtonTitle) {
-                        onReviewChange(change)
-                    }
-                    .buttonStyle(AppSecondaryButtonStyle())
-                    .disabled(!change.isApplicable)
-                    .opacity(change.isApplicable ? 1 : 0.55)
-                }
-                .padding(16)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(
-                    RoundedRectangle(cornerRadius: 20, style: .continuous)
-                        .fill(AppTheme.surface)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 20, style: .continuous)
-                        .stroke(AppTheme.border, lineWidth: 1)
-                )
-            }
+    private var leadingSystemImage: String {
+        if message.isLoading {
+            return "hourglass"
         }
+
+        if message.isStatus {
+            return "exclamationmark.bubble"
+        }
+
+        return isAssistant ? "sparkles" : "person.fill"
+    }
+
+    private var backgroundColor: Color {
+        if message.isStatus {
+            return AppTheme.surface
+        }
+
+        return isAssistant ? AppTheme.surfaceElevated : AppTheme.surface
     }
 }
 
 private struct CoachMarkdownText: View {
     let content: String
     let isAssistant: Bool
+    let isStatus: Bool
 
     var body: some View {
         if let attributedString = try? AttributedString(
@@ -1767,14 +1999,22 @@ private struct CoachMarkdownText: View {
         ) {
             Text(attributedString)
                 .font(AppTypography.body(size: 15, weight: .medium, relativeTo: .subheadline))
-                .foregroundStyle(isAssistant ? AppTheme.primaryText : AppTheme.secondaryText)
+                .foregroundStyle(foregroundColor)
                 .fixedSize(horizontal: false, vertical: true)
         } else {
             Text(content)
                 .font(AppTypography.body(size: 15, weight: .medium, relativeTo: .subheadline))
-                .foregroundStyle(isAssistant ? AppTheme.primaryText : AppTheme.secondaryText)
+                .foregroundStyle(foregroundColor)
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+
+    private var foregroundColor: Color {
+        if isStatus {
+            return AppTheme.secondaryText
+        }
+
+        return isAssistant ? AppTheme.primaryText : AppTheme.secondaryText
     }
 }
 

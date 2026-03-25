@@ -83,17 +83,6 @@ struct ProfileView: View {
                     }
                 )
 
-                ProfileCoachDraftsCard(
-                    changes: coachStore.profileInsights?.suggestedChanges ?? [],
-                    isLoading: coachStore.isLoadingProfileInsights && coachStore.profileInsights == nil,
-                    onOpenCoach: {
-                        store.selectedTab = .coach
-                    },
-                    onReviewChange: { change in
-                        coachStore.requestSuggestedChangeReview(change)
-                    }
-                )
-
                 Button {
                     store.selectedTab = .statistics
                 } label: {
@@ -141,29 +130,6 @@ struct ProfileView: View {
             Task {
                 await coachStore.refreshProfileInsights(using: store)
             }
-        }
-        .alert(
-            Text("coach.apply.alert.title"),
-            isPresented: Binding(
-                get: { coachStore.pendingSuggestedChange != nil },
-                set: { newValue in
-                    if !newValue {
-                        coachStore.cancelSuggestedChangeReview()
-                    }
-                }
-            ),
-            presenting: coachStore.pendingSuggestedChange
-        ) { _ in
-            Button("coach.action.apply") {
-                Task {
-                    _ = await coachStore.confirmPendingSuggestedChange(using: store)
-                }
-            }
-            Button("action.cancel", role: .cancel) {
-                coachStore.cancelSuggestedChangeReview()
-            }
-        } message: { change in
-            Text(change.summary)
         }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .navigationBar)
@@ -977,53 +943,6 @@ private struct ProfileCoachInsightsCard: View {
                                     .fixedSize(horizontal: false, vertical: true)
                             }
                         }
-                    }
-                }
-
-                Button("profile.card.ai.open_coach") {
-                    onOpenCoach()
-                }
-                .buttonStyle(AppSecondaryButtonStyle())
-            }
-        }
-    }
-}
-
-private struct ProfileCoachDraftsCard: View {
-    let changes: [CoachSuggestedChange]
-    let isLoading: Bool
-    let onOpenCoach: () -> Void
-    let onReviewChange: (CoachSuggestedChange) -> Void
-
-    var body: some View {
-        ProfileAccentCard(accent: .orange) {
-            VStack(alignment: .leading, spacing: 18) {
-                ProfileCardHeader(
-                    eyebrowKey: "profile.card.ai.drafts_eyebrow",
-                    titleKey: "profile.card.ai.drafts_title",
-                    systemImage: "wand.and.stars",
-                    showsChevron: false
-                )
-
-                if isLoading {
-                    HStack(spacing: 12) {
-                        ProgressView()
-                            .tint(AppTheme.primaryText)
-                        Text("profile.card.ai.loading")
-                            .font(AppTypography.body(size: 16, weight: .medium))
-                            .foregroundStyle(DashboardCardAccent.orange.secondaryText)
-                    }
-                } else if changes.isEmpty {
-                    Text("profile.card.ai.no_drafts")
-                        .font(AppTypography.body(size: 16, weight: .medium, relativeTo: .subheadline))
-                        .foregroundStyle(DashboardCardAccent.orange.secondaryText)
-                        .fixedSize(horizontal: false, vertical: true)
-                } else {
-                    CoachSuggestedChangesList(
-                        changes: Array(changes.prefix(3)),
-                        applyButtonTitle: localizedString("coach.action.review_apply")
-                    ) { change in
-                        onReviewChange(change)
                     }
                 }
 

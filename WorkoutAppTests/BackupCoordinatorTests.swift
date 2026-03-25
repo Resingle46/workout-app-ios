@@ -1167,6 +1167,10 @@ final class BackupCoordinatorTests: XCTestCase {
                 experienceLevel: .intermediate,
                 weeklyWorkoutTarget: 4,
                 targetBodyWeight: nil
+            ),
+            coachAnalysisSettings: CoachAnalysisSettings(
+                selectedProgramID: program.id,
+                programComment: "I rotate this split over three training days."
             )
         )
         snapshot.history.sort { $0.startedAt > $1.startedAt }
@@ -1179,6 +1183,8 @@ final class BackupCoordinatorTests: XCTestCase {
         XCTAssertEqual(payload.recentFinishedSessions.count, 8)
         XCTAssertEqual(payload.recentFinishedSessions.first?.title, "Session 10")
         XCTAssertEqual(payload.preferredProgram?.title, "Strength")
+        XCTAssertEqual(payload.coachAnalysisSettings.selectedProgramID, program.id)
+        XCTAssertEqual(payload.coachAnalysisSettings.programComment, "I rotate this split over three training days.")
         XCTAssertEqual(payload.preferredProgram?.workouts.first?.exercises.first?.exerciseName, exercise.localizedName)
     }
 
@@ -1466,6 +1472,76 @@ final class BackupCoordinatorTests: XCTestCase {
         )
 
         XCTAssertEqual(firstHash, secondHash)
+    }
+
+    @MainActor
+    func testCoachSnapshotHashChangesWhenAnalysisSettingsChange() throws {
+        let baseSnapshot = makeSnapshot()
+
+        let firstStore = AppStore()
+        firstStore.apply(snapshot: baseSnapshot)
+        let firstHash = try CoachSnapshotHashing.hash(for: CoachContextBuilder().build(from: firstStore))
+
+        var modifiedSnapshot = baseSnapshot
+        modifiedSnapshot.coachAnalysisSettings = CoachAnalysisSettings(
+            selectedProgramID: baseSnapshot.programs.first?.id,
+            programComment: "I run this four-day split across three gym visits."
+        )
+
+        let secondStore = AppStore()
+        secondStore.apply(snapshot: modifiedSnapshot)
+        let secondHash = try CoachSnapshotHashing.hash(for: CoachContextBuilder().build(from: secondStore))
+
+        XCTAssertNotEqual(firstHash, secondHash)
+    }
+
+    @MainActor
+    func testAppStoreClearsInvalidSelectedCoachProgramDuringSnapshotApply() {
+        let baseSnapshot = makeSnapshot()
+        let removedProgramID = baseSnapshot.programs[0].id
+        let invalidSnapshot = AppSnapshot(
+            programs: [],
+            exercises: baseSnapshot.exercises,
+            history: baseSnapshot.history,
+            profile: baseSnapshot.profile,
+            coachAnalysisSettings: CoachAnalysisSettings(
+                selectedProgramID: removedProgramID,
+                programComment: "  I rotate this split across three training days.  "
+            )
+        )
+
+        let store = AppStore()
+        store.apply(snapshot: invalidSnapshot)
+
+        XCTAssertNil(store.coachAnalysisSettings.selectedProgramID)
+        XCTAssertEqual(
+            store.coachAnalysisSettings.programComment,
+            "I rotate this split across three training days."
+        )
+    }
+
+    func testAppSnapshotDecodesWithoutCoachAnalysisSettings() throws {
+        let json = """
+        {
+          "programs": [],
+          "exercises": [],
+          "history": [],
+          "profile": {
+            "sex": "M",
+            "age": 29,
+            "weight": 88,
+            "height": 182,
+            "appLanguageCode": "en",
+            "primaryGoal": "notSet",
+            "experienceLevel": "notSet",
+            "weeklyWorkoutTarget": 3
+          }
+        }
+        """
+
+        let decoded = try JSONDecoder().decode(AppSnapshot.self, from: XCTUnwrap(json.data(using: .utf8)))
+
+        XCTAssertEqual(decoded.coachAnalysisSettings, .empty)
     }
 
     @MainActor

@@ -55,6 +55,13 @@ const programContextSchema = z
   })
   .strict();
 
+const coachAnalysisSettingsSchema = z
+  .object({
+    selectedProgramID: uuidSchema.optional(),
+    programComment: z.string().max(500),
+  })
+  .strict();
+
 const activeWorkoutContextSchema = z
   .object({
     workoutTemplateID: uuidSchema,
@@ -203,6 +210,7 @@ export const coachContextPayloadSchema = z
     localeIdentifier: nonEmptyStringSchema,
     historyMode: nonEmptyStringSchema,
     profile: userProfileSchema,
+    coachAnalysisSettings: coachAnalysisSettingsSchema,
     preferredProgram: programContextSchema.optional(),
     activeWorkout: activeWorkoutContextSchema.optional(),
     analytics: analyticsContextSchema,

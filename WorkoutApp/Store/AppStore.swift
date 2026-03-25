@@ -14,6 +14,7 @@ final class AppStore {
     var history: [WorkoutSession]
     var lastFinishedSession: WorkoutSession?
     var profile: UserProfile
+    var coachAnalysisSettings: CoachAnalysisSettings
     var selectedTab: RootTab = .programs
     var backupStatus: BackupStatus
     var shouldPromptForBackupSetup = false
@@ -57,6 +58,10 @@ final class AppStore {
         self.history = snapshot.history.sorted { $0.startedAt > $1.startedAt }
         self.lastFinishedSession = snapshot.history.sorted { $0.startedAt > $1.startedAt }.first(where: { $0.isFinished })
         self.profile = AppStore.normalizedProfile(snapshot.profile)
+        self.coachAnalysisSettings = Self.normalizedCoachAnalysisSettings(
+            snapshot.coachAnalysisSettings,
+            availablePrograms: snapshot.programs
+        )
         self.defaults = .standard
         self.backupCoordinator = BackupCoordinator()
         self.backupStatus = BackupStatus()
@@ -76,7 +81,11 @@ final class AppStore {
             programs: programs,
             exercises: exercises,
             history: history,
-            profile: Self.normalizedProfile(profile)
+            profile: Self.normalizedProfile(profile),
+            coachAnalysisSettings: Self.normalizedCoachAnalysisSettings(
+                coachAnalysisSettings,
+                availablePrograms: programs
+            )
         )
     }
 
@@ -88,6 +97,7 @@ final class AppStore {
         lastFinishedSession = history.first(where: { $0.isFinished })
         activeSession = nil
         profile = normalizedSnapshot.profile
+        coachAnalysisSettings = normalizedSnapshot.coachAnalysisSettings
         Bundle.overrideLocalization(languageCode: selectedLanguageCode)
         localSnapshotModifiedAt = persistence.save(snapshot: normalizedSnapshot)
         hasPersistedSnapshot = true
@@ -198,6 +208,15 @@ final class AppStore {
 
     func updateProfile(_ updater: (inout UserProfile) -> Void) {
         updater(&profile)
+        save()
+    }
+
+    func updateCoachAnalysisSettings(_ updater: (inout CoachAnalysisSettings) -> Void) {
+        updater(&coachAnalysisSettings)
+        coachAnalysisSettings = Self.normalizedCoachAnalysisSettings(
+            coachAnalysisSettings,
+            availablePrograms: programs
+        )
         save()
     }
 
@@ -1344,7 +1363,11 @@ final class AppStore {
             programs: normalizedPrograms,
             exercises: normalizedExercises(snapshot.exercises, referencedExerciseIDs: referencedExerciseIDs),
             history: normalizedHistory,
-            profile: Self.normalizedProfile(snapshot.profile)
+            profile: Self.normalizedProfile(snapshot.profile),
+            coachAnalysisSettings: normalizedCoachAnalysisSettings(
+                snapshot.coachAnalysisSettings,
+                availablePrograms: normalizedPrograms
+            )
         )
     }
 
@@ -1380,6 +1403,23 @@ final class AppStore {
             experienceLevel: profile.experienceLevel,
             weeklyWorkoutTarget: normalizedWeeklyWorkoutTarget,
             targetBodyWeight: normalizedTargetBodyWeight
+        )
+    }
+
+    private static func normalizedCoachAnalysisSettings(
+        _ settings: CoachAnalysisSettings,
+        availablePrograms: [WorkoutProgram]
+    ) -> CoachAnalysisSettings {
+        let normalizedProgramComment = settings.programComment
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let limitedProgramComment = String(normalizedProgramComment.prefix(500))
+        let selectedProgramID = settings.selectedProgramID.flatMap { programID in
+            availablePrograms.contains(where: { $0.id == programID }) ? programID : nil
+        }
+
+        return CoachAnalysisSettings(
+            selectedProgramID: selectedProgramID,
+            programComment: limitedProgramComment
         )
     }
 
@@ -1617,11 +1657,43 @@ final class AppStore {
     }
 }
 
+struct CoachAnalysisSettings: Codable, Equatable, Hashable, Sendable {
+    var selectedProgramID: UUID?
+    var programComment: String
+
+    static let empty = CoachAnalysisSettings(
+        selectedProgramID: nil,
+        programComment: ""
+    )
+}
+
 struct AppSnapshot: Codable, Equatable, Sendable {
     var programs: [WorkoutProgram]
     var exercises: [Exercise]
     var history: [WorkoutSession]
     var profile: UserProfile
+    var coachAnalysisSettings: CoachAnalysisSettings = .empty
+}
+
+extension AppSnapshot {
+    private enum CodingKeys: String, CodingKey {
+        case programs
+        case exercises
+        case history
+        case profile
+        case coachAnalysisSettings
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        programs = try container.decode([WorkoutProgram].self, forKey: .programs)
+        exercises = try container.decode([Exercise].self, forKey: .exercises)
+        history = try container.decode([WorkoutSession].self, forKey: .history)
+        profile = try container.decode(UserProfile.self, forKey: .profile)
+        coachAnalysisSettings =
+            try container.decodeIfPresent(CoachAnalysisSettings.self, forKey: .coachAnalysisSettings)
+            ?? .empty
+    }
 }
 
 struct StoredSnapshot: Sendable {

@@ -603,6 +603,11 @@ function makeProfileInsightsRequestFixture(): CoachProfileInsightsRequest {
       weeklyWorkoutTarget: 4,
       targetBodyWeight: 88,
     },
+    coachAnalysisSettings: {
+      selectedProgramID: "11111111-1111-4111-8111-111111111111",
+      programComment:
+        "I train 3 days per week but rotate through this 4-day split in order.",
+    },
     preferredProgram: {
       id: "11111111-1111-4111-8111-111111111111",
       title: "Upper Lower",
@@ -742,7 +747,7 @@ function makeProfileInsightsRequestFixture(): CoachProfileInsightsRequest {
   return {
     locale: "en",
     installID: "install_001",
-    snapshotHash: "60b48036c3b446bf1cc8f0683ff3a11f402da4dbbb236a8a24d42d454e7907fc",
+    snapshotHash: "a36c44a10cafe4ec5d406e8addcc7adc4a3cd72c3b11ee848b2b6cff2255b382",
     snapshot,
     snapshotUpdatedAt: "2026-03-25T19:00:00.000Z",
     capabilityScope: "draft_changes",

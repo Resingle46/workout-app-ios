@@ -33,6 +33,33 @@ function sharedRules(locale: string): string {
   ].join("\n");
 }
 
+function coachAnalysisContextLines(
+  snapshot: CoachProfileInsightsRequest["snapshot"] | CoachChatRequest["snapshot"]
+): string[] {
+  if (!snapshot) {
+    return [];
+  }
+
+  const lines = [
+    "Coach analysis settings JSON:",
+    JSON.stringify(snapshot.coachAnalysisSettings),
+  ];
+
+  if (snapshot.preferredProgram) {
+    lines.push(
+      "Selected program for analysis JSON:",
+      JSON.stringify(snapshot.preferredProgram)
+    );
+  }
+
+  const comment = snapshot.coachAnalysisSettings.programComment.trim();
+  if (comment) {
+    lines.push(`User comment about how they actually run the program: ${comment}`);
+  }
+
+  return lines;
+}
+
 export function buildProfileInsightsMessages(
   request: CoachProfileInsightsRequest
 ): PromptMessage[] {
@@ -51,6 +78,7 @@ export function buildProfileInsightsMessages(
       content: [
         `Capability scope: ${request.capabilityScope}`,
         "Return JSON that strictly matches the provided schema.",
+        ...coachAnalysisContextLines(request.snapshot),
         "Context JSON:",
         JSON.stringify(request.snapshot),
       ].join("\n\n"),
@@ -82,6 +110,7 @@ export function buildChatMessages(
         `Capability scope: ${request.capabilityScope}`,
         `Question: ${request.question}`,
         "Return JSON that strictly matches the provided schema.",
+        ...coachAnalysisContextLines(request.snapshot),
         "Current app context JSON:",
         JSON.stringify(request.snapshot),
       ].join("\n\n"),
@@ -108,6 +137,7 @@ export function buildFallbackProfileInsightsMessages(
       role: "user",
       content: [
         `Capability scope: ${request.capabilityScope}`,
+        ...coachAnalysisContextLines(request.snapshot),
         "Current app context JSON:",
         JSON.stringify(request.snapshot),
       ].join("\n\n"),
@@ -137,6 +167,7 @@ export function buildFallbackChatMessages(
       content: [
         `Capability scope: ${request.capabilityScope}`,
         `Question: ${request.question}`,
+        ...coachAnalysisContextLines(request.snapshot),
         "Current app context JSON:",
         JSON.stringify(request.snapshot),
       ].join("\n\n"),
