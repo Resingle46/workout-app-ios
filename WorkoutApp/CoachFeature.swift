@@ -16,9 +16,11 @@ struct CoachRuntimeConfiguration: Hashable, Sendable {
         let isFeatureEnabled = infoDictionary["CoachFeatureEnabled"] as? Bool ?? false
         let baseURLString = (infoDictionary["CoachBackendBaseURL"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        let backendBaseURL = baseURLString.flatMap { value in
-            guard !value.isEmpty else { return nil }
-            return URL(string: value)
+        let backendBaseURL: URL?
+        if let baseURLString, !baseURLString.isEmpty {
+            backendBaseURL = URL(string: baseURLString)
+        } else {
+            backendBaseURL = nil
         }
 
         self.init(
@@ -440,6 +442,7 @@ struct CoachAPIHTTPClient: CoachAPIClient {
 struct CoachContextBuilder {
     private static let recentFinishedSessionsLimit = 8
 
+    @MainActor
     func build(from store: AppStore) -> CoachContextPayload {
         let progressSummary = store.profileProgressSummary()
         let goalSummary = store.profileGoalSummary()
@@ -605,7 +608,7 @@ struct CoachContextBuilder {
                         }
                         let averageReps: Double? = performedSets.isEmpty
                             ? nil
-                            : performedSets.reduce(0) { $0 + $1.reps } / Double(performedSets.count)
+                            : performedSets.reduce(0.0) { $0 + Double($1.reps) } / Double(performedSets.count)
 
                         return CoachRecentSessionExerciseContext(
                             templateExerciseID: exerciseLog.templateExerciseID,
@@ -626,6 +629,7 @@ struct CoachContextBuilder {
 }
 
 struct CoachFallbackInsightsFactory {
+    @MainActor
     static func make(from store: AppStore) -> CoachProfileInsights {
         let goalSummary = store.profileGoalSummary()
         let trainingSummary = store.profileTrainingRecommendationSummary()
@@ -823,6 +827,7 @@ struct CoachFallbackInsightsFactory {
 }
 
 private struct CoachPreferredProgramResolver {
+    @MainActor
     static func resolve(from store: AppStore) -> WorkoutProgram? {
         if let workoutTemplateID = store.activeSession?.workoutTemplateID,
            let program = program(containing: workoutTemplateID, in: store.programs) {
