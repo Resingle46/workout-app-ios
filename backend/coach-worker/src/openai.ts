@@ -10,6 +10,7 @@ import {
 import {
   buildChatMessages,
   buildFallbackChatMessages,
+  buildFallbackProfileInsightsMessages,
   buildProfileInsightsMessages,
 } from "./prompts";
 
@@ -64,27 +65,59 @@ export class WorkersAICoachService implements CoachInferenceService {
     request: CoachProfileInsightsRequest
   ): Promise<InferenceResult<CoachProfileInsightsResponse>> {
     const operation = "profile_insights";
-    const rawResponse = await this.runStructured({
-      operation,
-      messages: buildProfileInsightsMessages(request),
-      schema: profileInsightsJsonSchema,
-      maxTokens: 850,
-    });
-
-    const response = parseStructuredOutput(
-      rawResponse,
-      profileInsightsModelOutputSchema,
-      "profile insights",
-      {
+    try {
+      const rawResponse = await this.runStructured({
         operation,
+        messages: buildProfileInsightsMessages(request),
+        schema: profileInsightsJsonSchema,
+        maxTokens: 850,
+      });
+
+      const response = parseStructuredOutput(
+        rawResponse,
+        profileInsightsModelOutputSchema,
+        "profile insights",
+        {
+          operation,
+          model: this.modelName,
+        }
+      );
+      return {
+        data: normalizeProfileInsights(response),
         model: this.modelName,
+        usage: extractUsage(rawResponse),
+      };
+    } catch (error) {
+      if (!(error instanceof CoachInferenceServiceError)) {
+        throw error;
       }
-    );
-    return {
-      data: normalizeProfileInsights(response),
-      model: this.modelName,
-      usage: extractUsage(rawResponse),
-    };
+
+      console.warn(
+        JSON.stringify({
+          event: "coach_profile_structured_fallback",
+          operation,
+          model: this.modelName,
+          reasonCode: error.code,
+          reasonDetails: error.details,
+        })
+      );
+
+      const fallbackResponse = await this.runPlainText({
+        operation,
+        messages: buildFallbackProfileInsightsMessages(request),
+        maxTokens: 700,
+      });
+      const content = extractPlainText(
+        fallbackResponse,
+        "profile insights fallback"
+      );
+
+      return {
+        data: parsePlainProfileInsights(content),
+        model: this.modelName,
+        usage: extractUsage(fallbackResponse),
+      };
+    }
   }
 
   async generateChat(
@@ -287,6 +320,50 @@ function normalizeChatResponse(
     answerMarkdown: response.answerMarkdown.trim(),
     followUps: dedupeText(response.followUps).slice(0, 4),
     suggestedChanges: normalizeSuggestedChanges(response.suggestedChanges),
+  };
+}
+
+function parsePlainProfileInsights(
+  content: string
+): CoachProfileInsightsResponse {
+  const normalized = content.replace(/\r\n/g, "\n").trim();
+  const paragraphs = normalized
+    .split(/\n\s*\n+/)
+    .map((paragraph) => cleanPlainParagraph(paragraph))
+    .filter(Boolean);
+  const bulletRecommendations = normalized
+    .split("\n")
+    .map((line) => parseBulletRecommendation(line))
+    .filter((value): value is string => Boolean(value));
+
+  let summary =
+    paragraphs.find((paragraph) => !looksLikeRecommendationSection(paragraph)) ??
+    cleanPlainParagraph(normalized);
+
+  if (!summary) {
+    throw new CoachInferenceServiceError(
+      502,
+      "upstream_empty_output",
+      "Workers AI returned empty profile insights fallback output"
+    );
+  }
+
+  summary = summary.slice(0, 1200);
+
+  const narrativeRecommendations =
+    bulletRecommendations.length > 0
+      ? []
+      : paragraphs
+          .filter((paragraph) => paragraph !== summary)
+          .filter((paragraph) => !looksLikeRecommendationSection(paragraph));
+
+  return {
+    summary,
+    recommendations: dedupeText([
+      ...bulletRecommendations,
+      ...narrativeRecommendations,
+    ]).slice(0, 8),
+    suggestedChanges: [],
   };
 }
 
@@ -496,6 +573,74 @@ function describeResponseShape(rawResponse: unknown): Record<string, unknown> {
 
 function buildOpaqueResponseID(): string {
   return `coach-turn_${crypto.randomUUID()}`;
+}
+
+function parseBulletRecommendation(line: string): string | undefined {
+  const match = line.match(/^\s*(?:[-*•]|\d+[.)])\s+(.+?)\s*$/);
+  if (!match?.[1]) {
+    return undefined;
+  }
+
+  const cleaned = cleanPlainParagraph(match[1]);
+  return cleaned || undefined;
+}
+
+function cleanPlainParagraph(text: string): string {
+  const joined = text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .filter((line) => !isSectionHeading(line))
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return stripKnownLabel(joined);
+}
+
+function isSectionHeading(line: string): boolean {
+  const normalized = stripMarkdownPrefix(line)
+    .replace(/[:：]\s*$/, "")
+    .trim()
+    .toLowerCase();
+
+  return [
+    "summary",
+    "coach summary",
+    "recommendations",
+    "recommendation",
+    "key recommendations",
+    "сводка",
+    "итог",
+    "рекомендации",
+  ].includes(normalized);
+}
+
+function stripKnownLabel(text: string): string {
+  return stripMarkdownPrefix(text)
+    .replace(
+      /^(?:summary|coach summary|recommendations?|key recommendations|сводка|итог|рекомендации)\s*[:：-]\s*/i,
+      ""
+    )
+    .trim();
+}
+
+function stripMarkdownPrefix(text: string): string {
+  return text
+    .replace(/^#{1,6}\s*/, "")
+    .replace(/^[-*•]\s+/, "")
+    .replace(/^\*\*(.+)\*\*$/, "$1")
+    .replace(/^__(.+)__$/, "$1")
+    .trim();
+}
+
+function looksLikeRecommendationSection(text: string): boolean {
+  const normalized = text.toLowerCase();
+  return (
+    normalized.startsWith("recommendation") ||
+    normalized.startsWith("key recommendation") ||
+    normalized.startsWith("рекомендац")
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

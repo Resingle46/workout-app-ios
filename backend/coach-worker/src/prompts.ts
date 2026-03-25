@@ -89,6 +89,32 @@ export function buildChatMessages(
   ];
 }
 
+export function buildFallbackProfileInsightsMessages(
+  request: CoachProfileInsightsRequest
+): PromptMessage[] {
+  return [
+    {
+      role: "system",
+      content: [
+        sharedRules(request.locale),
+        "Task: analyze the user's current training state and return plain markdown only.",
+        "Do not return JSON.",
+        "Write one short summary paragraph first.",
+        "Then write up to 4 compact bullet recommendations.",
+        "Do not include suggested changes in the fallback response.",
+      ].join("\n\n"),
+    },
+    {
+      role: "user",
+      content: [
+        `Capability scope: ${request.capabilityScope}`,
+        "Current app context JSON:",
+        JSON.stringify(request.context),
+      ].join("\n\n"),
+    },
+  ];
+}
+
 export function buildFallbackChatMessages(
   request: CoachChatRequest
 ): PromptMessage[] {

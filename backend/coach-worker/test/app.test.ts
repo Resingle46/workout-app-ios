@@ -307,26 +307,36 @@ describe("WorkersAICoachService", () => {
     ]);
   });
 
-  it("rejects invalid structured profile output", async () => {
-    const service = new WorkersAICoachService(
-      makeEnv({
-        AI: {
-          run: vi.fn().mockResolvedValue({
-            response: {
-              summary: "",
-              recommendations: [],
-              suggestedChanges: [],
-            },
-          }),
-        },
+  it("falls back to plain-text profile insights when structured output fails", async () => {
+    const aiRun = vi
+      .fn()
+      .mockResolvedValueOnce({
+        response: "{\"summaary\":\"Bad JSON key\"",
       })
+      .mockResolvedValueOnce({
+        response: [
+          "Summary: Your current split supports hypertrophy, but weekly gym frequency is lower than your goal.",
+          "",
+          "- Add one more gym session if recovery and schedule allow.",
+          "- Keep compound lifts in the 6 to 10 rep range for now.",
+        ].join("\n"),
+      });
+
+    const service = new WorkersAICoachService(makeEnv({ AI: { run: aiRun } }));
+    const result = await service.generateProfileInsights(
+      makeProfileInsightsRequestFixture()
     );
 
-    await expect(
-      service.generateProfileInsights(makeProfileInsightsRequestFixture())
-    ).rejects.toMatchObject({
-      code: "upstream_invalid_output",
-      status: 502,
+    expect(aiRun).toHaveBeenCalledTimes(2);
+    expect(aiRun.mock.calls[1]?.[1]).not.toHaveProperty("guided_json");
+    expect(result.data).toEqual({
+      summary:
+        "Your current split supports hypertrophy, but weekly gym frequency is lower than your goal.",
+      recommendations: [
+        "Add one more gym session if recovery and schedule allow.",
+        "Keep compound lifts in the 6 to 10 rep range for now.",
+      ],
+      suggestedChanges: [],
     });
   });
 
