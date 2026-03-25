@@ -1481,7 +1481,7 @@ enum CloudRemoteDecisionMode: Hashable, Sendable {
     case conflict
 }
 
-struct CloudPendingRemoteRestore: Identifiable, Hashable, Sendable {
+struct CloudPendingRemoteRestore: Identifiable, Sendable {
     let id: String
     var mode: CloudRemoteDecisionMode
     var response: CloudBackupDownloadResponse
