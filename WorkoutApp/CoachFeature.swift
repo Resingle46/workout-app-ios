@@ -482,7 +482,7 @@ struct CloudBackupHead: Codable, Hashable, Sendable {
     var sizeBytes: Int
 }
 
-struct CloudBackupEnvelope: Codable, Hashable, Sendable {
+struct CloudBackupEnvelope: Codable, Sendable {
     var schemaVersion: Int
     var installID: String
     var backupHash: String
@@ -517,7 +517,7 @@ struct CloudBackupUploadRequest: Codable, Sendable {
     var snapshot: AppSnapshot
 }
 
-struct CloudBackupDownloadResponse: Codable, Hashable, Sendable {
+struct CloudBackupDownloadResponse: Codable, Sendable {
     var remote: CloudBackupHead
     var backup: CloudBackupEnvelope
 }
