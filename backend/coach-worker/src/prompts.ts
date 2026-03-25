@@ -2,6 +2,7 @@ import type {
   CoachChatRequest,
   CoachProfileInsightsRequest,
 } from "./schemas";
+import { buildInferencePromptContext } from "./context";
 
 type PromptMessage = {
   role: "system" | "user" | "assistant";
@@ -19,6 +20,9 @@ function sharedRules(locale: string): string {
     "You are WorkoutApp Coach, an internal AI training assistant embedded in a workout app.",
     localeInstruction(locale),
     "Use only the provided app context. Do not invent profile, workout, or progress facts.",
+    "Treat explicit user-authored execution notes in programComment as higher priority than heuristic assumptions about split structure or weekly frequency.",
+    "If the user says they rotate through more workout templates than they perform each week, do not treat that alone as a mismatch.",
+    "If the saved note explicitly says not to change weekly frequency or workout count, respect that and return no conflicting suggestedChanges.",
     "Stay within workout programming, progression, recovery, and adherence guidance.",
     "Do not give medical diagnosis, treatment plans, or supplement protocols.",
     "Only emit suggestedChanges that exactly match one of the supported types:",
@@ -33,6 +37,39 @@ function sharedRules(locale: string): string {
   ].join("\n");
 }
 
+function highPriorityConstraintLines(
+  snapshot: CoachProfileInsightsRequest["snapshot"] | CoachChatRequest["snapshot"]
+): string[] {
+  if (!snapshot) {
+    return [];
+  }
+
+  const promptContext = buildInferencePromptContext(snapshot);
+  const lines: string[] = [];
+
+  if (promptContext.userConstraints.rollingSplitExecution) {
+    lines.push(
+      "- The user says they rotate workouts/templates in order instead of matching template count to weekly sessions."
+    );
+  }
+
+  if (promptContext.userConstraints.statedWeeklyFrequency !== undefined) {
+    lines.push(
+      `- The user explicitly states they train ${promptContext.userConstraints.statedWeeklyFrequency} times per week.`
+    );
+  }
+
+  if (promptContext.userConstraints.preserveWeeklyFrequency) {
+    lines.push("- Do not recommend changing weekly training frequency.");
+  }
+
+  if (promptContext.userConstraints.preserveProgramWorkoutCount) {
+    lines.push("- Do not recommend changing the number of workout days/templates in the saved program.");
+  }
+
+  return lines;
+}
+
 function coachAnalysisContextLines(
   snapshot: CoachProfileInsightsRequest["snapshot"] | CoachChatRequest["snapshot"]
 ): string[] {
@@ -40,15 +77,16 @@ function coachAnalysisContextLines(
     return [];
   }
 
+  const promptContext = buildInferencePromptContext(snapshot);
   const lines = [
     "Coach analysis settings JSON:",
     JSON.stringify(snapshot.coachAnalysisSettings),
   ];
 
-  if (snapshot.preferredProgram) {
+  if (promptContext.preferredProgram) {
     lines.push(
       "Selected program for analysis JSON:",
-      JSON.stringify(snapshot.preferredProgram)
+      JSON.stringify(promptContext.preferredProgram)
     );
   }
 
@@ -56,6 +94,15 @@ function coachAnalysisContextLines(
   if (comment) {
     lines.push(`User comment about how they actually run the program: ${comment}`);
   }
+
+  const constraintLines = highPriorityConstraintLines(snapshot);
+  if (constraintLines.length > 0) {
+    lines.push("High-priority user constraints:");
+    lines.push(...constraintLines);
+  }
+
+  lines.push("Sanitized coach context JSON:");
+  lines.push(JSON.stringify(promptContext));
 
   return lines;
 }
@@ -79,8 +126,6 @@ export function buildProfileInsightsMessages(
         `Capability scope: ${request.capabilityScope}`,
         "Return JSON that strictly matches the provided schema.",
         ...coachAnalysisContextLines(request.snapshot),
-        "Context JSON:",
-        JSON.stringify(request.snapshot),
       ].join("\n\n"),
     },
   ];
@@ -111,8 +156,6 @@ export function buildChatMessages(
         `Question: ${request.question}`,
         "Return JSON that strictly matches the provided schema.",
         ...coachAnalysisContextLines(request.snapshot),
-        "Current app context JSON:",
-        JSON.stringify(request.snapshot),
       ].join("\n\n"),
     },
   ];
@@ -138,8 +181,6 @@ export function buildFallbackProfileInsightsMessages(
       content: [
         `Capability scope: ${request.capabilityScope}`,
         ...coachAnalysisContextLines(request.snapshot),
-        "Current app context JSON:",
-        JSON.stringify(request.snapshot),
       ].join("\n\n"),
     },
   ];
@@ -168,8 +209,6 @@ export function buildFallbackChatMessages(
         `Capability scope: ${request.capabilityScope}`,
         `Question: ${request.question}`,
         ...coachAnalysisContextLines(request.snapshot),
-        "Current app context JSON:",
-        JSON.stringify(request.snapshot),
       ].join("\n\n"),
     },
   ];

@@ -1242,201 +1242,115 @@ struct CoachContextBuilder {
 struct CoachFallbackInsightsFactory {
     @MainActor
     static func make(from store: AppStore) -> CoachProfileInsights {
-        let goalSummary = store.profileGoalSummary()
-        let trainingSummary = store.profileTrainingRecommendationSummary()
-        let compatibilitySummary = store.profileGoalCompatibilitySummary()
-        let preferredProgram = CoachPreferredProgramResolver.resolve(
-            from: store,
-            preferredProgramID: store.coachAnalysisSettings.selectedProgramID
+        let constraints = CoachProgramCommentConstraintExtractor.extract(
+            from: store.coachAnalysisSettings.programComment
         )
+        let consistencySummary = store.profileConsistencySummary()
+        let recentPR = store.recentPersonalRecords(limit: 1).first
+        var recommendations: [String] = []
 
-        var recommendations: [String] = [
-            fallbackFrequencyText(trainingSummary),
-            fallbackRepRangeText(trainingSummary),
-            fallbackVolumeText(trainingSummary),
-            fallbackSplitText(trainingSummary)
-        ]
-
-        if compatibilitySummary.isAligned {
-            recommendations.append(coachLocalizedString("profile.card.compatibility.aligned"))
-        } else {
-            recommendations.append(
-                contentsOf: compatibilitySummary.issues
-                    .prefix(2)
-                    .map(coachCompatibilityMessage)
-            )
+        if constraints.rollingSplitExecution ||
+            constraints.preserveWeeklyFrequency ||
+            constraints.preserveProgramWorkoutCount {
+            recommendations.append(coachLocalizedString("coach.fallback.comment_guardrail"))
         }
 
-        if let etaText = fallbackGoalETA(goalSummary) {
+        if consistencySummary.workoutsThisWeek < consistencySummary.weeklyTarget {
             recommendations.append(
                 String(
-                    format: coachLocalizedString("coach.fallback.goal_eta"),
-                    etaText
+                    format: coachLocalizedString("coach.fallback.consistency_gap"),
+                    consistencySummary.workoutsThisWeek,
+                    consistencySummary.weeklyTarget
+                )
+            )
+        } else if consistencySummary.streakWeeks > 0 {
+            recommendations.append(
+                String(
+                    format: coachLocalizedString("coach.fallback.streak"),
+                    consistencySummary.streakWeeks
                 )
             )
         }
 
-        var suggestedChanges: [CoachSuggestedChange] = []
-        let targetRange = trainingSummary.recommendedWeeklyTargetLowerBound...trainingSummary.recommendedWeeklyTargetUpperBound
-        if !targetRange.contains(trainingSummary.currentWeeklyTarget) {
-            let adjustedTarget = min(
-                max(trainingSummary.currentWeeklyTarget, targetRange.lowerBound),
-                targetRange.upperBound
-            )
-            if adjustedTarget != trainingSummary.currentWeeklyTarget {
-                suggestedChanges.append(
-                    CoachSuggestedChange(
-                        id: "fallback-weekly-target-\(adjustedTarget)",
-                        type: .setWeeklyWorkoutTarget,
-                        title: coachLocalizedString("coach.draft.weekly_target.title"),
-                        summary: String(
-                            format: coachLocalizedString("coach.draft.weekly_target.summary"),
-                            adjustedTarget
-                        ),
-                        weeklyWorkoutTarget: adjustedTarget
-                    )
+        if let recentPR {
+            recommendations.append(
+                String(
+                    format: coachLocalizedString("coach.fallback.recent_pr"),
+                    recentPR.exerciseName,
+                    recentPR.delta.appNumberText
                 )
-            }
+            )
         }
 
-        if let preferredProgram {
-            let workoutCount = preferredProgram.workouts.count
-            let targetWorkoutCount = store.profile.weeklyWorkoutTarget
+        recommendations.append(coachLocalizedString("coach.fallback.progression_baseline"))
 
-            if workoutCount < targetWorkoutCount {
-                let nextWorkoutIndex = workoutCount + 1
-                suggestedChanges.append(
-                    CoachSuggestedChange(
-                        id: "fallback-add-workout-\(preferredProgram.id)-\(nextWorkoutIndex)",
-                        type: .addWorkoutDay,
-                        title: coachLocalizedString("coach.draft.add_day.title"),
-                        summary: String(
-                            format: coachLocalizedString("coach.draft.add_day.summary"),
-                            preferredProgram.title
-                        ),
-                        programID: preferredProgram.id,
-                        workoutTitle: String(
-                            format: coachLocalizedString("coach.draft.add_day.default_title"),
-                            nextWorkoutIndex
-                        ),
-                        workoutFocus: fallbackWorkoutFocus(for: store.profile.primaryGoal)
-                    )
-                )
-            } else if workoutCount > targetWorkoutCount,
-                      let workoutToDelete = preferredProgram.workouts.last {
-                suggestedChanges.append(
-                    CoachSuggestedChange(
-                        id: "fallback-delete-workout-\(workoutToDelete.id)",
-                        type: .deleteWorkoutDay,
-                        title: coachLocalizedString("coach.draft.delete_day.title"),
-                        summary: String(
-                            format: coachLocalizedString("coach.draft.delete_day.summary"),
-                            workoutToDelete.title
-                        ),
-                        programID: preferredProgram.id,
-                        workoutID: workoutToDelete.id
-                    )
-                )
-            }
-        }
-
-        let summary: String
-        if compatibilitySummary.isAligned {
-            summary = coachLocalizedString("coach.fallback.summary.aligned")
-        } else {
-            summary = String(
-                format: coachLocalizedString("coach.fallback.summary.adjustments"),
-                compatibilitySummary.issues.count
-            )
+        let deduplicatedRecommendations = recommendations.reduce(into: [String]()) { result, item in
+            guard !item.isEmpty, !result.contains(item) else { return }
+            result.append(item)
         }
 
         return CoachProfileInsights(
-            summary: summary,
-            recommendations: Array(recommendations.filter { !$0.isEmpty }.prefix(5)),
-            suggestedChanges: suggestedChanges
+            summary: coachLocalizedString("coach.fallback.summary.raw"),
+            recommendations: Array(deduplicatedRecommendations.prefix(5)),
+            suggestedChanges: []
         )
     }
+}
 
-    private static func fallbackFrequencyText(_ summary: ProfileTrainingRecommendationSummary) -> String {
-        if summary.recommendedWeeklyTargetLowerBound == summary.recommendedWeeklyTargetUpperBound {
-            return String(
-                format: coachLocalizedString("profile.card.recommendations.frequency_single_format"),
-                summary.recommendedWeeklyTargetLowerBound
-            )
+private struct CoachProgramCommentConstraints {
+    var rawComment: String
+    var rollingSplitExecution: Bool
+    var preserveWeeklyFrequency: Bool
+    var preserveProgramWorkoutCount: Bool
+}
+
+private enum CoachProgramCommentConstraintExtractor {
+    private static let rotationPatterns = [
+        #"(?i)\brotate\b"#,
+        #"(?i)\brotating\b"#,
+        #"(?i)\brotation\b"#,
+        #"(?i)\bcycle through\b"#,
+        #"(?i)\bin order\b"#,
+        #"(?i)по\s*очеред"#,
+        #"(?i)поочеред"#,
+        #"(?i)по\s*кругу"#,
+        #"(?i)черед"#,
+        #"(?i)ротац"#
+    ]
+
+    private static let preserveWeeklyFrequencyPatterns = [
+        #"(?i)не\s+предлагай.*(?:частот|кол-?во|количество).*(?:трениров|занят).*(?:в\s+недел|\/нед)"#,
+        #"(?i)не\s+меняй.*(?:частот|кол-?во|количество).*(?:трениров|занят).*(?:в\s+недел|\/нед)"#,
+        #"(?i)не\s+предлагай.*изменени.*(?:трениров|занят).*(?:в\s+недел|\/нед)"#,
+        #"(?i)не\s+меняй.*недельн.*частот"#,
+        #"(?i)\bdo not\b.*(?:change|adjust).*(?:training|workout|session).*(?:per\s+week|weekly)"#,
+        #"(?i)\bdon't\b.*(?:change|adjust).*(?:training|workout|session).*(?:per\s+week|weekly)"#,
+        #"(?i)\bdo not\b.*change.*weekly.*frequency"#,
+        #"(?i)\bdon't\b.*change.*weekly.*frequency"#
+    ]
+
+    private static let preserveProgramWorkoutCountPatterns = [
+        #"(?i)не\s+предлагай.*(?:изменени|меняй).*(?:кол-?во|количество).*(?:тренировок|дней).*(?:в\s+програм|сплит)"#,
+        #"(?i)не\s+меняй.*(?:кол-?во|количество).*(?:тренировок|дней).*(?:в\s+програм|сплит)"#,
+        #"(?i)\bdo not\b.*change.*(?:number|count).*(?:workouts|days).*(?:program|split)"#,
+        #"(?i)\bdon't\b.*change.*(?:number|count).*(?:workouts|days).*(?:program|split)"#
+    ]
+
+    static func extract(from comment: String) -> CoachProgramCommentConstraints {
+        let rawComment = comment.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        func matchesAny(_ patterns: [String]) -> Bool {
+            patterns.contains { pattern in
+                rawComment.range(of: pattern, options: .regularExpression) != nil
+            }
         }
 
-        return String(
-            format: coachLocalizedString("profile.card.recommendations.frequency_format"),
-            summary.recommendedWeeklyTargetLowerBound,
-            summary.recommendedWeeklyTargetUpperBound
+        return CoachProgramCommentConstraints(
+            rawComment: rawComment,
+            rollingSplitExecution: matchesAny(rotationPatterns),
+            preserveWeeklyFrequency: matchesAny(preserveWeeklyFrequencyPatterns),
+            preserveProgramWorkoutCount: matchesAny(preserveProgramWorkoutCountPatterns)
         )
-    }
-
-    private static func fallbackRepRangeText(_ summary: ProfileTrainingRecommendationSummary) -> String {
-        String(
-            format: coachLocalizedString("profile.card.recommendations.rep_range_format"),
-            summary.mainRepLowerBound,
-            summary.mainRepUpperBound,
-            summary.accessoryRepLowerBound,
-            summary.accessoryRepUpperBound
-        )
-    }
-
-    private static func fallbackVolumeText(_ summary: ProfileTrainingRecommendationSummary) -> String {
-        String(
-            format: coachLocalizedString("profile.card.recommendations.volume_format"),
-            summary.weeklySetsLowerBound,
-            summary.weeklySetsUpperBound
-        )
-    }
-
-    private static func fallbackSplitText(_ summary: ProfileTrainingRecommendationSummary) -> String {
-        if let splitWorkoutDays = summary.splitWorkoutDays {
-            return String(
-                format: coachLocalizedString("profile.card.recommendations.split_days_format"),
-                splitWorkoutDays
-            )
-        }
-
-        return coachLocalizedSplitTitle(summary.split)
-    }
-
-    private static func fallbackGoalETA(_ summary: ProfileGoalSummary) -> String? {
-        guard let lowerWeeks = summary.etaWeeksLowerBound,
-              let upperWeeks = summary.etaWeeksUpperBound else {
-            return nil
-        }
-
-        if upperWeeks >= 8 {
-            let lowerMonths = max(Int(ceil(Double(lowerWeeks) / 4.345)), 1)
-            let upperMonths = max(Int(ceil(Double(upperWeeks) / 4.345)), lowerMonths)
-            return String(
-                format: coachLocalizedString("profile.card.goal.eta_months"),
-                lowerMonths,
-                upperMonths
-            )
-        }
-
-        return String(
-            format: coachLocalizedString("profile.card.goal.eta_weeks"),
-            lowerWeeks,
-            upperWeeks
-        )
-    }
-
-    private static func fallbackWorkoutFocus(for goal: TrainingGoal) -> String {
-        switch goal {
-        case .strength:
-            return coachLocalizedString("coach.draft.add_day.focus.strength")
-        case .hypertrophy:
-            return coachLocalizedString("coach.draft.add_day.focus.hypertrophy")
-        case .fatLoss:
-            return coachLocalizedString("coach.draft.add_day.focus.fat_loss")
-        case .generalFitness:
-            return coachLocalizedString("coach.draft.add_day.focus.general_fitness")
-        case .notSet:
-            return coachLocalizedString("coach.draft.add_day.focus.default")
-        }
     }
 }
 

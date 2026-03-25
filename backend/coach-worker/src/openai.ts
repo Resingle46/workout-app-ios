@@ -1,5 +1,6 @@
 import {
   chatResponseModelOutputSchema,
+  profileInsightsModelOutputSchema,
   suggestedChangeSchema,
   type CoachChatRequest,
   type CoachChatResponse,
@@ -7,10 +8,12 @@ import {
   type CoachProfileInsightsResponse,
 } from "./schemas";
 import {
+  buildProfileInsightsMessages,
   buildChatMessages,
   buildFallbackChatMessages,
   buildFallbackProfileInsightsMessages,
 } from "./prompts";
+import { extractProgramCommentConstraints, type ProgramCommentConstraints } from "./context";
 import type {
   CoachD1Database,
   CoachKVNamespace,
@@ -18,9 +21,11 @@ import type {
 } from "./state";
 
 export const DEFAULT_AI_MODEL = "@cf/mistralai/mistral-small-3.1-24b-instruct";
-const PROFILE_INSIGHTS_PLAIN_TEXT_MAX_TOKENS = 220;
+const PROFILE_INSIGHTS_STRUCTURED_MAX_TOKENS = 550;
+const PROFILE_INSIGHTS_PLAIN_TEXT_MAX_TOKENS = 260;
 const CHAT_STRUCTURED_MAX_TOKENS = 700;
 const CHAT_FALLBACK_MAX_TOKENS = 450;
+const PROFILE_INSIGHTS_STRUCTURED_TIMEOUT_MS = 12_000;
 const PROFILE_INSIGHTS_PLAIN_TEXT_TIMEOUT_MS = 8_000;
 const CHAT_STRUCTURED_TIMEOUT_MS = 30_000;
 const CHAT_FALLBACK_TIMEOUT_MS = 15_000;
@@ -79,21 +84,32 @@ export class WorkersAICoachService implements CoachInferenceService {
     request: CoachProfileInsightsRequest
   ): Promise<InferenceResult<CoachProfileInsightsResponse>> {
     const operation = "profile_insights";
-    const localFallback = buildDeterministicProfileInsights(request);
+    const localFallback = buildNeutralProfileInsights(request);
 
     try {
-      const invocation = await this.runPlainText({
+      const invocation = await this.runStructured({
         operation,
-        messages: buildFallbackProfileInsightsMessages(request),
-        maxTokens: PROFILE_INSIGHTS_PLAIN_TEXT_MAX_TOKENS,
-        timeoutMs: PROFILE_INSIGHTS_PLAIN_TEXT_TIMEOUT_MS,
-        includeFallbackNotice: false,
+        messages: buildProfileInsightsMessages(request),
+        schema: profileInsightsResponseJsonSchema,
+        maxTokens: PROFILE_INSIGHTS_STRUCTURED_MAX_TOKENS,
+        timeoutMs: PROFILE_INSIGHTS_STRUCTURED_TIMEOUT_MS,
       });
+      const parsed = normalizeProfileInsightsResponse(
+        parseStructuredOutput(
+          invocation.rawResponse,
+          profileInsightsModelOutputSchema,
+          "profile insights",
+          {
+            operation,
+            model: this.modelName,
+          }
+        )
+      );
+
       return {
-        data: mergePlainAndDeterministicProfileInsights(
-          parsePlainProfileInsights(
-            extractPlainText(invocation.rawResponse, "profile insights")
-          ),
+        data: applyProfileInsightsGuardrails(
+          request,
+          parsed,
           localFallback
         ),
         model: this.modelName,
@@ -106,15 +122,70 @@ export class WorkersAICoachService implements CoachInferenceService {
         throw error;
       }
 
+      if (!shouldAttemptPlainTextFallback(error)) {
+        console.warn(
+          JSON.stringify({
+            event: "coach_profile_local_fallback",
+            operation,
+            model: this.modelName,
+            reasonCode: error.code,
+            reasonDetails: error.details,
+          })
+        );
+
+        return {
+          data: localFallback,
+          model: this.modelName,
+        };
+      }
+
       console.warn(
         JSON.stringify({
-          event: "coach_profile_local_fallback",
+          event: "coach_profile_structured_fallback",
           operation,
           model: this.modelName,
           reasonCode: error.code,
           reasonDetails: error.details,
         })
       );
+
+      try {
+        const fallbackInvocation = await this.runPlainText({
+          operation,
+          messages: buildFallbackProfileInsightsMessages(request),
+          maxTokens: PROFILE_INSIGHTS_PLAIN_TEXT_MAX_TOKENS,
+          timeoutMs: PROFILE_INSIGHTS_PLAIN_TEXT_TIMEOUT_MS,
+          includeFallbackNotice: false,
+        });
+
+        return {
+          data: applyProfileInsightsGuardrails(
+            request,
+            parsePlainProfileInsights(
+              extractPlainText(fallbackInvocation.rawResponse, "profile insights")
+            ),
+            localFallback
+          ),
+          model: this.modelName,
+          usage: extractUsage(fallbackInvocation.rawResponse),
+          promptBytes: fallbackInvocation.promptBytes,
+          modelDurationMs: fallbackInvocation.modelDurationMs,
+        };
+      } catch (fallbackError) {
+        if (!(fallbackError instanceof CoachInferenceServiceError)) {
+          throw fallbackError;
+        }
+
+        console.warn(
+          JSON.stringify({
+            event: "coach_profile_local_fallback",
+            operation,
+            model: this.modelName,
+            reasonCode: fallbackError.code,
+            reasonDetails: fallbackError.details,
+          })
+        );
+      }
 
       return {
         data: localFallback,
@@ -153,7 +224,7 @@ export class WorkersAICoachService implements CoachInferenceService {
 
       return {
         data: {
-          ...parsed,
+          ...applyChatGuardrails(request, parsed),
           responseID: turnID,
         },
         responseId: turnID,
@@ -194,10 +265,12 @@ export class WorkersAICoachService implements CoachInferenceService {
 
       return {
         data: {
-          answerMarkdown,
+          ...applyChatGuardrails(request, {
+            answerMarkdown,
+            followUps: [],
+            suggestedChanges: [],
+          }),
           responseID: turnID,
-          followUps: [],
-          suggestedChanges: [],
         },
         responseId: turnID,
         model: this.modelName,
@@ -355,6 +428,20 @@ function normalizeChatResponse(
   };
 }
 
+function normalizeProfileInsightsResponse(
+  response: {
+    summary: string;
+    recommendations: string[];
+    suggestedChanges: unknown[];
+  }
+): CoachProfileInsightsResponse {
+  return {
+    summary: response.summary.trim(),
+    recommendations: dedupeText(response.recommendations).slice(0, 8),
+    suggestedChanges: normalizeSuggestedChanges(response.suggestedChanges),
+  };
+}
+
 function parsePlainProfileInsights(
   content: string
 ): CoachProfileInsightsResponse {
@@ -399,61 +486,79 @@ function parsePlainProfileInsights(
   };
 }
 
-function mergePlainAndDeterministicProfileInsights(
-  aiInsights: CoachProfileInsightsResponse,
-  deterministicFallback: CoachProfileInsightsResponse
+function applyProfileInsightsGuardrails(
+  request: CoachProfileInsightsRequest,
+  response: CoachProfileInsightsResponse,
+  fallback: CoachProfileInsightsResponse
 ): CoachProfileInsightsResponse {
+  const constraints = extractConstraintsFromSnapshot(request.snapshot);
+  const summary = shouldBlockFrequencyStructureText(response.summary, constraints)
+    ? fallback.summary
+    : response.summary;
+  const recommendations = filterFrequencyStructureText(
+    response.recommendations,
+    constraints
+  );
   return {
-    summary: aiInsights.summary || deterministicFallback.summary,
+    summary,
     recommendations:
-      aiInsights.recommendations.length > 0
-        ? aiInsights.recommendations
-        : deterministicFallback.recommendations,
-    suggestedChanges: deterministicFallback.suggestedChanges,
+      recommendations.length > 0 ? recommendations : fallback.recommendations,
+    suggestedChanges: filterSuggestedChangesByConstraints(
+      response.suggestedChanges,
+      constraints
+    ),
   };
 }
 
-function buildDeterministicProfileInsights(
+function applyChatGuardrails(
+  request: CoachChatRequest,
+  response: Omit<CoachChatResponse, "responseID">
+): Omit<CoachChatResponse, "responseID"> {
+  const constraints = extractConstraintsFromSnapshot(request.snapshot);
+  return {
+    answerMarkdown: filterChatAnswerMarkdown(
+      response.answerMarkdown,
+      constraints,
+      request.locale
+    ),
+    followUps: response.followUps,
+    suggestedChanges: filterSuggestedChangesByConstraints(
+      response.suggestedChanges,
+      constraints
+    ),
+  };
+}
+
+function buildNeutralProfileInsights(
   request: CoachProfileInsightsRequest
 ): CoachProfileInsightsResponse {
   const snapshot = request.snapshot;
   if (!snapshot) {
-    throw new CoachInferenceServiceError(
-      400,
-      "snapshot_required",
-      "Coach snapshot is required for profile insights"
-    );
+    return {
+      summary: localizedCoachText(request.locale, "fallbackSummary"),
+      recommendations: [
+        localizedCoachText(request.locale, "fallbackProgressionBaseline"),
+      ],
+      suggestedChanges: [],
+    };
   }
 
   const locale = request.locale;
-  const analytics = snapshot.analytics;
-  const training = analytics.training;
-  const compatibility = analytics.compatibility;
-  const consistency = analytics.consistency;
-  const goal = analytics.goal;
+  const constraints = extractConstraintsFromSnapshot(snapshot);
+  const recommendations: string[] = [];
+  const consistency = snapshot.analytics.consistency;
 
-  const recommendations: string[] = [
-    localizedCoachText(locale, "frequencyRange", {
-      lower: training.recommendedWeeklyTargetLowerBound,
-      upper: training.recommendedWeeklyTargetUpperBound,
-    }),
-    localizedCoachText(locale, "repRange", {
-      mainLower: training.mainRepLowerBound,
-      mainUpper: training.mainRepUpperBound,
-      accessoryLower: training.accessoryRepLowerBound,
-      accessoryUpper: training.accessoryRepUpperBound,
-    }),
-    localizedCoachText(locale, "volumeRange", {
-      lower: training.weeklySetsLowerBound,
-      upper: training.weeklySetsUpperBound,
-    }),
-  ];
-
-  if (!compatibility.isAligned) {
+  if (
+    constraints.rollingSplitExecution ||
+    constraints.preserveWeeklyFrequency ||
+    constraints.preserveProgramWorkoutCount
+  ) {
     recommendations.push(
-      ...compatibility.issues.slice(0, 2).map((issue) => issue.message.trim())
+      localizedCoachText(locale, "fallbackCommentGuardrail")
     );
-  } else if (consistency.workoutsThisWeek < consistency.weeklyTarget) {
+  }
+
+  if (consistency.workoutsThisWeek < consistency.weeklyTarget) {
     recommendations.push(
       localizedCoachText(locale, "consistencyGap", {
         completed: consistency.workoutsThisWeek,
@@ -468,95 +573,160 @@ function buildDeterministicProfileInsights(
     );
   }
 
-  const etaRecommendation = buildGoalEtaRecommendation(locale, goal);
-  if (etaRecommendation) {
-    recommendations.push(etaRecommendation);
+  const recentPR = snapshot.analytics.recentPersonalRecords[0];
+  if (recentPR) {
+    recommendations.push(
+      localizedCoachText(locale, "fallbackRecentPR", {
+        exercise: recentPR.exerciseName,
+        delta: formatLoad(recentPR.delta),
+      })
+    );
   }
 
+  recommendations.push(
+    localizedCoachText(locale, "fallbackProgressionBaseline")
+  );
+
   return {
-    summary: compatibility.isAligned
-      ? localizedCoachText(locale, "summaryAligned")
-      : localizedCoachText(locale, "summaryAdjustments", {
-          count: compatibility.issues.length,
-        }),
+    summary: localizedCoachText(locale, "fallbackSummary"),
     recommendations: dedupeText(recommendations).slice(0, 5),
-    suggestedChanges: buildDeterministicSuggestedChanges(request),
+    suggestedChanges: [],
   };
 }
 
-function buildDeterministicSuggestedChanges(
-  request: CoachProfileInsightsRequest
-): CoachProfileInsightsResponse["suggestedChanges"] {
-  const snapshot = request.snapshot;
-  if (!snapshot) {
-    return [];
-  }
-
-  const locale = request.locale;
-  const training = snapshot.analytics.training;
-  const goal = snapshot.analytics.goal;
-  const preferredProgram = snapshot.preferredProgram;
-  const result: CoachProfileInsightsResponse["suggestedChanges"] = [];
-
-  const adjustedWeeklyTarget = clamp(
-    training.currentWeeklyTarget,
-    training.recommendedWeeklyTargetLowerBound,
-    training.recommendedWeeklyTargetUpperBound
+function extractConstraintsFromSnapshot(
+  snapshot: CoachProfileInsightsRequest["snapshot"] | CoachChatRequest["snapshot"]
+): ProgramCommentConstraints {
+  return extractProgramCommentConstraints(
+    snapshot?.coachAnalysisSettings.programComment
   );
+}
 
-  if (adjustedWeeklyTarget !== training.currentWeeklyTarget) {
-    result.push({
-      id: `coach-weekly-target-${adjustedWeeklyTarget}`,
-      type: "setWeeklyWorkoutTarget",
-      title: localizedCoachText(locale, "draftWeeklyTargetTitle"),
-      summary: localizedCoachText(locale, "draftWeeklyTargetSummary", {
-        target: adjustedWeeklyTarget,
-      }),
-      weeklyWorkoutTarget: adjustedWeeklyTarget,
-    });
+function filterSuggestedChangesByConstraints(
+  changes: CoachProfileInsightsResponse["suggestedChanges"],
+  constraints: ProgramCommentConstraints
+): CoachProfileInsightsResponse["suggestedChanges"] {
+  return changes.filter((change) => {
+    if (
+      constraints.preserveWeeklyFrequency &&
+      change.type === "setWeeklyWorkoutTarget"
+    ) {
+      return false;
+    }
+
+    if (
+      (constraints.rollingSplitExecution ||
+        constraints.preserveProgramWorkoutCount) &&
+      (change.type === "addWorkoutDay" || change.type === "deleteWorkoutDay")
+    ) {
+      return false;
+    }
+
+    return true;
+  });
+}
+
+function filterFrequencyStructureText(
+  values: string[],
+  constraints: ProgramCommentConstraints
+): string[] {
+  if (!hasFrequencyStructureGuardrails(constraints)) {
+    return dedupeText(values).slice(0, 8);
   }
 
-  if (!preferredProgram) {
-    return result.slice(0, 5);
+  return dedupeText(
+    values.filter((value) => !shouldBlockFrequencyStructureText(value, constraints))
+  ).slice(0, 8);
+}
+
+function filterChatAnswerMarkdown(
+  answerMarkdown: string,
+  constraints: ProgramCommentConstraints,
+  locale: string
+): string {
+  if (!hasFrequencyStructureGuardrails(constraints)) {
+    return answerMarkdown.trim();
   }
 
-  const desiredWorkoutCount =
-    adjustedWeeklyTarget === training.currentWeeklyTarget
-      ? goal.weeklyWorkoutTarget
-      : adjustedWeeklyTarget;
+  const lines = answerMarkdown
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => !shouldBlockFrequencyStructureText(line, constraints));
 
-  if (preferredProgram.workoutCount < desiredWorkoutCount) {
-    result.push({
-      id: `coach-add-day-${preferredProgram.id}-${preferredProgram.workoutCount + 1}`,
-      type: "addWorkoutDay",
-      title: localizedCoachText(locale, "draftAddDayTitle"),
-      summary: localizedCoachText(locale, "draftAddDaySummary", {
-        programTitle: preferredProgram.title,
-      }),
-      programID: preferredProgram.id,
-      workoutTitle: localizedCoachText(locale, "draftAddDayWorkoutTitle", {
-        index: preferredProgram.workoutCount + 1,
-      }),
-      workoutFocus: localizedWorkoutFocus(locale, goal.primaryGoal),
-    });
-  } else if (
-    preferredProgram.workoutCount > desiredWorkoutCount &&
-    preferredProgram.workouts.length > 0
+  if (lines.length > 0) {
+    return lines.join("\n\n");
+  }
+
+  return localizedCoachText(locale, "commentConstraintAcknowledged");
+}
+
+function hasFrequencyStructureGuardrails(
+  constraints: ProgramCommentConstraints
+): boolean {
+  return (
+    constraints.rollingSplitExecution ||
+    constraints.preserveWeeklyFrequency ||
+    constraints.preserveProgramWorkoutCount
+  );
+}
+
+function shouldBlockFrequencyStructureText(
+  value: string,
+  constraints: ProgramCommentConstraints
+): boolean {
+  if (!hasFrequencyStructureGuardrails(constraints)) {
+    return false;
+  }
+
+  const normalized = value.trim();
+  if (!normalized) {
+    return false;
+  }
+
+  const blockStructure =
+    constraints.rollingSplitExecution || constraints.preserveProgramWorkoutCount;
+  const blockFrequency = constraints.preserveWeeklyFrequency;
+
+  const structurePatterns = [
+    /\bsaved\s+program\s+has\b.*\bworkouts?\b.*\bweekly\s+target\b/i,
+    /\bprogram\b.*\bhas\b.*\bworkouts?\b.*\bweekly\s+target\b/i,
+    /\b(?:saved|current)\s+program\b.*\bworkout\s+days?\b.*\bweekly\s+target\b/i,
+    /\bworkout\s+days?\b.*\bweekly\s+target\b/i,
+    /\badd\b.*\bworkout\s+day\b/i,
+    /\bremove\b.*\bworkout\s+day\b/i,
+    /в\s+программ[ее]\b.*трениров/i,
+    /добавить.*тренировочн(?:ый|ого)\s+день/i,
+    /удалить.*тренировочн(?:ый|ого)\s+день/i,
+  ];
+  const frequencyPatterns = [
+    /\bkeep\b.*\b(?:sessions?|workouts?)\s+(?:per|a)\s+week\b/i,
+    /\b(?:increase|decrease|adjust|change|update|set)\b.*\b(?:sessions?|workouts?)\s+(?:per|a)\s+week\b/i,
+    /\bweekly\s+(?:training\s+)?target\b/i,
+    /держите.*частот/i,
+    /(?:увелич|сниз|измен|скоррект|обнов).*(?:трениров|занят).*(?:в\s+недел|\/нед)/i,
+    /недельн(?:ая|ую)\s+цель/i,
+  ];
+
+  if (
+    blockStructure &&
+    structurePatterns.some((pattern) => pattern.test(normalized))
   ) {
-    const workoutToDelete = preferredProgram.workouts[preferredProgram.workouts.length - 1];
-    result.push({
-      id: `coach-delete-day-${workoutToDelete.id}`,
-      type: "deleteWorkoutDay",
-      title: localizedCoachText(locale, "draftDeleteDayTitle"),
-      summary: localizedCoachText(locale, "draftDeleteDaySummary", {
-        workoutTitle: workoutToDelete.title,
-      }),
-      programID: preferredProgram.id,
-      workoutID: workoutToDelete.id,
-    });
+    return true;
   }
 
-  return result.slice(0, 5);
+  if (
+    blockFrequency &&
+    frequencyPatterns.some((pattern) => pattern.test(normalized))
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+function formatLoad(value: number): string {
+  return Number.isInteger(value) ? String(value) : value.toFixed(1);
 }
 
 function normalizeSuggestedChanges(
@@ -815,7 +985,12 @@ function localizedCoachText(
     | "draftAddDaySummary"
     | "draftAddDayWorkoutTitle"
     | "draftDeleteDayTitle"
-    | "draftDeleteDaySummary",
+    | "draftDeleteDaySummary"
+    | "fallbackSummary"
+    | "fallbackCommentGuardrail"
+    | "fallbackRecentPR"
+    | "fallbackProgressionBaseline"
+    | "commentConstraintAcknowledged",
   params: Record<string, string | number> = {}
 ): string {
   const ru = locale.toLowerCase().startsWith("ru");
@@ -849,6 +1024,16 @@ function localizedCoachText(
         draftDeleteDayTitle: "Убрать лишний тренировочный день",
         draftDeleteDaySummary:
           "Удалить день \"%workoutTitle%\", чтобы программа лучше соответствовала целевой частоте.",
+        fallbackSummary:
+          "Сводка построена по фактическим данным журнала и сохранённому описанию того, как вы реально выполняете программу.",
+        fallbackCommentGuardrail:
+          "Сохраняйте текущую ротацию и недельный ритм, если именно так вы реально выполняете программу.",
+        fallbackRecentPR:
+          "Недавний прирост по упражнению \"%exercise%\" на %delta% кг показывает, что текущая прогрессия работает.",
+        fallbackProgressionBaseline:
+          "Ориентируйтесь на последние завершённые тренировки и повышайте нагрузку только там, где повторы были уверенно повторяемыми.",
+        commentConstraintAcknowledged:
+          "Учту вашу сохранённую заметку и не буду предлагать менять недельную частоту или количество тренировочных дней в программе.",
       }
     : {
         summaryAligned:
@@ -879,6 +1064,16 @@ function localizedCoachText(
         draftDeleteDayTitle: "Remove an extra workout day",
         draftDeleteDaySummary:
           "Remove \"%workoutTitle%\" so the program better matches the target frequency.",
+        fallbackSummary:
+          "This summary is based on factual training data and on your saved note about how you actually run the program.",
+        fallbackCommentGuardrail:
+          "Keep the current rotation and weekly rhythm if that reflects how you actually run the program.",
+        fallbackRecentPR:
+          "A recent improvement on \"%exercise%\" of %delta% kg suggests the current progression is working.",
+        fallbackProgressionBaseline:
+          "Use the most recent completed sessions as the baseline and add load only where the previous work looked repeatable.",
+        commentConstraintAcknowledged:
+          "I will respect your saved note and avoid recommending changes to weekly frequency or to the number of workout days in the program.",
       };
 
   return Object.entries(params).reduce(
@@ -1051,6 +1246,26 @@ const guidedSuggestedChangeJsonSchema = {
     suggestedWeight: { type: "number" },
   },
   required: ["id", "type", "title", "summary"],
+} as const;
+
+const profileInsightsResponseJsonSchema = {
+  type: "object",
+  properties: {
+    summary: {
+      type: "string",
+    },
+    recommendations: {
+      type: "array",
+      items: {
+        type: "string",
+      },
+    },
+    suggestedChanges: {
+      type: "array",
+      items: guidedSuggestedChangeJsonSchema,
+    },
+  },
+  required: ["summary", "recommendations", "suggestedChanges"],
 } as const;
 
 const chatResponseJsonSchema = {

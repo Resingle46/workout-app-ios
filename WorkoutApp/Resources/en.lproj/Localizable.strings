@@ -319,6 +319,12 @@
 "coach.message.coach" = "Coach";
 "coach.message.you" = "You";
 "coach.fallback.goal_eta" = "Estimated timeline: %@.";
+"coach.fallback.summary.raw" = "This summary is based on factual training data and on your saved note about how you actually run the program.";
+"coach.fallback.comment_guardrail" = "Keep the current rotation and weekly rhythm if that reflects how you actually run the program.";
+"coach.fallback.consistency_gap" = "You completed %d of %d planned sessions this week, so consistency matters more than extra load right now.";
+"coach.fallback.streak" = "You have a %d-week consistency streak. Keep that rhythm and progress load gradually.";
+"coach.fallback.recent_pr" = "A recent improvement on \"%@\" of %@ kg suggests the current progression is working.";
+"coach.fallback.progression_baseline" = "Use the most recent completed sessions as the baseline and add load only where the previous work looked repeatable.";
 "coach.fallback.summary.aligned" = "Your profile, target, and recent rhythm look broadly aligned for the current plan.";
 "coach.fallback.summary.adjustments" = "Coach found %d area(s) worth adjusting before the plan fits your goal more closely.";
 "coach.draft.weekly_target.title" = "Adjust weekly target";

@@ -500,6 +500,32 @@ describe("WorkersAICoachService", () => {
     expect(result.data.responseID).toMatch(/^coach-turn_/);
   });
 
+  it("builds a sanitized raw-first prompt and surfaces high-priority comment constraints", async () => {
+    const aiRun = vi.fn().mockResolvedValue({
+      response: {
+        summary: "Summary",
+        recommendations: ["Recommendation"],
+        suggestedChanges: [],
+      },
+    });
+
+    const service = new WorkersAICoachService(makeEnv({ AI: { run: aiRun } }));
+    const request = makeProfileInsightsRequestFixture();
+    request.snapshot = withStrictCommentConstraints(request.snapshot);
+    await service.generateProfileInsights(request);
+
+    const payload = aiRun.mock.calls[0]?.[1];
+    const promptText = JSON.stringify(payload?.messages ?? []);
+
+    expect(promptText).toContain("High-priority user constraints:");
+    expect(promptText).toContain(
+      "Do not recommend changing weekly training frequency."
+    );
+    expect(promptText).toContain("Sanitized coach context JSON:");
+    expect(promptText).not.toContain("\"compatibility\"");
+    expect(promptText).not.toContain("\"training\"");
+  });
+
   it("drops invalid suggestedChanges instead of failing the whole chat response", async () => {
     const aiRun = vi.fn().mockResolvedValue({
       response: {
@@ -545,27 +571,124 @@ describe("WorkersAICoachService", () => {
     expect(result.data.responseID).toMatch(/^coach-turn_/);
   });
 
-  it("parses plain-text profile insights", async () => {
+  it("filters conflicting frequency and structure guidance from profile insights", async () => {
     const aiRun = vi.fn().mockResolvedValue({
-      response: [
-        "Summary: Recovery is adequate.",
-        "",
-        "- Keep volume stable this week.",
-      ].join("\n"),
+      response: {
+        summary: "Your saved program has 4 workouts, but weekly target is 3.",
+        recommendations: [
+          "Increase to 4 workouts per week so the split matches the target.",
+          "Keep bench progression steady.",
+        ],
+        suggestedChanges: [
+          {
+            id: "weekly-target-4",
+            type: "setWeeklyWorkoutTarget",
+            title: "Adjust weekly target",
+            summary: "Raise the weekly target to 4.",
+            weeklyWorkoutTarget: 4,
+          },
+          {
+            id: "add-day-1",
+            type: "addWorkoutDay",
+            title: "Add a workout day",
+            summary: "Add another workout day to match the split.",
+            programID: "11111111-1111-4111-8111-111111111111",
+            workoutTitle: "Workout 4",
+            workoutFocus: "Upper body",
+          },
+          {
+            id: "prescription-1",
+            type: "updateTemplateExercisePrescription",
+            title: "Tighten the top sets",
+            summary: "Keep the top sets crisp and repeatable.",
+            programID: "11111111-1111-4111-8111-111111111111",
+            workoutID: "22222222-2222-4222-8222-222222222222",
+            templateExerciseID: "33333333-3333-4333-8333-333333333333",
+            reps: 5,
+            setsCount: 3,
+            suggestedWeight: 102.5,
+          },
+        ],
+      },
     });
+
+    const service = new WorkersAICoachService(makeEnv({ AI: { run: aiRun } }));
+    const request = makeProfileInsightsRequestFixture();
+    request.snapshot = withStrictCommentConstraints(request.snapshot);
+    const result = await service.generateProfileInsights(
+      request
+    );
+
+    expect(result.data.summary).not.toContain("saved program has 4 workouts");
+    expect(result.data.recommendations).toEqual(["Keep bench progression steady."]);
+    expect(result.data.suggestedChanges).toEqual([
+      expect.objectContaining({
+        type: "updateTemplateExercisePrescription",
+      }),
+    ]);
+  });
+
+  it("filters conflicting frequency and structure guidance from chat", async () => {
+    const aiRun = vi.fn().mockResolvedValue({
+      response: {
+        answerMarkdown: [
+          "Increase to 4 workouts per week so the split matches your target.",
+          "Keep load the same next week and add one rep to the final set.",
+        ].join("\n\n"),
+        followUps: [],
+        suggestedChanges: [
+          {
+            id: "add-day-1",
+            type: "addWorkoutDay",
+            title: "Add a workout day",
+            summary: "Add another workout day to match the split.",
+            programID: "11111111-1111-4111-8111-111111111111",
+            workoutTitle: "Workout 4",
+            workoutFocus: "Upper body",
+          },
+        ],
+      },
+    });
+
+    const service = new WorkersAICoachService(makeEnv({ AI: { run: aiRun } }));
+    const request = makeChatRequestFixture();
+    request.snapshot = withStrictCommentConstraints(request.snapshot);
+    const result = await service.generateChat(request);
+
+    expect(result.data.answerMarkdown).not.toContain("Increase to 4 workouts");
+    expect(result.data.answerMarkdown).toContain(
+      "Keep load the same next week and add one rep"
+    );
+    expect(result.data.suggestedChanges).toEqual([]);
+  });
+
+  it("parses plain-text profile insights", async () => {
+    const aiRun = vi
+      .fn()
+      .mockResolvedValueOnce({
+        response: "not valid json",
+      })
+      .mockResolvedValueOnce({
+        response: [
+          "Summary: Recovery is adequate.",
+          "",
+          "- Keep volume stable this week.",
+        ].join("\n"),
+      });
 
     const service = new WorkersAICoachService(makeEnv({ AI: { run: aiRun } }));
     const result = await service.generateProfileInsights(
       makeProfileInsightsRequestFixture()
     );
 
+    expect(aiRun).toHaveBeenCalledTimes(2);
     expect(result.data.summary).toBe("Recovery is adequate.");
     expect(result.data.recommendations).toEqual([
       "Keep volume stable this week.",
     ]);
   });
 
-  it("falls back to deterministic profile insights when plain-text inference fails", async () => {
+  it("falls back to neutral local profile insights when inference fails", async () => {
     const aiRun = vi.fn().mockRejectedValue(new Error("Request timed out"));
 
     const service = new WorkersAICoachService(makeEnv({ AI: { run: aiRun } }));
@@ -576,6 +699,8 @@ describe("WorkersAICoachService", () => {
     expect(aiRun).toHaveBeenCalledTimes(1);
     expect(result.data.summary.length).toBeGreaterThan(0);
     expect(result.data.recommendations.length).toBeGreaterThan(0);
+    expect(result.data.suggestedChanges).toEqual([]);
+    expect(result.data.summary.toLowerCase()).not.toContain("adjustments");
   });
 
   it("cuts off long-running profile insight requests before the client disconnects", async () => {
@@ -600,7 +725,7 @@ describe("WorkersAICoachService", () => {
         },
       });
 
-      await vi.advanceTimersByTimeAsync(8_050);
+      await vi.advanceTimersByTimeAsync(12_050);
       await expectation;
     } finally {
       vi.useRealTimers();
@@ -819,5 +944,22 @@ function makeChatRequestFixture(): CoachChatRequest {
         content: "Coach: keep one rep in reserve before pushing load.",
       },
     ],
+  };
+}
+
+function withStrictCommentConstraints(
+  snapshot: CompactCoachSnapshot | undefined
+): CompactCoachSnapshot | undefined {
+  if (!snapshot) {
+    return snapshot;
+  }
+
+  return {
+    ...snapshot,
+    coachAnalysisSettings: {
+      ...snapshot.coachAnalysisSettings,
+      programComment:
+        "I train 3 days per week and rotate through this 4-day split in order. Do not change weekly training frequency or the number of workout days in the program.",
+    },
   };
 }

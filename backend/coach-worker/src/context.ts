@@ -26,6 +26,69 @@ const CANONICAL_LIFT_NAMES: Record<string, string> = {
 
 type SupportedLocale = "en" | "ru";
 
+export interface ProgramCommentConstraints {
+  rawComment: string;
+  rollingSplitExecution: boolean;
+  preserveWeeklyFrequency: boolean;
+  preserveProgramWorkoutCount: boolean;
+  statedWeeklyFrequency?: number;
+}
+
+export interface InferencePromptContext {
+  localeIdentifier: string;
+  profile: CompactCoachSnapshot["profile"];
+  coachAnalysisSettings: CompactCoachSnapshot["coachAnalysisSettings"];
+  userConstraints: ProgramCommentConstraints;
+  preferredProgram?: CompactCoachSnapshot["preferredProgram"];
+  activeWorkout?: CompactCoachSnapshot["activeWorkout"];
+  analytics: {
+    progress30Days: CompactCoachSnapshot["analytics"]["progress30Days"];
+    consistency: CompactCoachSnapshot["analytics"]["consistency"] & {
+      observedAverageWorkoutsPerWeek?: number;
+    };
+    recentPersonalRecords: CompactCoachSnapshot["analytics"]["recentPersonalRecords"];
+    relativeStrength: CompactCoachSnapshot["analytics"]["relativeStrength"];
+  };
+  recentFinishedSessions: CompactCoachSnapshot["recentFinishedSessions"];
+}
+
+const ROTATION_PATTERNS = [
+  /\brotate\b/i,
+  /\brotating\b/i,
+  /\brotation\b/i,
+  /\bcycle through\b/i,
+  /\bin order\b/i,
+  /\bsequentially\b/i,
+  /по\s*очеред/i,
+  /поочеред/i,
+  /по\s*кругу/i,
+  /черед/i,
+  /ротац/i,
+];
+
+const PRESERVE_WEEKLY_FREQUENCY_PATTERNS = [
+  /не\s+предлагай.*(?:частот|кол-?во|количество).*(?:трениров|занят).*(?:в\s+недел|\/нед)/i,
+  /не\s+меняй.*(?:частот|кол-?во|количество).*(?:трениров|занят).*(?:в\s+недел|\/нед)/i,
+  /не\s+предлагай.*изменени.*(?:трениров|занят).*(?:в\s+недел|\/нед)/i,
+  /не\s+меняй.*недельн.*частот/i,
+  /\bdo not\b.*(?:change|adjust).*(?:training|workout|session).*(?:per\s+week|weekly)/i,
+  /\bdon't\b.*(?:change|adjust).*(?:training|workout|session).*(?:per\s+week|weekly)/i,
+  /\bdo not\b.*change.*weekly.*frequency/i,
+  /\bdon't\b.*change.*weekly.*frequency/i,
+];
+
+const PRESERVE_PROGRAM_COUNT_PATTERNS = [
+  /не\s+предлагай.*(?:изменени|меняй).*(?:кол-?во|количество).*(?:тренировок|дней).*(?:в\s+програм|сплит)/i,
+  /не\s+меняй.*(?:кол-?во|количество).*(?:тренировок|дней).*(?:в\s+програм|сплит)/i,
+  /\bdo not\b.*change.*(?:number|count).*(?:workouts|days).*(?:program|split)/i,
+  /\bdon't\b.*change.*(?:number|count).*(?:workouts|days).*(?:program|split)/i,
+];
+
+const STATED_WEEKLY_FREQUENCY_PATTERNS = [
+  /(\d+)\s*(?:раза?|трениров(?:ки|ок)?|занят(?:ия|ий)?)\s*в\s*недел/i,
+  /(\d+)\s*(?:days?|sessions?|workouts?)\s*(?:per|a)\s*week/i,
+];
+
 interface GoalSummary {
   primaryGoal: CoachProfile["primaryGoal"];
   currentWeight: number;
@@ -106,6 +169,69 @@ export function normalizeCoachAnalysisSettings(
   return {
     selectedProgramID,
     programComment: limitedProgramComment,
+  };
+}
+
+export function extractProgramCommentConstraints(
+  comment: string | undefined
+): ProgramCommentConstraints {
+  const rawComment = comment?.trim() ?? "";
+  const rollingSplitExecution = ROTATION_PATTERNS.some((pattern) =>
+    pattern.test(rawComment)
+  );
+  const preserveWeeklyFrequency = PRESERVE_WEEKLY_FREQUENCY_PATTERNS.some(
+    (pattern) => pattern.test(rawComment)
+  );
+  const preserveProgramWorkoutCount = PRESERVE_PROGRAM_COUNT_PATTERNS.some(
+    (pattern) => pattern.test(rawComment)
+  );
+  const statedWeeklyFrequency = STATED_WEEKLY_FREQUENCY_PATTERNS.reduce<
+    number | undefined
+  >((result, pattern) => {
+    if (result !== undefined) {
+      return result;
+    }
+
+    const match = rawComment.match(pattern);
+    const parsed = Number(match?.[1]);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+  }, undefined);
+
+  return {
+    rawComment,
+    rollingSplitExecution,
+    preserveWeeklyFrequency,
+    preserveProgramWorkoutCount,
+    statedWeeklyFrequency,
+  };
+}
+
+export function buildInferencePromptContext(
+  snapshot: CompactCoachSnapshot
+): InferencePromptContext {
+  const userConstraints = extractProgramCommentConstraints(
+    snapshot.coachAnalysisSettings.programComment
+  );
+
+  return {
+    localeIdentifier: snapshot.localeIdentifier,
+    profile: snapshot.profile,
+    coachAnalysisSettings: snapshot.coachAnalysisSettings,
+    userConstraints,
+    preferredProgram: snapshot.preferredProgram,
+    activeWorkout: snapshot.activeWorkout,
+    analytics: {
+      progress30Days: snapshot.analytics.progress30Days,
+      consistency: {
+        ...snapshot.analytics.consistency,
+        observedAverageWorkoutsPerWeek: observedAverageWorkoutsPerWeek(
+          snapshot.analytics.consistency
+        ),
+      },
+      recentPersonalRecords: snapshot.analytics.recentPersonalRecords,
+      relativeStrength: snapshot.analytics.relativeStrength,
+    },
+    recentFinishedSessions: snapshot.recentFinishedSessions,
   };
 }
 
@@ -884,6 +1010,20 @@ function recentAverageWorkoutsPerWeek(summary: ConsistencySummary): {
     average: Math.max(summary.weeklyTarget, 1),
     source: "target",
   };
+}
+
+function observedAverageWorkoutsPerWeek(
+  summary: CompactCoachSnapshot["analytics"]["consistency"]
+): number | undefined {
+  if (summary.recentWeeklyActivity.length === 0) {
+    return undefined;
+  }
+
+  const total = summary.recentWeeklyActivity.reduce(
+    (partialResult, item) => partialResult + item.workoutsCount,
+    0
+  );
+  return total / summary.recentWeeklyActivity.length;
 }
 
 function compatibilityMessage(

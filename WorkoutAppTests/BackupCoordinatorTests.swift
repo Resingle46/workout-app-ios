@@ -1496,6 +1496,69 @@ final class BackupCoordinatorTests: XCTestCase {
     }
 
     @MainActor
+    func testCoachFallbackInsightsStayNeutralForRotatingSplitComment() {
+        let exercise = makeExercise(
+            id: UUID(uuidString: "ABAB1111-1111-1111-1111-111111111111")!,
+            name: "Bench Press"
+        )
+        let workouts = [
+            WorkoutTemplate(title: "Chest", focus: "Chest", exercises: []),
+            WorkoutTemplate(title: "Arms", focus: "Arms", exercises: []),
+            WorkoutTemplate(title: "Legs A", focus: "Quads", exercises: []),
+            WorkoutTemplate(title: "Legs B", focus: "Hamstrings", exercises: []),
+            WorkoutTemplate(title: "Back", focus: "Back", exercises: [])
+        ]
+        var snapshot = makeStatisticsSnapshot(
+            exercises: [exercise],
+            history: [
+                makeSession(
+                    startedAt: makeDate(year: 2024, month: 3, day: 20, hour: 10),
+                    endedAt: makeDate(year: 2024, month: 3, day: 20, hour: 11),
+                    exerciseLogs: [makeExerciseLog(exerciseID: exercise.id, sets: [(80, 5, true)])]
+                ),
+                makeSession(
+                    startedAt: makeDate(year: 2024, month: 3, day: 24, hour: 10),
+                    endedAt: makeDate(year: 2024, month: 3, day: 24, hour: 11),
+                    exerciseLogs: [makeExerciseLog(exerciseID: exercise.id, sets: [(85, 5, true)])]
+                )
+            ]
+        )
+        snapshot.programs = [
+            WorkoutProgram(title: "4-day split", workouts: workouts)
+        ]
+        snapshot.profile = UserProfile(
+            sex: "M",
+            age: 29,
+            weight: 88,
+            height: 182,
+            appLanguageCode: "en",
+            primaryGoal: .strength,
+            experienceLevel: .intermediate,
+            weeklyWorkoutTarget: 3,
+            targetBodyWeight: nil
+        )
+        snapshot.coachAnalysisSettings = CoachAnalysisSettings(
+            selectedProgramID: snapshot.programs.first?.id,
+            programComment: """
+            I train 3 times per week and rotate through this 4-day split in order.
+            Do not suggest changing weekly training frequency or the number of workout days in the program.
+            """
+        )
+
+        let store = AppStore()
+        store.apply(snapshot: snapshot)
+
+        let insights = CoachFallbackInsightsFactory.make(from: store)
+        let combinedRecommendations = insights.recommendations.joined(separator: " ").lowercased()
+
+        XCTAssertTrue(insights.suggestedChanges.isEmpty)
+        XCTAssertFalse(combinedRecommendations.contains("saved program has"))
+        XCTAssertFalse(combinedRecommendations.contains("weekly target is"))
+        XCTAssertFalse(combinedRecommendations.contains("add a workout day"))
+        XCTAssertFalse(combinedRecommendations.contains("remove a workout day"))
+    }
+
+    @MainActor
     func testAppStoreClearsInvalidSelectedCoachProgramDuringSnapshotApply() {
         let baseSnapshot = makeSnapshot()
         let removedProgramID = baseSnapshot.programs[0].id
