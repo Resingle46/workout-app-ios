@@ -18,7 +18,22 @@
   },
   "kv_namespaces": [
     {
-      "binding": "COACH_STATE_KV"
+      "binding": "COACH_STATE_KV",
+      "id": "dd8316fdfa424f18b23e849c35c264a3"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "BACKUPS_R2",
+      "bucket_name": "workoutapp-user-backups-prod"
+    }
+  ],
+  "d1_databases": [
+    {
+      "binding": "APP_META_DB",
+      "database_name": "workoutapp-coach-state-prod",
+      "database_id": "8dbc068a-0dc6-4df8-ac13-e65de326d003",
+      "migrations_dir": "migrations"
     }
   ],
   "vars": {

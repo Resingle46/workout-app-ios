@@ -1577,7 +1577,7 @@ final class BackupCoordinatorTests: XCTestCase {
     }
 
     @MainActor
-    func testCoachStoreIncludesInlineSnapshotWhenDirty() async throws {
+    func testCoachStoreIncludesInlineSnapshotWhenCloudSyncIsUnavailable() async throws {
         let store = AppStore()
         store.apply(snapshot: makeSnapshot())
         let recorder = SnapshotRequestRecorder()
@@ -1588,7 +1588,7 @@ final class BackupCoordinatorTests: XCTestCase {
         }
 
         let coachStore = CoachStore(
-            client: RecordingSnapshotCoachAPIClient(recorder: recorder),
+            client: RecordingLegacySnapshotFallbackCoachAPIClient(recorder: recorder),
             configuration: CoachRuntimeConfiguration(
                 isFeatureEnabled: true,
                 backendBaseURL: URL(string: "https://example.com"),
@@ -1666,6 +1666,133 @@ final class BackupCoordinatorTests: XCTestCase {
         XCTAssertFalse(reloadedStore.hasLocalOverrides)
         XCTAssertEqual(reloadedStore.backendBaseURLText, "")
         XCTAssertEqual(reloadedStore.internalBearerToken, "")
+    }
+
+    @MainActor
+    func testCloudSyncStoreUploadsLocalSnapshotAndEnablesServerSideContext() async throws {
+        let suiteName = "CloudSyncUploadTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        let coachLocalStateStore = CoachLocalStateStore(
+            defaults: defaults,
+            generatedInstallID: "install-cloud"
+        )
+        let client = CloudSyncRecordingCoachAPIClient(
+            reconcileResponses: [
+                CloudBackupReconcileResponse(action: .upload, remote: nil)
+            ]
+        )
+        let cloudSyncStore = CloudSyncStore(
+            client: client,
+            configuration: CoachRuntimeConfiguration(
+                isFeatureEnabled: true,
+                backendBaseURL: URL(string: "https://example.com"),
+                internalBearerToken: "internal-token"
+            ),
+            installID: coachLocalStateStore.installID,
+            localStateStore: CloudSyncLocalStateStore(defaults: defaults)
+        )
+        let store = AppStore()
+        store.apply(snapshot: makeSnapshot())
+
+        let didSync = await cloudSyncStore.syncIfNeeded(using: store)
+
+        XCTAssertTrue(didSync)
+        XCTAssertTrue(cloudSyncStore.canUseServerSideContext(using: store))
+        XCTAssertNil(cloudSyncStore.pendingRemoteRestore)
+
+        let uploadRequests = await client.uploadRequests
+        XCTAssertEqual(uploadRequests.count, 1)
+        XCTAssertEqual(uploadRequests.first?.installID, "install-cloud")
+        XCTAssertEqual(uploadRequests.first?.snapshot.profile.weight, 88)
+    }
+
+    @MainActor
+    func testCloudSyncStorePromptsForRemoteRestoreAndAppliesConfirmedBackup() async throws {
+        let suiteName = "CloudSyncRestoreTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        let coachLocalStateStore = CoachLocalStateStore(
+            defaults: defaults,
+            generatedInstallID: "install-cloud"
+        )
+        let remoteSnapshot = AppSnapshot(
+            programs: [],
+            exercises: [],
+            history: [],
+            profile: UserProfile(sex: "M", age: 31, weight: 96, height: 182, appLanguageCode: "en"),
+            coachAnalysisSettings: .empty
+        )
+        let remoteHead = CloudBackupHead(
+            installID: "install-cloud",
+            backupVersion: 3,
+            backupHash: "remote-hash",
+            r2Key: "installs/install-cloud/backups/v000003-remote-hash.json.gz",
+            uploadedAt: Date(timeIntervalSince1970: 1_710_000_000),
+            clientSourceModifiedAt: nil,
+            selectedProgramID: nil,
+            programComment: "",
+            coachStateVersion: 2,
+            schemaVersion: 2,
+            compression: "gzip",
+            sizeBytes: 1024
+        )
+        let client = CloudSyncRecordingCoachAPIClient(
+            reconcileResponses: [
+                CloudBackupReconcileResponse(action: .download, remote: remoteHead)
+            ],
+            downloadResponse: CloudBackupDownloadResponse(
+                remote: remoteHead,
+                backup: CloudBackupEnvelope(
+                    schemaVersion: 2,
+                    installID: "install-cloud",
+                    backupHash: "remote-hash",
+                    uploadedAt: Date(timeIntervalSince1970: 1_710_000_000),
+                    clientSourceModifiedAt: nil,
+                    appVersion: "1.0",
+                    buildNumber: "1",
+                    snapshot: remoteSnapshot
+                )
+            )
+        )
+        let cloudSyncStore = CloudSyncStore(
+            client: client,
+            configuration: CoachRuntimeConfiguration(
+                isFeatureEnabled: true,
+                backendBaseURL: URL(string: "https://example.com"),
+                internalBearerToken: "internal-token"
+            ),
+            installID: coachLocalStateStore.installID,
+            localStateStore: CloudSyncLocalStateStore(defaults: defaults)
+        )
+        let store = AppStore()
+        let seed = SeedData.make()
+        store.apply(
+            snapshot: AppSnapshot(
+                programs: seed.programs,
+                exercises: seed.exercises,
+                history: [],
+                profile: .empty,
+                coachAnalysisSettings: .empty
+            )
+        )
+
+        let didSync = await cloudSyncStore.syncIfNeeded(using: store, allowUserPrompt: true)
+
+        XCTAssertFalse(didSync)
+        XCTAssertEqual(cloudSyncStore.pendingRemoteRestore?.response.remote.backupVersion, 3)
+
+        cloudSyncStore.confirmPendingRemoteRestore(using: store)
+
+        XCTAssertEqual(store.profile.weight, 96)
+        XCTAssertTrue(cloudSyncStore.canUseServerSideContext(using: store))
+        XCTAssertNil(cloudSyncStore.pendingRemoteRestore)
     }
 
     private func backupFiles(in folderURL: URL) throws -> [URL] {
@@ -1875,6 +2002,118 @@ private final class TestClock: @unchecked Sendable {
     }
 }
 
+private actor CloudSyncUploadRecorder {
+    private(set) var requests: [CloudBackupUploadRequest] = []
+
+    func record(_ request: CloudBackupUploadRequest) {
+        requests.append(request)
+    }
+
+    var values: [CloudBackupUploadRequest] {
+        requests
+    }
+}
+
+private struct CloudSyncRecordingCoachAPIClient: CoachAPIClient {
+    let reconcileResponses: [CloudBackupReconcileResponse]
+    var downloadResponse: CloudBackupDownloadResponse? = nil
+
+    private let uploadRecorder = CloudSyncUploadRecorder()
+    private let reconcileCursor: ReconcileCursor
+
+    init(
+        reconcileResponses: [CloudBackupReconcileResponse],
+        downloadResponse: CloudBackupDownloadResponse? = nil
+    ) {
+        self.reconcileResponses = reconcileResponses
+        self.downloadResponse = downloadResponse
+        self.reconcileCursor = ReconcileCursor()
+    }
+
+    var uploadRequests: [CloudBackupUploadRequest] {
+        get async {
+            await uploadRecorder.values
+        }
+    }
+
+    func syncSnapshot(_ request: CoachSnapshotSyncRequest) async throws -> CoachSnapshotSyncResponse {
+        CoachSnapshotSyncResponse(acceptedHash: request.snapshotHash, storedAt: request.snapshotUpdatedAt)
+    }
+
+    func reconcileBackup(_ request: CloudBackupReconcileRequest) async throws -> CloudBackupReconcileResponse {
+        let index = await reconcileCursor.nextIndex()
+        return reconcileResponses[min(index, reconcileResponses.count - 1)]
+    }
+
+    func uploadBackup(_ request: CloudBackupUploadRequest) async throws -> CloudBackupHead {
+        await uploadRecorder.record(request)
+        let backupHash = request.backupHash ?? "upload-hash"
+        return CloudBackupHead(
+            installID: request.installID,
+            backupVersion: 1,
+            backupHash: backupHash,
+            r2Key: "installs/\(request.installID)/backups/v000001-\(backupHash).json.gz",
+            uploadedAt: request.clientSourceModifiedAt ?? .now,
+            clientSourceModifiedAt: request.clientSourceModifiedAt,
+            selectedProgramID: request.snapshot.coachAnalysisSettings.selectedProgramID,
+            programComment: request.snapshot.coachAnalysisSettings.programComment,
+            coachStateVersion: 1,
+            schemaVersion: 2,
+            compression: "gzip",
+            sizeBytes: 1024
+        )
+    }
+
+    func downloadBackup(installID: String, version: Int?) async throws -> CloudBackupDownloadResponse {
+        if let downloadResponse {
+            return downloadResponse
+        }
+
+        throw StubCoachError.failedInsights
+    }
+
+    func updateCoachPreferences(_ request: CloudCoachPreferencesUpdateRequest) async throws -> CloudCoachPreferencesUpdateResponse {
+        CloudCoachPreferencesUpdateResponse(
+            installID: request.installID,
+            selectedProgramID: request.selectedProgramID,
+            programComment: request.programComment,
+            coachStateVersion: 1,
+            updatedAt: .now
+        )
+    }
+
+    func fetchProfileInsights(
+        locale: String,
+        snapshotEnvelope: CoachSnapshotEnvelope,
+        capabilityScope: CoachCapabilityScope,
+        runtimeContextDelta: CoachRuntimeContextDelta?
+    ) async throws -> CoachProfileInsights {
+        CoachProfileInsights(summary: "Remote summary", recommendations: ["Remote recommendation"], suggestedChanges: [])
+    }
+
+    func sendChat(
+        locale: String,
+        question: String,
+        clientRecentTurns: [CoachConversationMessage],
+        snapshotEnvelope: CoachSnapshotEnvelope,
+        capabilityScope: CoachCapabilityScope,
+        runtimeContextDelta: CoachRuntimeContextDelta?
+    ) async throws -> CoachChatResponse {
+        CoachChatResponse(answerMarkdown: "Coach answer", responseID: "response-1", followUps: [], suggestedChanges: [])
+    }
+
+    func deleteRemoteState(installID: String) async throws {}
+}
+
+private actor ReconcileCursor {
+    private var index = 0
+
+    func nextIndex() -> Int {
+        defer { index += 1 }
+        return index
+    }
+}
+
 private struct StubCoachAPIClient: CoachAPIClient {
     let shouldFailInsights: Bool
     let shouldFailChat: Bool
@@ -1886,10 +2125,81 @@ private struct StubCoachAPIClient: CoachAPIClient {
         )
     }
 
+    func reconcileBackup(_ request: CloudBackupReconcileRequest) async throws -> CloudBackupReconcileResponse {
+        CloudBackupReconcileResponse(
+            action: .upload,
+            remote: nil
+        )
+    }
+
+    func uploadBackup(_ request: CloudBackupUploadRequest) async throws -> CloudBackupHead {
+        CloudBackupHead(
+            installID: request.installID,
+            backupVersion: 1,
+            backupHash: request.backupHash ?? "cloud-hash",
+            r2Key: "installs/\(request.installID)/backups/v000001-cloud-hash.json.gz",
+            uploadedAt: request.clientSourceModifiedAt ?? .now,
+            clientSourceModifiedAt: request.clientSourceModifiedAt,
+            selectedProgramID: request.snapshot.coachAnalysisSettings.selectedProgramID,
+            programComment: request.snapshot.coachAnalysisSettings.programComment,
+            coachStateVersion: 1,
+            schemaVersion: 2,
+            compression: "gzip",
+            sizeBytes: 1024
+        )
+    }
+
+    func downloadBackup(installID: String, version: Int?) async throws -> CloudBackupDownloadResponse {
+        let snapshot = AppSnapshot(
+            programs: [],
+            exercises: [],
+            history: [],
+            profile: .empty,
+            coachAnalysisSettings: .empty
+        )
+        return CloudBackupDownloadResponse(
+            remote: CloudBackupHead(
+                installID: installID,
+                backupVersion: version ?? 1,
+                backupHash: "cloud-hash",
+                r2Key: "installs/\(installID)/backups/v000001-cloud-hash.json.gz",
+                uploadedAt: .now,
+                clientSourceModifiedAt: nil,
+                selectedProgramID: nil,
+                programComment: "",
+                coachStateVersion: 1,
+                schemaVersion: 2,
+                compression: "gzip",
+                sizeBytes: 1024
+            ),
+            backup: CloudBackupEnvelope(
+                schemaVersion: 2,
+                installID: installID,
+                backupHash: "cloud-hash",
+                uploadedAt: .now,
+                clientSourceModifiedAt: nil,
+                appVersion: "1.0",
+                buildNumber: "1",
+                snapshot: snapshot
+            )
+        )
+    }
+
+    func updateCoachPreferences(_ request: CloudCoachPreferencesUpdateRequest) async throws -> CloudCoachPreferencesUpdateResponse {
+        CloudCoachPreferencesUpdateResponse(
+            installID: request.installID,
+            selectedProgramID: request.selectedProgramID,
+            programComment: request.programComment,
+            coachStateVersion: 1,
+            updatedAt: .now
+        )
+    }
+
     func fetchProfileInsights(
         locale: String,
         snapshotEnvelope: CoachSnapshotEnvelope,
-        capabilityScope: CoachCapabilityScope
+        capabilityScope: CoachCapabilityScope,
+        runtimeContextDelta: CoachRuntimeContextDelta?
     ) async throws -> CoachProfileInsights {
         if shouldFailInsights {
             throw StubCoachError.failedInsights
@@ -1907,7 +2217,8 @@ private struct StubCoachAPIClient: CoachAPIClient {
         question: String,
         clientRecentTurns: [CoachConversationMessage],
         snapshotEnvelope: CoachSnapshotEnvelope,
-        capabilityScope: CoachCapabilityScope
+        capabilityScope: CoachCapabilityScope,
+        runtimeContextDelta: CoachRuntimeContextDelta?
     ) async throws -> CoachChatResponse {
         if shouldFailChat {
             throw StubCoachError.failedChat
@@ -1959,10 +2270,71 @@ private struct RecordingCoachAPIClient: CoachAPIClient {
         )
     }
 
+    func reconcileBackup(_ request: CloudBackupReconcileRequest) async throws -> CloudBackupReconcileResponse {
+        CloudBackupReconcileResponse(action: .upload, remote: nil)
+    }
+
+    func uploadBackup(_ request: CloudBackupUploadRequest) async throws -> CloudBackupHead {
+        CloudBackupHead(
+            installID: request.installID,
+            backupVersion: 1,
+            backupHash: request.backupHash ?? "cloud-hash",
+            r2Key: "installs/\(request.installID)/backups/v000001-cloud-hash.json.gz",
+            uploadedAt: request.clientSourceModifiedAt ?? .now,
+            clientSourceModifiedAt: request.clientSourceModifiedAt,
+            selectedProgramID: request.snapshot.coachAnalysisSettings.selectedProgramID,
+            programComment: request.snapshot.coachAnalysisSettings.programComment,
+            coachStateVersion: 1,
+            schemaVersion: 2,
+            compression: "gzip",
+            sizeBytes: 1024
+        )
+    }
+
+    func downloadBackup(installID: String, version: Int?) async throws -> CloudBackupDownloadResponse {
+        CloudBackupDownloadResponse(
+            remote: CloudBackupHead(
+                installID: installID,
+                backupVersion: version ?? 1,
+                backupHash: "cloud-hash",
+                r2Key: "installs/\(installID)/backups/v000001-cloud-hash.json.gz",
+                uploadedAt: .now,
+                clientSourceModifiedAt: nil,
+                selectedProgramID: nil,
+                programComment: "",
+                coachStateVersion: 1,
+                schemaVersion: 2,
+                compression: "gzip",
+                sizeBytes: 1024
+            ),
+            backup: CloudBackupEnvelope(
+                schemaVersion: 2,
+                installID: installID,
+                backupHash: "cloud-hash",
+                uploadedAt: .now,
+                clientSourceModifiedAt: nil,
+                appVersion: "1.0",
+                buildNumber: "1",
+                snapshot: AppSnapshot(programs: [], exercises: [], history: [], profile: .empty, coachAnalysisSettings: .empty)
+            )
+        )
+    }
+
+    func updateCoachPreferences(_ request: CloudCoachPreferencesUpdateRequest) async throws -> CloudCoachPreferencesUpdateResponse {
+        CloudCoachPreferencesUpdateResponse(
+            installID: request.installID,
+            selectedProgramID: request.selectedProgramID,
+            programComment: request.programComment,
+            coachStateVersion: 1,
+            updatedAt: .now
+        )
+    }
+
     func fetchProfileInsights(
         locale: String,
         snapshotEnvelope: CoachSnapshotEnvelope,
-        capabilityScope: CoachCapabilityScope
+        capabilityScope: CoachCapabilityScope,
+        runtimeContextDelta: CoachRuntimeContextDelta?
     ) async throws -> CoachProfileInsights {
         CoachProfileInsights(
             summary: "Remote summary",
@@ -1976,7 +2348,8 @@ private struct RecordingCoachAPIClient: CoachAPIClient {
         question: String,
         clientRecentTurns: [CoachConversationMessage],
         snapshotEnvelope: CoachSnapshotEnvelope,
-        capabilityScope: CoachCapabilityScope
+        capabilityScope: CoachCapabilityScope,
+        runtimeContextDelta: CoachRuntimeContextDelta?
     ) async throws -> CoachChatResponse {
         await recorder.record(
             RecordedCoachChatRequest(
@@ -2006,10 +2379,71 @@ private struct RecordingSnapshotCoachAPIClient: CoachAPIClient {
         )
     }
 
+    func reconcileBackup(_ request: CloudBackupReconcileRequest) async throws -> CloudBackupReconcileResponse {
+        CloudBackupReconcileResponse(action: .upload, remote: nil)
+    }
+
+    func uploadBackup(_ request: CloudBackupUploadRequest) async throws -> CloudBackupHead {
+        CloudBackupHead(
+            installID: request.installID,
+            backupVersion: 1,
+            backupHash: request.backupHash ?? "cloud-hash",
+            r2Key: "installs/\(request.installID)/backups/v000001-cloud-hash.json.gz",
+            uploadedAt: request.clientSourceModifiedAt ?? .now,
+            clientSourceModifiedAt: request.clientSourceModifiedAt,
+            selectedProgramID: request.snapshot.coachAnalysisSettings.selectedProgramID,
+            programComment: request.snapshot.coachAnalysisSettings.programComment,
+            coachStateVersion: 1,
+            schemaVersion: 2,
+            compression: "gzip",
+            sizeBytes: 1024
+        )
+    }
+
+    func downloadBackup(installID: String, version: Int?) async throws -> CloudBackupDownloadResponse {
+        CloudBackupDownloadResponse(
+            remote: CloudBackupHead(
+                installID: installID,
+                backupVersion: version ?? 1,
+                backupHash: "cloud-hash",
+                r2Key: "installs/\(installID)/backups/v000001-cloud-hash.json.gz",
+                uploadedAt: .now,
+                clientSourceModifiedAt: nil,
+                selectedProgramID: nil,
+                programComment: "",
+                coachStateVersion: 1,
+                schemaVersion: 2,
+                compression: "gzip",
+                sizeBytes: 1024
+            ),
+            backup: CloudBackupEnvelope(
+                schemaVersion: 2,
+                installID: installID,
+                backupHash: "cloud-hash",
+                uploadedAt: .now,
+                clientSourceModifiedAt: nil,
+                appVersion: "1.0",
+                buildNumber: "1",
+                snapshot: AppSnapshot(programs: [], exercises: [], history: [], profile: .empty, coachAnalysisSettings: .empty)
+            )
+        )
+    }
+
+    func updateCoachPreferences(_ request: CloudCoachPreferencesUpdateRequest) async throws -> CloudCoachPreferencesUpdateResponse {
+        CloudCoachPreferencesUpdateResponse(
+            installID: request.installID,
+            selectedProgramID: request.selectedProgramID,
+            programComment: request.programComment,
+            coachStateVersion: 1,
+            updatedAt: .now
+        )
+    }
+
     func fetchProfileInsights(
         locale: String,
         snapshotEnvelope: CoachSnapshotEnvelope,
-        capabilityScope: CoachCapabilityScope
+        capabilityScope: CoachCapabilityScope,
+        runtimeContextDelta: CoachRuntimeContextDelta?
     ) async throws -> CoachProfileInsights {
         await recorder.record(
             RecordedCoachSnapshotRequest(snapshotEnvelope: snapshotEnvelope)
@@ -2027,7 +2461,70 @@ private struct RecordingSnapshotCoachAPIClient: CoachAPIClient {
         question: String,
         clientRecentTurns: [CoachConversationMessage],
         snapshotEnvelope: CoachSnapshotEnvelope,
-        capabilityScope: CoachCapabilityScope
+        capabilityScope: CoachCapabilityScope,
+        runtimeContextDelta: CoachRuntimeContextDelta?
+    ) async throws -> CoachChatResponse {
+        CoachChatResponse(
+            answerMarkdown: "Coach answer",
+            responseID: "response-1",
+            followUps: ["Next question"],
+            suggestedChanges: []
+        )
+    }
+
+    func deleteRemoteState(installID: String) async throws {}
+}
+
+private struct RecordingLegacySnapshotFallbackCoachAPIClient: CoachAPIClient {
+    let recorder: SnapshotRequestRecorder
+
+    func syncSnapshot(_ request: CoachSnapshotSyncRequest) async throws -> CoachSnapshotSyncResponse {
+        CoachSnapshotSyncResponse(
+            acceptedHash: request.snapshotHash,
+            storedAt: request.snapshotUpdatedAt
+        )
+    }
+
+    func reconcileBackup(_ request: CloudBackupReconcileRequest) async throws -> CloudBackupReconcileResponse {
+        throw StubCoachError.failedInsights
+    }
+
+    func uploadBackup(_ request: CloudBackupUploadRequest) async throws -> CloudBackupHead {
+        throw StubCoachError.failedInsights
+    }
+
+    func downloadBackup(installID: String, version: Int?) async throws -> CloudBackupDownloadResponse {
+        throw StubCoachError.failedInsights
+    }
+
+    func updateCoachPreferences(_ request: CloudCoachPreferencesUpdateRequest) async throws -> CloudCoachPreferencesUpdateResponse {
+        throw StubCoachError.failedInsights
+    }
+
+    func fetchProfileInsights(
+        locale: String,
+        snapshotEnvelope: CoachSnapshotEnvelope,
+        capabilityScope: CoachCapabilityScope,
+        runtimeContextDelta: CoachRuntimeContextDelta?
+    ) async throws -> CoachProfileInsights {
+        await recorder.record(
+            RecordedCoachSnapshotRequest(snapshotEnvelope: snapshotEnvelope)
+        )
+
+        return CoachProfileInsights(
+            summary: "Remote summary",
+            recommendations: ["Remote recommendation"],
+            suggestedChanges: []
+        )
+    }
+
+    func sendChat(
+        locale: String,
+        question: String,
+        clientRecentTurns: [CoachConversationMessage],
+        snapshotEnvelope: CoachSnapshotEnvelope,
+        capabilityScope: CoachCapabilityScope,
+        runtimeContextDelta: CoachRuntimeContextDelta?
     ) async throws -> CoachChatResponse {
         CoachChatResponse(
             answerMarkdown: "Coach answer",

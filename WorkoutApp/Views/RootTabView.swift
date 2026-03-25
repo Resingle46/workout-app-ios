@@ -150,6 +150,7 @@ struct RootTabBarPresentationResolver {
 struct RootTabView: View {
     @Environment(AppStore.self) private var store
     @Environment(CoachStore.self) private var coachStore
+    @Environment(CloudSyncStore.self) private var cloudSyncStore
     @State private var showBackupSetupPrompt = false
     @State private var launchBackupPickerMode: BackupDocumentPickerMode?
     @State private var launchRestoreRequest: BackupRestoreRequest?
@@ -231,6 +232,27 @@ struct RootTabView: View {
                     secondaryButton: .cancel(Text("backup.setup.restore_later"))
                 )
             }
+            .alert(
+                cloudRestoreAlertTitle,
+                isPresented: Binding(
+                    get: { cloudSyncStore.pendingRemoteRestore != nil },
+                    set: { isPresented in
+                        if !isPresented, cloudSyncStore.pendingRemoteRestore != nil {
+                            cloudSyncStore.dismissPendingRemoteRestore()
+                        }
+                    }
+                ),
+                presenting: cloudSyncStore.pendingRemoteRestore
+            ) { _ in
+                Button("Restore Remote") {
+                    cloudSyncStore.confirmPendingRemoteRestore(using: store)
+                }
+                Button("Keep Local", role: .cancel) {
+                    cloudSyncStore.dismissPendingRemoteRestore()
+                }
+            } message: { pending in
+                Text(cloudRestoreAlertMessage(for: pending))
+            }
         }
     }
 
@@ -302,6 +324,38 @@ struct RootTabView: View {
             .padding(.horizontal, 16)
             .padding(.top, 8)
             .padding(.bottom, 10)
+        }
+    }
+
+    private var cloudRestoreAlertTitle: String {
+        guard let pending = cloudSyncStore.pendingRemoteRestore else {
+            return "Cloud Backup"
+        }
+
+        switch pending.mode {
+        case .restore:
+            return "Cloud Backup Found"
+        case .conflict:
+            return "Remote Backup Conflict"
+        }
+    }
+
+    private func cloudRestoreAlertMessage(for pending: CloudPendingRemoteRestore) -> String {
+        let uploadedAt = pending.response.remote.uploadedAt.formatted(
+            .dateTime
+                .year()
+                .month(.abbreviated)
+                .day()
+                .hour()
+                .minute()
+                .locale(store.locale)
+        )
+
+        switch pending.mode {
+        case .restore:
+            return "A cloud backup from \(uploadedAt) is available for this install. Restore it now?"
+        case .conflict:
+            return "The cloud backup from \(uploadedAt) differs from the local data on this device. Restore the remote backup now?"
         }
     }
 }

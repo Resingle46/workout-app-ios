@@ -209,10 +209,130 @@ final class CoachLocalStateStore {
         defaults.removeObject(forKey: PreferenceKey.lastAcceptedSnapshotAt)
     }
 
+    var userDefaults: UserDefaults {
+        defaults
+    }
+
     private enum PreferenceKey {
         static let installID = "coach.runtime.install_id"
         static let lastAcceptedSnapshotHash = "coach.runtime.last_accepted_snapshot_hash"
         static let lastAcceptedSnapshotAt = "coach.runtime.last_accepted_snapshot_at"
+    }
+}
+
+final class CloudSyncLocalStateStore {
+    private let defaults: UserDefaults
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+    }
+
+    var lastSyncedRemoteVersion: Int? {
+        integer(forKey: PreferenceKey.lastSyncedRemoteVersion)
+    }
+
+    var lastSyncedBackupHash: String? {
+        string(forKey: PreferenceKey.lastSyncedBackupHash)
+    }
+
+    var lastKnownRemoteVersion: Int? {
+        integer(forKey: PreferenceKey.lastKnownRemoteVersion)
+    }
+
+    var lastKnownRemoteBackupHash: String? {
+        string(forKey: PreferenceKey.lastKnownRemoteBackupHash)
+    }
+
+    var lastAppliedRemoteVersion: Int? {
+        integer(forKey: PreferenceKey.lastAppliedRemoteVersion)
+    }
+
+    var lastIgnoredRemoteVersion: Int? {
+        integer(forKey: PreferenceKey.lastIgnoredRemoteVersion)
+    }
+
+    var lastAppliedLocalBackupHash: String? {
+        string(forKey: PreferenceKey.lastAppliedLocalBackupHash)
+    }
+
+    func rememberRemoteHead(_ remote: CloudBackupHead?) {
+        guard let remote else {
+            return
+        }
+
+        defaults.set(remote.backupVersion, forKey: PreferenceKey.lastKnownRemoteVersion)
+        defaults.set(remote.backupHash, forKey: PreferenceKey.lastKnownRemoteBackupHash)
+    }
+
+    func markSynced(remote: CloudBackupHead) {
+        rememberRemoteHead(remote)
+        defaults.set(remote.backupVersion, forKey: PreferenceKey.lastSyncedRemoteVersion)
+        defaults.set(remote.backupHash, forKey: PreferenceKey.lastSyncedBackupHash)
+        defaults.removeObject(forKey: PreferenceKey.lastIgnoredRemoteVersion)
+    }
+
+    func markRemoteRestoreApplied(remote: CloudBackupHead, localBackupHash: String) {
+        markSynced(remote: remote)
+        defaults.set(remote.backupVersion, forKey: PreferenceKey.lastAppliedRemoteVersion)
+        defaults.set(remote.backupHash, forKey: PreferenceKey.lastAppliedRemoteBackupHash)
+        defaults.set(localBackupHash, forKey: PreferenceKey.lastAppliedLocalBackupHash)
+    }
+
+    func canUseServerSideContext(for localBackupHash: String) -> Bool {
+        (lastSyncedRemoteVersion != nil && lastSyncedBackupHash == localBackupHash) ||
+        (lastAppliedRemoteVersion != nil && lastAppliedLocalBackupHash == localBackupHash)
+    }
+
+    func markIgnored(remoteVersion: Int) {
+        defaults.set(remoteVersion, forKey: PreferenceKey.lastIgnoredRemoteVersion)
+    }
+
+    func resetSyncState() {
+        defaults.removeObject(forKey: PreferenceKey.lastSyncedRemoteVersion)
+        defaults.removeObject(forKey: PreferenceKey.lastSyncedBackupHash)
+        defaults.removeObject(forKey: PreferenceKey.lastKnownRemoteVersion)
+        defaults.removeObject(forKey: PreferenceKey.lastKnownRemoteBackupHash)
+        defaults.removeObject(forKey: PreferenceKey.lastAppliedRemoteVersion)
+        defaults.removeObject(forKey: PreferenceKey.lastAppliedRemoteBackupHash)
+        defaults.removeObject(forKey: PreferenceKey.lastAppliedLocalBackupHash)
+        defaults.removeObject(forKey: PreferenceKey.lastIgnoredRemoteVersion)
+    }
+
+    private func integer(forKey key: String) -> Int? {
+        guard defaults.object(forKey: key) != nil else {
+            return nil
+        }
+
+        let value = defaults.integer(forKey: key)
+        return value > 0 ? value : nil
+    }
+
+    private func string(forKey key: String) -> String? {
+        defaults.string(forKey: key)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .nilIfEmpty
+    }
+
+    private enum PreferenceKey {
+        static let lastSyncedRemoteVersion = "coach.cloud.last_synced_remote_version"
+        static let lastSyncedBackupHash = "coach.cloud.last_synced_backup_hash"
+        static let lastKnownRemoteVersion = "coach.cloud.last_known_remote_version"
+        static let lastKnownRemoteBackupHash = "coach.cloud.last_known_remote_hash"
+        static let lastAppliedRemoteVersion = "coach.cloud.last_applied_remote_version"
+        static let lastAppliedRemoteBackupHash = "coach.cloud.last_applied_remote_hash"
+        static let lastAppliedLocalBackupHash = "coach.cloud.last_applied_local_hash"
+        static let lastIgnoredRemoteVersion = "coach.cloud.last_ignored_remote_version"
+    }
+}
+
+enum CloudBackupHashing {
+    static func hash(for snapshot: AppSnapshot) throws -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(snapshot)
+        let digest = SHA256.hash(data: data)
+        return digest.map { String(format: "%02x", $0) }.joined()
     }
 }
 
@@ -265,10 +385,19 @@ enum CoachInsightsOrigin: Hashable, Sendable {
 protocol CoachAPIClient: Sendable {
     func syncSnapshot(_ request: CoachSnapshotSyncRequest) async throws -> CoachSnapshotSyncResponse
 
+    func reconcileBackup(_ request: CloudBackupReconcileRequest) async throws -> CloudBackupReconcileResponse
+
+    func uploadBackup(_ request: CloudBackupUploadRequest) async throws -> CloudBackupHead
+
+    func downloadBackup(installID: String, version: Int?) async throws -> CloudBackupDownloadResponse
+
+    func updateCoachPreferences(_ request: CloudCoachPreferencesUpdateRequest) async throws -> CloudCoachPreferencesUpdateResponse
+
     func fetchProfileInsights(
         locale: String,
         snapshotEnvelope: CoachSnapshotEnvelope,
-        capabilityScope: CoachCapabilityScope
+        capabilityScope: CoachCapabilityScope,
+        runtimeContextDelta: CoachRuntimeContextDelta?
     ) async throws -> CoachProfileInsights
 
     func sendChat(
@@ -276,7 +405,8 @@ protocol CoachAPIClient: Sendable {
         question: String,
         clientRecentTurns: [CoachConversationMessage],
         snapshotEnvelope: CoachSnapshotEnvelope,
-        capabilityScope: CoachCapabilityScope
+        capabilityScope: CoachCapabilityScope,
+        runtimeContextDelta: CoachRuntimeContextDelta?
     ) async throws -> CoachChatResponse
 
     func deleteRemoteState(installID: String) async throws
@@ -286,7 +416,7 @@ typealias CompactCoachSnapshot = CoachContextPayload
 
 struct CoachSnapshotEnvelope: Hashable, Sendable {
     var installID: String
-    var snapshotHash: String
+    var snapshotHash: String?
     var snapshot: CompactCoachSnapshot?
     var snapshotUpdatedAt: Date?
 }
@@ -306,9 +436,10 @@ struct CoachSnapshotSyncResponse: Codable, Hashable, Sendable {
 struct CoachProfileInsightsRequest: Codable, Sendable {
     var locale: String
     var installID: String
-    var snapshotHash: String
+    var snapshotHash: String?
     var snapshot: CompactCoachSnapshot?
     var snapshotUpdatedAt: Date?
+    var runtimeContextDelta: CoachRuntimeContextDelta?
     var capabilityScope: CoachCapabilityScope
 }
 
@@ -316,11 +447,93 @@ struct CoachChatRequest: Codable, Sendable {
     var locale: String
     var question: String
     var installID: String
-    var snapshotHash: String
+    var snapshotHash: String?
     var snapshot: CompactCoachSnapshot?
     var snapshotUpdatedAt: Date?
+    var runtimeContextDelta: CoachRuntimeContextDelta?
     var clientRecentTurns: [CoachConversationMessage]
     var capabilityScope: CoachCapabilityScope
+}
+
+enum CloudLocalStateKind: String, Codable, Hashable, Sendable {
+    case seed
+    case userData = "user_data"
+}
+
+enum CloudBackupReconcileAction: String, Codable, Hashable, Sendable {
+    case upload
+    case download
+    case noop
+    case conflict
+}
+
+struct CloudBackupHead: Codable, Hashable, Sendable {
+    var installID: String
+    var backupVersion: Int
+    var backupHash: String
+    var r2Key: String
+    var uploadedAt: Date
+    var clientSourceModifiedAt: Date?
+    var selectedProgramID: UUID?
+    var programComment: String
+    var coachStateVersion: Int
+    var schemaVersion: Int
+    var compression: String
+    var sizeBytes: Int
+}
+
+struct CloudBackupEnvelope: Codable, Hashable, Sendable {
+    var schemaVersion: Int
+    var installID: String
+    var backupHash: String
+    var uploadedAt: Date
+    var clientSourceModifiedAt: Date?
+    var appVersion: String
+    var buildNumber: String
+    var snapshot: AppSnapshot
+}
+
+struct CloudBackupReconcileRequest: Codable, Sendable {
+    var installID: String
+    var localBackupHash: String?
+    var localSourceModifiedAt: Date?
+    var lastSyncedRemoteVersion: Int?
+    var lastSyncedBackupHash: String?
+    var localStateKind: CloudLocalStateKind
+}
+
+struct CloudBackupReconcileResponse: Codable, Hashable, Sendable {
+    var action: CloudBackupReconcileAction
+    var remote: CloudBackupHead?
+}
+
+struct CloudBackupUploadRequest: Codable, Sendable {
+    var installID: String
+    var expectedRemoteVersion: Int?
+    var backupHash: String?
+    var clientSourceModifiedAt: Date?
+    var appVersion: String
+    var buildNumber: String
+    var snapshot: AppSnapshot
+}
+
+struct CloudBackupDownloadResponse: Codable, Hashable, Sendable {
+    var remote: CloudBackupHead
+    var backup: CloudBackupEnvelope
+}
+
+struct CloudCoachPreferencesUpdateRequest: Codable, Sendable {
+    var installID: String
+    var selectedProgramID: UUID?
+    var programComment: String
+}
+
+struct CloudCoachPreferencesUpdateResponse: Codable, Hashable, Sendable {
+    var installID: String
+    var selectedProgramID: UUID?
+    var programComment: String
+    var coachStateVersion: Int
+    var updatedAt: Date
 }
 
 struct CoachProfileInsights: Codable, Hashable, Sendable {
@@ -465,6 +678,10 @@ struct CoachActiveWorkoutContext: Codable, Hashable, Sendable {
     var exerciseCount: Int
     var completedSetsCount: Int
     var totalSetsCount: Int
+}
+
+struct CoachRuntimeContextDelta: Codable, Hashable, Sendable {
+    var activeWorkout: CoachActiveWorkoutContext?
 }
 
 struct CoachAnalyticsContext: Codable, Hashable, Sendable {
@@ -612,10 +829,91 @@ struct CoachAPIHTTPClient: CoachAPIClient {
         )
     }
 
+    func reconcileBackup(_ request: CloudBackupReconcileRequest) async throws -> CloudBackupReconcileResponse {
+        try await send(
+            path: "v1/backup/reconcile",
+            method: "POST",
+            body: request,
+            session: standardSession,
+            timeoutInterval: Self.standardRequestTimeoutInterval,
+            responseType: CloudBackupReconcileResponse.self
+        )
+    }
+
+    func uploadBackup(_ request: CloudBackupUploadRequest) async throws -> CloudBackupHead {
+        try await send(
+            path: "v1/backup",
+            method: "PUT",
+            body: request,
+            session: standardSession,
+            timeoutInterval: Self.standardRequestTimeoutInterval,
+            responseType: CloudBackupHead.self
+        )
+    }
+
+    func downloadBackup(installID: String, version: Int?) async throws -> CloudBackupDownloadResponse {
+        guard configuration.isFeatureEnabled else {
+            throw CoachClientError.featureDisabled
+        }
+        guard let baseURL = configuration.backendBaseURL else {
+            throw CoachClientError.missingBaseURL
+        }
+        guard let internalBearerToken = configuration.internalBearerToken else {
+            throw CoachClientError.missingAuthToken
+        }
+
+        var components = URLComponents(
+            url: baseURL.appending(path: "v1/backup/download"),
+            resolvingAgainstBaseURL: false
+        )
+        components?.queryItems = [
+            URLQueryItem(name: "installID", value: installID),
+            URLQueryItem(name: "version", value: version.map(String.init) ?? "current")
+        ]
+
+        guard let url = components?.url else {
+            throw CoachClientError.invalidResponse
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = Self.standardRequestTimeoutInterval
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("Bearer \(internalBearerToken)", forHTTPHeaderField: "Authorization")
+
+        let (data, response) = try await standardSession.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw CoachClientError.invalidResponse
+        }
+
+        guard (200...299).contains(httpResponse.statusCode) else {
+            throw CoachClientError.httpStatus(httpResponse.statusCode)
+        }
+
+        do {
+            return try Self.decoder.decode(CloudBackupDownloadResponse.self, from: data)
+        } catch {
+            throw CoachClientError.invalidResponse
+        }
+    }
+
+    func updateCoachPreferences(_ request: CloudCoachPreferencesUpdateRequest) async throws -> CloudCoachPreferencesUpdateResponse {
+        try await send(
+            path: "v1/coach/preferences",
+            method: "PATCH",
+            body: request,
+            session: standardSession,
+            timeoutInterval: Self.standardRequestTimeoutInterval,
+            responseType: CloudCoachPreferencesUpdateResponse.self
+        )
+    }
+
     func fetchProfileInsights(
         locale: String,
         snapshotEnvelope: CoachSnapshotEnvelope,
-        capabilityScope: CoachCapabilityScope
+        capabilityScope: CoachCapabilityScope,
+        runtimeContextDelta: CoachRuntimeContextDelta?
     ) async throws -> CoachProfileInsights {
         try await send(
             path: "v1/coach/profile-insights",
@@ -626,6 +924,7 @@ struct CoachAPIHTTPClient: CoachAPIClient {
                 snapshotHash: snapshotEnvelope.snapshotHash,
                 snapshot: snapshotEnvelope.snapshot,
                 snapshotUpdatedAt: snapshotEnvelope.snapshotUpdatedAt,
+                runtimeContextDelta: runtimeContextDelta,
                 capabilityScope: capabilityScope
             ),
             session: standardSession,
@@ -639,7 +938,8 @@ struct CoachAPIHTTPClient: CoachAPIClient {
         question: String,
         clientRecentTurns: [CoachConversationMessage],
         snapshotEnvelope: CoachSnapshotEnvelope,
-        capabilityScope: CoachCapabilityScope
+        capabilityScope: CoachCapabilityScope,
+        runtimeContextDelta: CoachRuntimeContextDelta?
     ) async throws -> CoachChatResponse {
         try await send(
             path: "v1/coach/chat",
@@ -651,6 +951,7 @@ struct CoachAPIHTTPClient: CoachAPIClient {
                 snapshotHash: snapshotEnvelope.snapshotHash,
                 snapshot: snapshotEnvelope.snapshot,
                 snapshotUpdatedAt: snapshotEnvelope.snapshotUpdatedAt,
+                runtimeContextDelta: runtimeContextDelta,
                 clientRecentTurns: clientRecentTurns,
                 capabilityScope: capabilityScope
             ),
@@ -747,6 +1048,15 @@ struct CoachContextBuilder {
     private static let recentFinishedSessionsLimit = 8
 
     @MainActor
+    func runtimeContextDelta(from store: AppStore) -> CoachRuntimeContextDelta? {
+        guard let activeWorkout = activeWorkoutContext(from: store) else {
+            return nil
+        }
+
+        return CoachRuntimeContextDelta(activeWorkout: activeWorkout)
+    }
+
+    @MainActor
     func build(from store: AppStore) -> CoachContextPayload {
         let progressSummary = store.profileProgressSummary()
         let goalSummary = store.profileGoalSummary()
@@ -798,16 +1108,7 @@ struct CoachContextBuilder {
                     }
                 )
             },
-            activeWorkout: store.activeSession.map { session in
-                CoachActiveWorkoutContext(
-                    workoutTemplateID: session.workoutTemplateID,
-                    title: session.title,
-                    startedAt: session.startedAt,
-                    exerciseCount: session.exercises.count,
-                    completedSetsCount: session.exercises.flatMap(\.sets).filter { $0.completedAt != nil }.count,
-                    totalSetsCount: session.exercises.flatMap(\.sets).count
-                )
-            },
+            activeWorkout: activeWorkoutContext(from: store),
             analytics: CoachAnalyticsContext(
                 progress30Days: CoachProgressSnapshotContext(
                     totalFinishedWorkouts: progressSummary.totalFinishedWorkouts,
@@ -922,6 +1223,19 @@ struct CoachContextBuilder {
                 )
             }
         )
+    }
+    @MainActor
+    private func activeWorkoutContext(from store: AppStore) -> CoachActiveWorkoutContext? {
+        store.activeSession.map { session in
+            CoachActiveWorkoutContext(
+                workoutTemplateID: session.workoutTemplateID,
+                title: session.title,
+                startedAt: session.startedAt,
+                exerciseCount: session.exercises.count,
+                completedSetsCount: session.exercises.flatMap(\.sets).filter { $0.completedAt != nil }.count,
+                totalSetsCount: session.exercises.flatMap(\.sets).count
+            )
+        }
     }
 }
 
@@ -1162,6 +1476,185 @@ private struct CoachPreferredProgramResolver {
     }
 }
 
+enum CloudRemoteDecisionMode: Hashable, Sendable {
+    case restore
+    case conflict
+}
+
+struct CloudPendingRemoteRestore: Identifiable, Hashable, Sendable {
+    let id: String
+    var mode: CloudRemoteDecisionMode
+    var response: CloudBackupDownloadResponse
+
+    init(mode: CloudRemoteDecisionMode, response: CloudBackupDownloadResponse) {
+        self.id = "\(mode)-\(response.remote.backupVersion)-\(response.remote.backupHash)"
+        self.mode = mode
+        self.response = response
+    }
+}
+
+@MainActor
+@Observable
+final class CloudSyncStore {
+    var isSyncInProgress = false
+    var lastSyncErrorDescription: String?
+    var pendingRemoteRestore: CloudPendingRemoteRestore?
+
+    @ObservationIgnored private var client: any CoachAPIClient
+    @ObservationIgnored private let localStateStore: CloudSyncLocalStateStore
+    @ObservationIgnored private let installID: String
+    private var configuration: CoachRuntimeConfiguration
+
+    init(
+        client: any CoachAPIClient,
+        configuration: CoachRuntimeConfiguration,
+        installID: String,
+        localStateStore: CloudSyncLocalStateStore = CloudSyncLocalStateStore()
+    ) {
+        self.client = client
+        self.configuration = configuration
+        self.installID = installID
+        self.localStateStore = localStateStore
+    }
+
+    func updateConfiguration(_ configuration: CoachRuntimeConfiguration) {
+        self.configuration = configuration
+        client = CoachAPIHTTPClient(configuration: configuration)
+        pendingRemoteRestore = nil
+        lastSyncErrorDescription = nil
+        localStateStore.resetSyncState()
+    }
+
+    func handleAppLaunch(using appStore: AppStore) async {
+        _ = await syncIfNeeded(using: appStore, allowUserPrompt: true)
+    }
+
+    func handleSceneDidEnterBackground(using appStore: AppStore) async {
+        _ = await syncIfNeeded(using: appStore, allowUserPrompt: false)
+    }
+
+    @discardableResult
+    func syncIfNeeded(
+        using appStore: AppStore,
+        allowUserPrompt: Bool = false
+    ) async -> Bool {
+        guard configuration.canUseRemoteCoach else {
+            return false
+        }
+        guard !isSyncInProgress else {
+            return false
+        }
+
+        isSyncInProgress = true
+        defer { isSyncInProgress = false }
+
+        do {
+            let snapshot = appStore.currentSnapshot()
+            let localBackupHash = try CloudBackupHashing.hash(for: snapshot)
+            if pendingRemoteRestore == nil,
+               localStateStore.canUseServerSideContext(for: localBackupHash) {
+                lastSyncErrorDescription = nil
+                return true
+            }
+            let reconcileResponse = try await client.reconcileBackup(
+                CloudBackupReconcileRequest(
+                    installID: installID,
+                    localBackupHash: localBackupHash,
+                    localSourceModifiedAt: appStore.localStateUpdatedAt,
+                    lastSyncedRemoteVersion: localStateStore.lastSyncedRemoteVersion,
+                    lastSyncedBackupHash: localStateStore.lastSyncedBackupHash,
+                    localStateKind: appStore.cloudLocalStateKind
+                )
+            )
+
+            localStateStore.rememberRemoteHead(reconcileResponse.remote)
+
+            switch reconcileResponse.action {
+            case .noop:
+                if let remote = reconcileResponse.remote {
+                    localStateStore.markSynced(remote: remote)
+                    pendingRemoteRestore = nil
+                    lastSyncErrorDescription = nil
+                    return true
+                }
+                return false
+
+            case .upload:
+                let uploaded = try await client.uploadBackup(
+                    CloudBackupUploadRequest(
+                        installID: installID,
+                        expectedRemoteVersion: reconcileResponse.remote?.backupVersion,
+                        backupHash: localBackupHash,
+                        clientSourceModifiedAt: appStore.localStateUpdatedAt,
+                        appVersion: BackupConstants.appVersion,
+                        buildNumber: BackupConstants.buildNumber,
+                        snapshot: snapshot
+                    )
+                )
+                localStateStore.markSynced(remote: uploaded)
+                pendingRemoteRestore = nil
+                lastSyncErrorDescription = nil
+                return true
+
+            case .download, .conflict:
+                guard let remote = reconcileResponse.remote else {
+                    return false
+                }
+                guard allowUserPrompt else {
+                    return false
+                }
+                guard localStateStore.lastIgnoredRemoteVersion != remote.backupVersion else {
+                    return false
+                }
+
+                let download = try await client.downloadBackup(installID: installID, version: nil)
+                pendingRemoteRestore = CloudPendingRemoteRestore(
+                    mode: reconcileResponse.action == .conflict ? .conflict : .restore,
+                    response: download
+                )
+                lastSyncErrorDescription = nil
+                return false
+            }
+        } catch {
+            lastSyncErrorDescription = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            return false
+        }
+    }
+
+    func confirmPendingRemoteRestore(using appStore: AppStore) {
+        guard let pendingRemoteRestore else {
+            return
+        }
+
+        appStore.apply(snapshot: pendingRemoteRestore.response.backup.snapshot)
+        let localBackupHash = (try? CloudBackupHashing.hash(for: appStore.currentSnapshot()))
+            ?? pendingRemoteRestore.response.remote.backupHash
+        localStateStore.markRemoteRestoreApplied(
+            remote: pendingRemoteRestore.response.remote,
+            localBackupHash: localBackupHash
+        )
+        self.pendingRemoteRestore = nil
+        lastSyncErrorDescription = nil
+    }
+
+    func dismissPendingRemoteRestore() {
+        guard let pendingRemoteRestore else {
+            return
+        }
+
+        localStateStore.markIgnored(remoteVersion: pendingRemoteRestore.response.remote.backupVersion)
+        self.pendingRemoteRestore = nil
+    }
+
+    func canUseServerSideContext(using appStore: AppStore) -> Bool {
+        guard let localBackupHash = try? CloudBackupHashing.hash(for: appStore.currentSnapshot()) else {
+            return false
+        }
+
+        return localStateStore.canUseServerSideContext(for: localBackupHash)
+    }
+}
+
 @MainActor
 @Observable
 final class CoachStore {
@@ -1177,6 +1670,7 @@ final class CoachStore {
     var programCommentDraft: String = ""
 
     @ObservationIgnored private var client: any CoachAPIClient
+    @ObservationIgnored private let cloudSyncStore: CloudSyncStore
     @ObservationIgnored private let contextBuilder: CoachContextBuilder
     @ObservationIgnored private let localStateStore: CoachLocalStateStore
     private var configuration: CoachRuntimeConfiguration
@@ -1186,12 +1680,19 @@ final class CoachStore {
         client: any CoachAPIClient,
         configuration: CoachRuntimeConfiguration,
         localStateStore: CoachLocalStateStore = CoachLocalStateStore(),
+        cloudSyncStore: CloudSyncStore? = nil,
         contextBuilder: CoachContextBuilder = CoachContextBuilder(),
         capabilityScope: CoachCapabilityScope = .draftChanges
     ) {
         self.client = client
         self.configuration = configuration
         self.localStateStore = localStateStore
+        self.cloudSyncStore = cloudSyncStore ?? CloudSyncStore(
+            client: client,
+            configuration: configuration,
+            installID: localStateStore.installID,
+            localStateStore: CloudSyncLocalStateStore(defaults: localStateStore.userDefaults)
+        )
         self.contextBuilder = contextBuilder
         self.capabilityScope = capabilityScope
     }
@@ -1207,6 +1708,7 @@ final class CoachStore {
     func updateConfiguration(_ configuration: CoachRuntimeConfiguration) {
         self.configuration = configuration
         client = CoachAPIHTTPClient(configuration: configuration)
+        cloudSyncStore.updateConfiguration(configuration)
         localStateStore.resetSnapshotAcknowledgement()
         profileInsights = nil
         profileInsightsOrigin = .fallback
@@ -1229,13 +1731,17 @@ final class CoachStore {
         guard configuration.canUseRemoteCoach else {
             return
         }
+        guard !cloudSyncStore.canUseServerSideContext(using: appStore) else {
+            return
+        }
 
         do {
             let snapshotPackage = try makeSnapshotPackage(
                 from: appStore,
                 forceInlineSnapshot: true
             )
-            guard let snapshot = snapshotPackage.envelope.snapshot,
+            guard let snapshotHash = snapshotPackage.envelope.snapshotHash,
+                  let snapshot = snapshotPackage.envelope.snapshot,
                   let snapshotUpdatedAt = snapshotPackage.envelope.snapshotUpdatedAt else {
                 return
             }
@@ -1243,7 +1749,7 @@ final class CoachStore {
             let response = try await client.syncSnapshot(
                 CoachSnapshotSyncRequest(
                     installID: snapshotPackage.envelope.installID,
-                    snapshotHash: snapshotPackage.envelope.snapshotHash,
+                    snapshotHash: snapshotHash,
                     snapshot: snapshot,
                     snapshotUpdatedAt: snapshotUpdatedAt
                 )
@@ -1271,11 +1777,21 @@ final class CoachStore {
         }
 
         do {
-            let snapshotPackage = try makeSnapshotPackage(from: appStore)
+            let canUseServerSideContext = await prepareCoachRequestState(
+                using: appStore,
+                allowUserPrompt: false
+            )
+            let snapshotPackage = try makeSnapshotPackage(
+                from: appStore,
+                preferServerSideContext: canUseServerSideContext
+            )
             let remoteInsights = try await client.fetchProfileInsights(
                 locale: appStore.selectedLanguageCode,
                 snapshotEnvelope: snapshotPackage.envelope,
-                capabilityScope: capabilityScope
+                capabilityScope: capabilityScope,
+                runtimeContextDelta: canUseServerSideContext
+                    ? contextBuilder.runtimeContextDelta(from: appStore)
+                    : nil
             )
             profileInsights = remoteInsights
             profileInsightsOrigin = .remote
@@ -1310,7 +1826,27 @@ final class CoachStore {
             settings.programComment = normalizedComment
         }
         syncAnalysisSettingsDrafts(using: appStore)
-        await syncSnapshotIfNeeded(using: appStore)
+
+        let canUseServerSideContext = await cloudSyncStore.syncIfNeeded(
+            using: appStore,
+            allowUserPrompt: false
+        )
+        if canUseServerSideContext {
+            do {
+                _ = try await client.updateCoachPreferences(
+                    CloudCoachPreferencesUpdateRequest(
+                        installID: localStateStore.installID,
+                        selectedProgramID: selectedProgramID,
+                        programComment: normalizedComment
+                    )
+                )
+            } catch {
+                // Leave the local save successful; the next sync can retry metadata propagation.
+            }
+        } else {
+            await syncSnapshotIfNeeded(using: appStore)
+        }
+
         await refreshProfileInsights(using: appStore)
 
         let minimumSavingStateDuration: TimeInterval = 1.35
@@ -1373,13 +1909,23 @@ final class CoachStore {
         }
 
         do {
-            let snapshotPackage = try makeSnapshotPackage(from: appStore)
+            let canUseServerSideContext = await prepareCoachRequestState(
+                using: appStore,
+                allowUserPrompt: false
+            )
+            let snapshotPackage = try makeSnapshotPackage(
+                from: appStore,
+                preferServerSideContext: canUseServerSideContext
+            )
             let response = try await client.sendChat(
                 locale: appStore.selectedLanguageCode,
                 question: trimmedQuestion,
                 clientRecentTurns: priorConversation,
                 snapshotEnvelope: snapshotPackage.envelope,
-                capabilityScope: capabilityScope
+                capabilityScope: capabilityScope,
+                runtimeContextDelta: canUseServerSideContext
+                    ? contextBuilder.runtimeContextDelta(from: appStore)
+                    : nil
             )
             replaceMessage(
                 id: placeholderID,
@@ -1427,18 +1973,41 @@ final class CoachStore {
         }
     }
 
+    private func prepareCoachRequestState(
+        using appStore: AppStore,
+        allowUserPrompt: Bool
+    ) async -> Bool {
+        let canUseServerSideContext = await cloudSyncStore.syncIfNeeded(
+            using: appStore,
+            allowUserPrompt: allowUserPrompt
+        )
+        if !canUseServerSideContext {
+            await syncSnapshotIfNeeded(using: appStore)
+        }
+        return canUseServerSideContext
+    }
+
     private func makeSnapshotPackage(
         from appStore: AppStore,
+        preferServerSideContext: Bool = false,
         forceInlineSnapshot: Bool = false
     ) throws -> CoachSnapshotPackage {
         let snapshot = contextBuilder.build(from: appStore)
         let snapshotHash = try CoachSnapshotHashing.hash(for: snapshot)
-        let shouldInlineSnapshot = forceInlineSnapshot || snapshotHash != localStateStore.lastAcceptedSnapshotHash
+        let shouldInlineSnapshot: Bool
+
+        if forceInlineSnapshot {
+            shouldInlineSnapshot = true
+        } else if preferServerSideContext {
+            shouldInlineSnapshot = false
+        } else {
+            shouldInlineSnapshot = snapshotHash != localStateStore.lastAcceptedSnapshotHash
+        }
 
         return CoachSnapshotPackage(
             envelope: CoachSnapshotEnvelope(
                 installID: localStateStore.installID,
-                snapshotHash: snapshotHash,
+                snapshotHash: shouldInlineSnapshot ? snapshotHash : nil,
                 snapshot: shouldInlineSnapshot ? snapshot : nil,
                 snapshotUpdatedAt: shouldInlineSnapshot ? Date() : nil
             ),
@@ -1447,11 +2016,12 @@ final class CoachStore {
     }
 
     private func markSnapshotAsAcceptedIfNeeded(_ package: CoachSnapshotPackage) {
-        guard package.includedInlineSnapshot else {
+        guard package.includedInlineSnapshot,
+              let snapshotHash = package.envelope.snapshotHash else {
             return
         }
 
-        localStateStore.markSnapshotAccepted(hash: package.envelope.snapshotHash)
+        localStateStore.markSnapshotAccepted(hash: snapshotHash)
     }
 
     private func replaceMessage(id: String, with message: CoachChatMessage) {

@@ -11,7 +11,11 @@ import {
   buildFallbackChatMessages,
   buildFallbackProfileInsightsMessages,
 } from "./prompts";
-import type { CoachKVNamespace } from "./state";
+import type {
+  CoachD1Database,
+  CoachKVNamespace,
+  CoachR2Bucket,
+} from "./state";
 
 export const DEFAULT_AI_MODEL = "@cf/mistralai/mistral-small-3.1-24b-instruct";
 const PROFILE_INSIGHTS_PLAIN_TEXT_MAX_TOKENS = 220;
@@ -28,6 +32,8 @@ interface WorkersAI {
 export interface Env {
   AI?: WorkersAI;
   COACH_STATE_KV?: CoachKVNamespace;
+  BACKUPS_R2?: CoachR2Bucket;
+  APP_META_DB?: CoachD1Database;
   COACH_INTERNAL_TOKEN: string;
   AI_MODEL?: string;
   COACH_PROMPT_VERSION?: string;

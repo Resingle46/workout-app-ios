@@ -31,6 +31,10 @@ final class AppStore {
         localSnapshotModifiedAt
     }
 
+    var cloudLocalStateKind: CloudLocalStateKind {
+        isSeedBaselineSnapshot ? .seed : .userData
+    }
+
     private let persistence = PersistenceController()
     @ObservationIgnored private let backupCoordinator: BackupCoordinator
     @ObservationIgnored private var backupDebounceTask: Task<Void, Never>?
@@ -1349,6 +1353,20 @@ final class AppStore {
         profile = snapshot.profile
         localSnapshotModifiedAt = persistence.save(snapshot: snapshot)
         hasPersistedSnapshot = true
+    }
+
+    private var isSeedBaselineSnapshot: Bool {
+        let seed = SeedData.make()
+        let baselineSnapshot = AppStore.normalizedSnapshot(
+            from: AppSnapshot(
+                programs: seed.programs,
+                exercises: seed.exercises,
+                history: [],
+                profile: .empty
+            )
+        )
+
+        return currentSnapshot() == baselineSnapshot
     }
 
     private static func normalizedSnapshot(from snapshot: AppSnapshot) -> AppSnapshot {

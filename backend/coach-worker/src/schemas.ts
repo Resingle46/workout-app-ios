@@ -236,13 +236,20 @@ const coachConversationTurnSchema = z
   })
   .strict();
 
+export const runtimeContextDeltaSchema = z
+  .object({
+    activeWorkout: activeWorkoutContextSchema.optional(),
+  })
+  .strict();
+
 export const profileInsightsRequestSchema = z
   .object({
     locale: nonEmptyStringSchema,
     installID: installIDSchema,
-    snapshotHash: snapshotHashSchema,
+    snapshotHash: snapshotHashSchema.optional(),
     snapshot: coachContextPayloadSchema.optional(),
     snapshotUpdatedAt: isoDateTimeSchema.optional(),
+    runtimeContextDelta: runtimeContextDeltaSchema.optional(),
     capabilityScope: capabilityScopeSchema,
   })
   .strict();
@@ -252,9 +259,10 @@ export const chatRequestSchema = z
     locale: nonEmptyStringSchema,
     question: nonEmptyStringSchema,
     installID: installIDSchema,
-    snapshotHash: snapshotHashSchema,
+    snapshotHash: snapshotHashSchema.optional(),
     snapshot: coachContextPayloadSchema.optional(),
     snapshotUpdatedAt: isoDateTimeSchema.optional(),
+    runtimeContextDelta: runtimeContextDeltaSchema.optional(),
     clientRecentTurns: z.array(coachConversationTurnSchema).max(6).default([]),
     capabilityScope: capabilityScopeSchema,
   })
@@ -273,6 +281,185 @@ export const snapshotSyncResponseSchema = z
   .object({
     acceptedHash: snapshotHashSchema,
     storedAt: isoDateTimeSchema,
+  })
+  .strict();
+
+const groupKindSchema = z.enum(["regular", "superset"]);
+const localStateKindSchema = z.enum(["seed", "user_data"]);
+const compressionSchema = z.enum(["gzip", "identity"]);
+
+const exerciseSchema = z
+  .object({
+    id: uuidSchema,
+    name: nonEmptyStringSchema,
+    categoryID: uuidSchema,
+    equipment: z.string(),
+    notes: z.string(),
+  })
+  .strict();
+
+const workoutSetTemplateSchema = z
+  .object({
+    id: uuidSchema,
+    reps: z.int().min(0),
+    suggestedWeight: z.number().finite(),
+  })
+  .strict();
+
+const workoutExerciseTemplateSchema = z
+  .object({
+    id: uuidSchema,
+    exerciseID: uuidSchema,
+    sets: z.array(workoutSetTemplateSchema),
+    groupKind: groupKindSchema,
+    groupID: uuidSchema.optional(),
+  })
+  .strict();
+
+const workoutTemplateSchema = z
+  .object({
+    id: uuidSchema,
+    title: nonEmptyStringSchema,
+    focus: z.string(),
+    exercises: z.array(workoutExerciseTemplateSchema),
+  })
+  .strict();
+
+const workoutProgramSchema = z
+  .object({
+    id: uuidSchema,
+    title: nonEmptyStringSchema,
+    workouts: z.array(workoutTemplateSchema),
+  })
+  .strict();
+
+const workoutSetLogSchema = z
+  .object({
+    id: uuidSchema,
+    reps: z.int().min(0),
+    weight: z.number().finite(),
+    completedAt: isoDateTimeSchema.optional(),
+  })
+  .strict();
+
+const workoutExerciseLogSchema = z
+  .object({
+    id: uuidSchema,
+    templateExerciseID: uuidSchema,
+    exerciseID: uuidSchema,
+    groupKind: groupKindSchema,
+    groupID: uuidSchema.optional(),
+    sets: z.array(workoutSetLogSchema),
+  })
+  .strict();
+
+const workoutSessionSchema = z
+  .object({
+    id: uuidSchema,
+    workoutTemplateID: uuidSchema,
+    title: nonEmptyStringSchema,
+    startedAt: isoDateTimeSchema,
+    endedAt: isoDateTimeSchema.optional(),
+    exercises: z.array(workoutExerciseLogSchema),
+  })
+  .strict();
+
+export const appSnapshotSchema = z
+  .object({
+    programs: z.array(workoutProgramSchema),
+    exercises: z.array(exerciseSchema),
+    history: z.array(workoutSessionSchema),
+    profile: userProfileSchema,
+    coachAnalysisSettings: coachAnalysisSettingsSchema.default({
+      programComment: "",
+    }),
+  })
+  .strict();
+
+export const backupHeadSchema = z
+  .object({
+    installID: installIDSchema,
+    backupVersion: z.int().min(1),
+    backupHash: snapshotHashSchema,
+    r2Key: nonEmptyStringSchema.max(500),
+    uploadedAt: isoDateTimeSchema,
+    clientSourceModifiedAt: isoDateTimeSchema.optional(),
+    selectedProgramID: uuidSchema.optional(),
+    programComment: z.string().max(500),
+    coachStateVersion: z.int().min(0),
+    schemaVersion: z.int().min(1),
+    compression: compressionSchema,
+    sizeBytes: z.int().min(0),
+  })
+  .strict();
+
+export const backupEnvelopeV2Schema = z
+  .object({
+    schemaVersion: z.literal(2),
+    installID: installIDSchema,
+    backupHash: snapshotHashSchema,
+    uploadedAt: isoDateTimeSchema,
+    clientSourceModifiedAt: isoDateTimeSchema.optional(),
+    appVersion: nonEmptyStringSchema.max(50),
+    buildNumber: nonEmptyStringSchema.max(50),
+    snapshot: appSnapshotSchema,
+  })
+  .strict();
+
+export const backupReconcileRequestSchema = z
+  .object({
+    installID: installIDSchema,
+    localBackupHash: snapshotHashSchema.optional(),
+    localSourceModifiedAt: isoDateTimeSchema.optional(),
+    lastSyncedRemoteVersion: z.int().min(1).optional(),
+    lastSyncedBackupHash: snapshotHashSchema.optional(),
+    localStateKind: localStateKindSchema,
+  })
+  .strict();
+
+export const backupReconcileResponseSchema = z
+  .object({
+    action: z.enum(["upload", "download", "noop", "conflict"]),
+    remote: backupHeadSchema.optional(),
+  })
+  .strict();
+
+export const backupUploadRequestSchema = z
+  .object({
+    installID: installIDSchema,
+    expectedRemoteVersion: z.int().min(1).optional(),
+    backupHash: snapshotHashSchema.optional(),
+    clientSourceModifiedAt: isoDateTimeSchema.optional(),
+    appVersion: nonEmptyStringSchema.max(50),
+    buildNumber: nonEmptyStringSchema.max(50),
+    snapshot: appSnapshotSchema,
+  })
+  .strict();
+
+export const backupUploadResponseSchema = backupHeadSchema;
+
+export const backupDownloadResponseSchema = z
+  .object({
+    remote: backupHeadSchema,
+    backup: backupEnvelopeV2Schema,
+  })
+  .strict();
+
+export const coachPreferencesUpdateRequestSchema = z
+  .object({
+    installID: installIDSchema,
+    selectedProgramID: uuidSchema.optional(),
+    programComment: z.string().max(500),
+  })
+  .strict();
+
+export const coachPreferencesUpdateResponseSchema = z
+  .object({
+    installID: installIDSchema,
+    selectedProgramID: uuidSchema.optional(),
+    programComment: z.string().max(500),
+    coachStateVersion: z.int().min(0),
+    updatedAt: isoDateTimeSchema,
   })
   .strict();
 
@@ -389,6 +576,25 @@ export type CoachSnapshotSyncRequest = z.infer<typeof snapshotSyncRequestSchema>
 export type CoachSnapshotSyncResponse = z.infer<
   typeof snapshotSyncResponseSchema
 >;
+export type BackupReconcileRequest = z.infer<
+  typeof backupReconcileRequestSchema
+>;
+export type BackupReconcileResponse = z.infer<
+  typeof backupReconcileResponseSchema
+>;
+export type BackupUploadRequest = z.infer<typeof backupUploadRequestSchema>;
+export type BackupUploadResponse = z.infer<typeof backupUploadResponseSchema>;
+export type BackupDownloadResponse = z.infer<
+  typeof backupDownloadResponseSchema
+>;
+export type BackupEnvelopeV2 = z.infer<typeof backupEnvelopeV2Schema>;
+export type BackupHead = z.infer<typeof backupHeadSchema>;
+export type CoachPreferencesUpdateRequest = z.infer<
+  typeof coachPreferencesUpdateRequestSchema
+>;
+export type CoachPreferencesUpdateResponse = z.infer<
+  typeof coachPreferencesUpdateResponseSchema
+>;
 export type CoachStateDeleteRequest = z.infer<typeof stateDeleteRequestSchema>;
 export type CoachProfileInsightsResponse = z.infer<
   typeof profileInsightsResponseSchema
@@ -396,3 +602,33 @@ export type CoachProfileInsightsResponse = z.infer<
 export type CoachChatResponse = z.infer<typeof chatResponseSchema>;
 export type CompactCoachSnapshot = z.infer<typeof coachContextPayloadSchema>;
 export type CoachConversationTurn = z.infer<typeof coachConversationTurnSchema>;
+export type CoachRuntimeContextDelta = z.infer<typeof runtimeContextDeltaSchema>;
+export type CoachProfile = z.infer<typeof userProfileSchema>;
+export type CoachAnalysisSettingsPayload = z.infer<
+  typeof coachAnalysisSettingsSchema
+>;
+export type AppSnapshotPayload = z.infer<typeof appSnapshotSchema>;
+export type ExercisePayload = z.infer<typeof exerciseSchema>;
+export type WorkoutProgramPayload = z.infer<typeof workoutProgramSchema>;
+export type WorkoutTemplatePayload = z.infer<typeof workoutTemplateSchema>;
+export type WorkoutExerciseTemplatePayload = z.infer<
+  typeof workoutExerciseTemplateSchema
+>;
+export type WorkoutSessionPayload = z.infer<typeof workoutSessionSchema>;
+export type WorkoutExerciseLogPayload = z.infer<
+  typeof workoutExerciseLogSchema
+>;
+export type ProfileTrainingSplitIdentifier =
+  | "full_body"
+  | "upper_lower_hybrid"
+  | "upper_lower"
+  | "upper_lower_plus_specialization"
+  | "high_frequency_split";
+export type ProfileGoalCompatibilityIssueKind =
+  | "missing_goal"
+  | "goal_target_mismatch"
+  | "frequency_too_low"
+  | "frequency_too_high_for_beginner"
+  | "program_frequency_mismatch"
+  | "adherence_gap"
+  | "long_goal_timeline";

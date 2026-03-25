@@ -1,5 +1,13 @@
+import { jsonByteLength } from "./context";
 import {
+  backupDownloadResponseSchema,
+  backupReconcileRequestSchema,
+  backupReconcileResponseSchema,
+  backupUploadRequestSchema,
+  backupUploadResponseSchema,
   chatRequestSchema,
+  coachPreferencesUpdateRequestSchema,
+  coachPreferencesUpdateResponseSchema,
   profileInsightsRequestSchema,
   snapshotSyncRequestSchema,
   snapshotSyncResponseSchema,
@@ -13,15 +21,20 @@ import {
   type Env,
 } from "./openai";
 import {
-  CoachStateRepository,
-  jsonByteLength,
+  CloudflareCoachStateRepository,
+  MissingCoachContextError,
+  MissingRemoteBackupError,
+  StaleRemoteStateError,
   normalizeChatTurns,
-  type SnapshotResolution,
+  type CoachD1Database,
+  type CoachKVNamespace,
+  type CoachR2Bucket,
+  type CoachStateStore,
 } from "./state";
 
 interface AppDependencies {
   createInferenceService: (env: Env) => CoachInferenceService;
-  createStateRepository: (env: Env) => CoachStateRepository;
+  createStateRepository: (env: Env) => CoachStateStore;
   now: () => number;
   requestId: () => string;
 }
@@ -32,8 +45,10 @@ export function createApp(
   const deps: AppDependencies = {
     createInferenceService: createWorkersAICoachService,
     createStateRepository: (env) =>
-      new CoachStateRepository(
+      new CloudflareCoachStateRepository(
         mustGetStateKV(env),
+        mustGetBackupsR2(env),
+        mustGetMetaDB(env),
         env.COACH_PROMPT_VERSION?.trim() || "2026-03-25.v1",
         env.AI_MODEL?.trim() || DEFAULT_AI_MODEL
       ),
@@ -68,10 +83,10 @@ export function createApp(
         const inferenceService = deps.createInferenceService(env);
         const stateRepository = deps.createStateRepository(env);
 
-        if (pathname === "/v1/coach/snapshot" && request.method === "PUT") {
-          const body = snapshotSyncRequestSchema.parse(await readJSON(request));
-          const response = snapshotSyncResponseSchema.parse(
-            await stateRepository.storeSnapshot(body)
+        if (pathname === "/v1/backup/reconcile" && request.method === "POST") {
+          const body = backupReconcileRequestSchema.parse(await readJSON(request));
+          const response = backupReconcileResponseSchema.parse(
+            await stateRepository.reconcileBackup(body)
           );
 
           logRequest({
@@ -80,7 +95,82 @@ export function createApp(
             method: request.method,
             status: 200,
             durationMs: deps.now() - startedAt,
-            snapshotStored: true,
+            reconcileAction: response.action,
+            installID: body.installID,
+          });
+          return json(response, 200);
+        }
+
+        if (pathname === "/v1/backup" && request.method === "PUT") {
+          const body = backupUploadRequestSchema.parse(await readJSON(request));
+          const response = backupUploadResponseSchema.parse(
+            await stateRepository.uploadBackup(body)
+          );
+
+          logRequest({
+            requestID,
+            route: pathname,
+            method: request.method,
+            status: 200,
+            durationMs: deps.now() - startedAt,
+            installID: body.installID,
+            backupVersion: response.backupVersion,
+            backupBytes: jsonByteLength(body.snapshot),
+          });
+          return json(response, 200);
+        }
+
+        if (pathname === "/v1/backup/download" && request.method === "GET") {
+          const input = parseBackupDownloadRequest(request);
+          const response = backupDownloadResponseSchema.parse(
+            await stateRepository.downloadBackup(input)
+          );
+
+          logRequest({
+            requestID,
+            route: pathname,
+            method: request.method,
+            status: 200,
+            durationMs: deps.now() - startedAt,
+            installID: input.installID,
+            backupVersion: response.remote.backupVersion,
+          });
+          return json(response, 200);
+        }
+
+        if (pathname === "/v1/coach/preferences" && request.method === "PATCH") {
+          const body = coachPreferencesUpdateRequestSchema.parse(
+            await readJSON(request)
+          );
+          const response = coachPreferencesUpdateResponseSchema.parse(
+            await stateRepository.updateCoachPreferences(body)
+          );
+
+          logRequest({
+            requestID,
+            route: pathname,
+            method: request.method,
+            status: 200,
+            durationMs: deps.now() - startedAt,
+            installID: body.installID,
+            coachStateVersion: response.coachStateVersion,
+          });
+          return json(response, 200);
+        }
+
+        if (pathname === "/v1/coach/snapshot" && request.method === "PUT") {
+          const body = snapshotSyncRequestSchema.parse(await readJSON(request));
+          const response = snapshotSyncResponseSchema.parse(
+            await stateRepository.storeLegacySnapshot(body)
+          );
+
+          logRequest({
+            requestID,
+            route: pathname,
+            method: request.method,
+            status: 200,
+            durationMs: deps.now() - startedAt,
+            installID: body.installID,
             snapshotBytes: jsonByteLength(body.snapshot),
           });
           return json(response, 200);
@@ -96,21 +186,21 @@ export function createApp(
             method: request.method,
             status: 200,
             durationMs: deps.now() - startedAt,
+            installID: body.installID,
           });
           return json({}, 200);
         }
 
         if (pathname === "/v1/coach/profile-insights" && request.method === "POST") {
           const body = profileInsightsRequestSchema.parse(await readJSON(request));
-          const snapshotResolution = await stateRepository.resolveSnapshot(body);
-          const snapshot = requireSnapshot(snapshotResolution);
-          const resolvedSnapshotHash =
-            snapshotResolution.acceptedHash ?? body.snapshotHash;
+          const context = await stateRepository.resolveCoachContext(body);
+          const cachedResponse = context.cacheAllowed
+            ? await stateRepository.getInsightsCache(
+                body.installID,
+                context.contextHash
+              )
+            : null;
 
-          const cachedResponse = await stateRepository.getInsightsCache(
-            body.installID,
-            resolvedSnapshotHash
-          );
           if (cachedResponse) {
             logRequest({
               requestID,
@@ -118,10 +208,9 @@ export function createApp(
               method: request.method,
               status: 200,
               durationMs: deps.now() - startedAt,
-              snapshotHit: snapshotResolution.snapshotHit,
-              snapshotStored: snapshotResolution.snapshotStored,
+              installID: body.installID,
+              contextSource: context.source,
               insightsCacheHit: true,
-              snapshotBytes: snapshotResolution.snapshotBytes,
             });
             return json(cachedResponse, 200);
           }
@@ -129,18 +218,20 @@ export function createApp(
           const inferenceStartedAt = deps.now();
           const result = await inferenceService.generateProfileInsights({
             ...body,
-            snapshotHash: resolvedSnapshotHash,
-            snapshot,
+            snapshotHash: context.contextHash,
+            snapshot: context.snapshot,
             snapshotUpdatedAt:
-              snapshotResolution.storedAt ?? body.snapshotUpdatedAt,
+              context.backupHead?.uploadedAt ?? body.snapshotUpdatedAt,
           });
           const modelDurationMs = deps.now() - inferenceStartedAt;
 
-          await stateRepository.storeInsightsCache(
-            body.installID,
-            resolvedSnapshotHash,
-            result.data
-          );
+          if (context.cacheAllowed) {
+            await stateRepository.storeInsightsCache(
+              body.installID,
+              context.contextHash,
+              result.data
+            );
+          }
 
           logRequest({
             requestID,
@@ -148,13 +239,13 @@ export function createApp(
             method: request.method,
             status: 200,
             durationMs: deps.now() - startedAt,
+            installID: body.installID,
             model: result.model,
             responseID: result.responseId,
             usage: result.usage,
-            snapshotHit: snapshotResolution.snapshotHit,
-            snapshotStored: snapshotResolution.snapshotStored,
+            contextSource: context.source,
             insightsCacheHit: false,
-            snapshotBytes: snapshotResolution.snapshotBytes,
+            snapshotBytes: jsonByteLength(context.snapshot),
             promptBytes: result.promptBytes,
             modelDurationMs,
           });
@@ -163,9 +254,10 @@ export function createApp(
 
         if (pathname === "/v1/coach/chat" && request.method === "POST") {
           const body = chatRequestSchema.parse(await readJSON(request));
-          const snapshotResolution = await stateRepository.resolveSnapshot(body);
-          const snapshot = requireSnapshot(snapshotResolution);
-          const storedMemory = await stateRepository.getChatMemory(body.installID);
+          const context = await stateRepository.resolveCoachContext(body);
+          const storedMemory = context.cacheAllowed
+            ? await stateRepository.getChatMemory(body.installID, context.contextHash)
+            : null;
           const recentTurns = normalizeChatTurns(
             storedMemory?.recentTurns?.length
               ? storedMemory.recentTurns
@@ -175,20 +267,23 @@ export function createApp(
           const inferenceStartedAt = deps.now();
           const result = await inferenceService.generateChat({
             ...body,
-            snapshotHash: snapshotResolution.acceptedHash ?? body.snapshotHash,
-            snapshot,
+            snapshotHash: context.contextHash,
+            snapshot: context.snapshot,
             snapshotUpdatedAt:
-              snapshotResolution.storedAt ?? body.snapshotUpdatedAt,
+              context.backupHead?.uploadedAt ?? body.snapshotUpdatedAt,
             clientRecentTurns: recentTurns,
           });
           const modelDurationMs = deps.now() - inferenceStartedAt;
 
-          await stateRepository.appendChatMemory(
-            body.installID,
-            recentTurns,
-            body.question,
-            result.data.answerMarkdown
-          );
+          if (context.cacheAllowed) {
+            await stateRepository.appendChatMemory(
+              body.installID,
+              context.contextHash,
+              recentTurns,
+              body.question,
+              result.data.answerMarkdown
+            );
+          }
 
           logRequest({
             requestID,
@@ -196,13 +291,13 @@ export function createApp(
             method: request.method,
             status: 200,
             durationMs: deps.now() - startedAt,
+            installID: body.installID,
             model: result.model,
             responseID: result.responseId,
             usage: result.usage,
-            snapshotHit: snapshotResolution.snapshotHit,
-            snapshotStored: snapshotResolution.snapshotStored,
+            contextSource: context.source,
             chatMemoryHit: Boolean(storedMemory?.recentTurns?.length),
-            snapshotBytes: snapshotResolution.snapshotBytes,
+            snapshotBytes: jsonByteLength(context.snapshot),
             promptBytes: result.promptBytes,
             modelDurationMs,
           });
@@ -217,7 +312,10 @@ export function createApp(
             ? error.details
             : error instanceof RequestError
               ? error.details
-              : undefined;
+              : error instanceof StaleRemoteStateError
+                ? { currentRemoteVersion: error.currentRemoteVersion }
+                : undefined;
+
         logRequest({
           requestID,
           route: pathname,
@@ -279,13 +377,19 @@ function missingSecrets(env: Env): string[] {
   if (!env.COACH_STATE_KV) {
     missing.push("COACH_STATE_KV");
   }
+  if (!env.BACKUPS_R2) {
+    missing.push("BACKUPS_R2");
+  }
+  if (!env.APP_META_DB) {
+    missing.push("APP_META_DB");
+  }
   if (!env.COACH_INTERNAL_TOKEN?.trim()) {
     missing.push("COACH_INTERNAL_TOKEN");
   }
   return missing;
 }
 
-function mustGetStateKV(env: Env) {
+function mustGetStateKV(env: Env): CoachKVNamespace {
   const stateKV = env.COACH_STATE_KV;
   if (!stateKV) {
     throw new RequestError(
@@ -299,6 +403,34 @@ function mustGetStateKV(env: Env) {
   return stateKV;
 }
 
+function mustGetBackupsR2(env: Env): CoachR2Bucket {
+  const r2 = env.BACKUPS_R2;
+  if (!r2) {
+    throw new RequestError(
+      500,
+      "server_misconfigured",
+      "Coach backend is not configured.",
+      { missing: ["BACKUPS_R2"] }
+    );
+  }
+
+  return r2;
+}
+
+function mustGetMetaDB(env: Env): CoachD1Database {
+  const db = env.APP_META_DB;
+  if (!db) {
+    throw new RequestError(
+      500,
+      "server_misconfigured",
+      "Coach backend is not configured.",
+      { missing: ["APP_META_DB"] }
+    );
+  }
+
+  return db;
+}
+
 function assertAuthorization(request: Request, env: Env): void {
   const token = env.COACH_INTERNAL_TOKEN.trim();
   const header = request.headers.get("authorization");
@@ -307,24 +439,45 @@ function assertAuthorization(request: Request, env: Env): void {
   }
 }
 
+function parseBackupDownloadRequest(request: Request): {
+  installID: string;
+  version?: number;
+} {
+  const url = new URL(request.url);
+  const installID = url.searchParams.get("installID")?.trim();
+  if (!installID) {
+    throw new RequestError(
+      400,
+      "invalid_request",
+      "Request body does not match the coach contract.",
+      { field: "installID" }
+    );
+  }
+
+  const versionParam = url.searchParams.get("version")?.trim();
+  if (!versionParam || versionParam === "current") {
+    return { installID };
+  }
+
+  const version = Number.parseInt(versionParam, 10);
+  if (!Number.isFinite(version) || version < 1) {
+    throw new RequestError(
+      400,
+      "invalid_request",
+      "Request body does not match the coach contract.",
+      { field: "version" }
+    );
+  }
+
+  return { installID, version };
+}
+
 async function readJSON(request: Request): Promise<unknown> {
   try {
     return await request.json();
   } catch {
     throw new RequestError(400, "invalid_json", "Malformed JSON body.");
   }
-}
-
-function requireSnapshot(resolution: SnapshotResolution) {
-  if (!resolution.snapshot) {
-    throw new RequestError(
-      409,
-      "snapshot_required",
-      "Coach snapshot sync required."
-    );
-  }
-
-  return resolution.snapshot;
 }
 
 function mapError(
@@ -341,6 +494,45 @@ function mapError(
         error: {
           code: error.code,
           message: error.publicMessage,
+          requestID,
+        },
+      },
+    };
+  }
+
+  if (error instanceof MissingCoachContextError) {
+    return {
+      status: 409,
+      body: {
+        error: {
+          code: "snapshot_required",
+          message: "Coach snapshot sync required.",
+          requestID,
+        },
+      },
+    };
+  }
+
+  if (error instanceof MissingRemoteBackupError) {
+    return {
+      status: 404,
+      body: {
+        error: {
+          code: "remote_backup_not_found",
+          message: "Remote backup not found.",
+          requestID,
+        },
+      },
+    };
+  }
+
+  if (error instanceof StaleRemoteStateError) {
+    return {
+      status: 409,
+      body: {
+        error: {
+          code: "remote_head_changed",
+          message: "Remote backup head changed.",
           requestID,
         },
       },
@@ -404,27 +596,13 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
-function logRequest(payload: {
-  requestID: string;
-  route: string;
-  method: string;
-  status: number;
-  durationMs: number;
-  model?: string;
-  responseID?: string;
-  usage?: unknown;
-  errorCode?: string;
-  errorDetails?: unknown;
-  snapshotHit?: boolean;
-  snapshotStored?: boolean;
-  insightsCacheHit?: boolean;
-  chatMemoryHit?: boolean;
-  snapshotBytes?: number;
-  promptBytes?: number;
-  modelDurationMs?: number;
-}) {
+function logRequest(payload: Record<string, unknown>) {
   const serialized = JSON.stringify(payload);
-  if (payload.status >= 400) {
+  if (
+    typeof payload.status === "number" &&
+    Number.isFinite(payload.status) &&
+    payload.status >= 400
+  ) {
     console.error(serialized);
     return;
   }
