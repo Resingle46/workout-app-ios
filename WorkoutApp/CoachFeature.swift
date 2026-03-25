@@ -1570,21 +1570,23 @@ struct CoachView: View {
                     isExpanded: isEditingAnalysisContext || !hasSavedAnalysisContext,
                     savedProgramTitle: savedAnalysisProgramTitle,
                     savedProgramComment: store.coachAnalysisSettings.programComment,
-                    commentFieldFocus: $focusedField
-                ) {
-                    focusedField = nil
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) {
-                        isEditingAnalysisContext = true
-                    }
-                ) {
-                    focusedField = nil
-                    Task {
-                        await coachStore.saveAnalysisSettings(using: store)
-                        withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
-                            isEditingAnalysisContext = !hasSavedAnalysisContext
+                    commentFieldFocus: $focusedField,
+                    onEdit: {
+                        focusedField = nil
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) {
+                            isEditingAnalysisContext = true
+                        }
+                    },
+                    onSave: {
+                        focusedField = nil
+                        Task {
+                            await coachStore.saveAnalysisSettings(using: store)
+                            withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
+                                isEditingAnalysisContext = !hasSavedAnalysisContext
+                            }
                         }
                     }
-                }
+                )
 
                 if let profileInsights = coachStore.profileInsights {
                     CoachInsightsOverviewCard(
