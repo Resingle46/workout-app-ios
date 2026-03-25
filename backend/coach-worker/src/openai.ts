@@ -1,6 +1,5 @@
 import {
   chatResponseModelOutputSchema,
-  profileInsightsModelOutputSchema,
   suggestedChangeSchema,
   type CoachChatRequest,
   type CoachChatResponse,
@@ -11,16 +10,13 @@ import {
   buildChatMessages,
   buildFallbackChatMessages,
   buildFallbackProfileInsightsMessages,
-  buildProfileInsightsMessages,
 } from "./prompts";
 
 export const DEFAULT_AI_MODEL = "@cf/mistralai/mistral-small-3.1-24b-instruct";
-const PROFILE_INSIGHTS_STRUCTURED_MAX_TOKENS = 420;
-const PROFILE_INSIGHTS_FALLBACK_MAX_TOKENS = 260;
+const PROFILE_INSIGHTS_PLAIN_TEXT_MAX_TOKENS = 220;
 const CHAT_STRUCTURED_MAX_TOKENS = 700;
 const CHAT_FALLBACK_MAX_TOKENS = 450;
-const PROFILE_INSIGHTS_STRUCTURED_TIMEOUT_MS = 12_000;
-const PROFILE_INSIGHTS_FALLBACK_TIMEOUT_MS = 8_000;
+const PROFILE_INSIGHTS_PLAIN_TEXT_TIMEOUT_MS = 8_000;
 const CHAT_STRUCTURED_TIMEOUT_MS = 15_000;
 const CHAT_FALLBACK_TIMEOUT_MS = 10_000;
 
@@ -73,26 +69,21 @@ export class WorkersAICoachService implements CoachInferenceService {
     request: CoachProfileInsightsRequest
   ): Promise<InferenceResult<CoachProfileInsightsResponse>> {
     const operation = "profile_insights";
-    try {
-      const rawResponse = await this.runStructured({
-        operation,
-        messages: buildProfileInsightsMessages(request),
-        schema: profileInsightsJsonSchema,
-        maxTokens: PROFILE_INSIGHTS_STRUCTURED_MAX_TOKENS,
-        timeoutMs: PROFILE_INSIGHTS_STRUCTURED_TIMEOUT_MS,
-      });
+    const localFallback = buildDeterministicProfileInsights(request);
 
-      const response = parseStructuredOutput(
-        rawResponse,
-        profileInsightsModelOutputSchema,
-        "profile insights",
-        {
-          operation,
-          model: this.modelName,
-        }
-      );
+    try {
+      const rawResponse = await this.runPlainText({
+        operation,
+        messages: buildFallbackProfileInsightsMessages(request),
+        maxTokens: PROFILE_INSIGHTS_PLAIN_TEXT_MAX_TOKENS,
+        timeoutMs: PROFILE_INSIGHTS_PLAIN_TEXT_TIMEOUT_MS,
+        includeFallbackNotice: false,
+      });
       return {
-        data: normalizeProfileInsights(response),
+        data: mergePlainAndDeterministicProfileInsights(
+          parsePlainProfileInsights(extractPlainText(rawResponse, "profile insights")),
+          localFallback
+        ),
         model: this.modelName,
         usage: extractUsage(rawResponse),
       };
@@ -100,13 +91,10 @@ export class WorkersAICoachService implements CoachInferenceService {
       if (!(error instanceof CoachInferenceServiceError)) {
         throw error;
       }
-      if (!shouldAttemptPlainTextFallback(error)) {
-        throw error;
-      }
 
       console.warn(
         JSON.stringify({
-          event: "coach_profile_structured_fallback",
+          event: "coach_profile_local_fallback",
           operation,
           model: this.modelName,
           reasonCode: error.code,
@@ -114,21 +102,9 @@ export class WorkersAICoachService implements CoachInferenceService {
         })
       );
 
-      const fallbackResponse = await this.runPlainText({
-        operation,
-        messages: buildFallbackProfileInsightsMessages(request),
-        maxTokens: PROFILE_INSIGHTS_FALLBACK_MAX_TOKENS,
-        timeoutMs: PROFILE_INSIGHTS_FALLBACK_TIMEOUT_MS,
-      });
-      const content = extractPlainText(
-        fallbackResponse,
-        "profile insights fallback"
-      );
-
       return {
-        data: parsePlainProfileInsights(content),
+        data: localFallback,
         model: this.modelName,
-        usage: extractUsage(fallbackResponse),
       };
     }
   }
@@ -244,17 +220,22 @@ export class WorkersAICoachService implements CoachInferenceService {
     messages: PromptMessage[];
     maxTokens: number;
     timeoutMs: number;
+    includeFallbackNotice?: boolean;
   }): Promise<unknown> {
+    const messages = input.includeFallbackNotice === false
+      ? input.messages
+      : [
+          {
+            role: "system" as const,
+            content:
+              "The previous structured-output attempt failed. Keep the answer compact and in markdown only.",
+          },
+          ...input.messages,
+        ];
+
     return this.runModel(
       {
-      messages: [
-        {
-          role: "system",
-          content:
-            "The previous structured-output attempt failed. Keep the answer compact and in markdown only.",
-        },
-        ...input.messages,
-      ],
+      messages,
       max_tokens: input.maxTokens,
       temperature: 0.25,
       },
@@ -324,20 +305,6 @@ function parseStructuredOutput<T>(
   }
 }
 
-function normalizeProfileInsights(
-  response: {
-    summary: string;
-    recommendations: string[];
-    suggestedChanges: unknown[];
-  }
-): CoachProfileInsightsResponse {
-  return {
-    summary: response.summary.trim(),
-    recommendations: dedupeText(response.recommendations).slice(0, 8),
-    suggestedChanges: normalizeSuggestedChanges(response.suggestedChanges),
-  };
-}
-
 function normalizeChatResponse(
   response: {
     answerMarkdown: string;
@@ -394,6 +361,152 @@ function parsePlainProfileInsights(
     ]).slice(0, 8),
     suggestedChanges: [],
   };
+}
+
+function mergePlainAndDeterministicProfileInsights(
+  aiInsights: CoachProfileInsightsResponse,
+  deterministicFallback: CoachProfileInsightsResponse
+): CoachProfileInsightsResponse {
+  return {
+    summary: aiInsights.summary || deterministicFallback.summary,
+    recommendations:
+      aiInsights.recommendations.length > 0
+        ? aiInsights.recommendations
+        : deterministicFallback.recommendations,
+    suggestedChanges: deterministicFallback.suggestedChanges,
+  };
+}
+
+function buildDeterministicProfileInsights(
+  request: CoachProfileInsightsRequest
+): CoachProfileInsightsResponse {
+  const locale = request.locale;
+  const analytics = request.context.analytics;
+  const training = analytics.training;
+  const compatibility = analytics.compatibility;
+  const consistency = analytics.consistency;
+  const goal = analytics.goal;
+
+  const recommendations: string[] = [
+    localizedCoachText(locale, "frequencyRange", {
+      lower: training.recommendedWeeklyTargetLowerBound,
+      upper: training.recommendedWeeklyTargetUpperBound,
+    }),
+    localizedCoachText(locale, "repRange", {
+      mainLower: training.mainRepLowerBound,
+      mainUpper: training.mainRepUpperBound,
+      accessoryLower: training.accessoryRepLowerBound,
+      accessoryUpper: training.accessoryRepUpperBound,
+    }),
+    localizedCoachText(locale, "volumeRange", {
+      lower: training.weeklySetsLowerBound,
+      upper: training.weeklySetsUpperBound,
+    }),
+  ];
+
+  if (!compatibility.isAligned) {
+    recommendations.push(
+      ...compatibility.issues.slice(0, 2).map((issue) => issue.message.trim())
+    );
+  } else if (consistency.workoutsThisWeek < consistency.weeklyTarget) {
+    recommendations.push(
+      localizedCoachText(locale, "consistencyGap", {
+        completed: consistency.workoutsThisWeek,
+        target: consistency.weeklyTarget,
+      })
+    );
+  } else if (consistency.streakWeeks > 0) {
+    recommendations.push(
+      localizedCoachText(locale, "streak", {
+        weeks: consistency.streakWeeks,
+      })
+    );
+  }
+
+  const etaRecommendation = buildGoalEtaRecommendation(locale, goal);
+  if (etaRecommendation) {
+    recommendations.push(etaRecommendation);
+  }
+
+  return {
+    summary: compatibility.isAligned
+      ? localizedCoachText(locale, "summaryAligned")
+      : localizedCoachText(locale, "summaryAdjustments", {
+          count: compatibility.issues.length,
+        }),
+    recommendations: dedupeText(recommendations).slice(0, 5),
+    suggestedChanges: buildDeterministicSuggestedChanges(request),
+  };
+}
+
+function buildDeterministicSuggestedChanges(
+  request: CoachProfileInsightsRequest
+): CoachProfileInsightsResponse["suggestedChanges"] {
+  const locale = request.locale;
+  const training = request.context.analytics.training;
+  const goal = request.context.analytics.goal;
+  const preferredProgram = request.context.preferredProgram;
+  const result: CoachProfileInsightsResponse["suggestedChanges"] = [];
+
+  const adjustedWeeklyTarget = clamp(
+    training.currentWeeklyTarget,
+    training.recommendedWeeklyTargetLowerBound,
+    training.recommendedWeeklyTargetUpperBound
+  );
+
+  if (adjustedWeeklyTarget !== training.currentWeeklyTarget) {
+    result.push({
+      id: `coach-weekly-target-${adjustedWeeklyTarget}`,
+      type: "setWeeklyWorkoutTarget",
+      title: localizedCoachText(locale, "draftWeeklyTargetTitle"),
+      summary: localizedCoachText(locale, "draftWeeklyTargetSummary", {
+        target: adjustedWeeklyTarget,
+      }),
+      weeklyWorkoutTarget: adjustedWeeklyTarget,
+    });
+  }
+
+  if (!preferredProgram) {
+    return result.slice(0, 5);
+  }
+
+  const desiredWorkoutCount =
+    adjustedWeeklyTarget === training.currentWeeklyTarget
+      ? goal.weeklyWorkoutTarget
+      : adjustedWeeklyTarget;
+
+  if (preferredProgram.workoutCount < desiredWorkoutCount) {
+    result.push({
+      id: `coach-add-day-${preferredProgram.id}-${preferredProgram.workoutCount + 1}`,
+      type: "addWorkoutDay",
+      title: localizedCoachText(locale, "draftAddDayTitle"),
+      summary: localizedCoachText(locale, "draftAddDaySummary", {
+        programTitle: preferredProgram.title,
+      }),
+      programID: preferredProgram.id,
+      workoutTitle: localizedCoachText(locale, "draftAddDayWorkoutTitle", {
+        index: preferredProgram.workoutCount + 1,
+      }),
+      workoutFocus: localizedWorkoutFocus(locale, goal.primaryGoal),
+    });
+  } else if (
+    preferredProgram.workoutCount > desiredWorkoutCount &&
+    preferredProgram.workouts.length > 0
+  ) {
+    const workoutToDelete = preferredProgram.workouts[preferredProgram.workouts.length - 1];
+    result.push({
+      id: `coach-delete-day-${workoutToDelete.id}`,
+      type: "deleteWorkoutDay",
+      title: localizedCoachText(locale, "draftDeleteDayTitle"),
+      summary: localizedCoachText(locale, "draftDeleteDaySummary", {
+        workoutTitle: workoutToDelete.title,
+      }),
+      programID: preferredProgram.id,
+      workoutID: workoutToDelete.id,
+    });
+  }
+
+  return result.slice(0, 5);
 }
 
 function normalizeSuggestedChanges(
@@ -629,6 +742,145 @@ function describeResponseShape(rawResponse: unknown): Record<string, unknown> {
   };
 }
 
+function localizedCoachText(
+  locale: string,
+  key:
+    | "summaryAligned"
+    | "summaryAdjustments"
+    | "frequencyRange"
+    | "repRange"
+    | "volumeRange"
+    | "consistencyGap"
+    | "streak"
+    | "etaWeeks"
+    | "etaMonths"
+    | "etaRecommendation"
+    | "draftWeeklyTargetTitle"
+    | "draftWeeklyTargetSummary"
+    | "draftAddDayTitle"
+    | "draftAddDaySummary"
+    | "draftAddDayWorkoutTitle"
+    | "draftDeleteDayTitle"
+    | "draftDeleteDaySummary",
+  params: Record<string, string | number> = {}
+): string {
+  const ru = locale.toLowerCase().startsWith("ru");
+  const templates: Record<string, string> = ru
+    ? {
+        summaryAligned:
+          "Текущий план в целом соответствует вашей цели. Ниже самые полезные корректировки для прогресса и соблюдения режима.",
+        summaryAdjustments:
+          "Текущий план требует корректировки по %count% пунктам, чтобы лучше соответствовать вашей цели.",
+        frequencyRange:
+          "Держите частоту в диапазоне %lower%-%upper% тренировок в неделю.",
+        repRange:
+          "Для базовых движений ориентируйтесь на %mainLower%-%mainUpper% повторений, для аксессуаров на %accessoryLower%-%accessoryUpper%.",
+        volumeRange:
+          "Цельтесь в %lower%-%upper% рабочих подходов на основную мышечную группу в неделю.",
+        consistencyGap:
+          "На этой неделе выполнено %completed% из %target% запланированных тренировок, поэтому сейчас важнее стабильность, чем добавление нагрузки.",
+        streak:
+          "У вас серия из %weeks% недель подряд. Сохраняйте этот ритм и повышайте нагрузку постепенно.",
+        etaWeeks: "%lower%-%upper% недель",
+        etaMonths: "%lower%-%upper% мес.",
+        etaRecommendation:
+          "При текущем темпе ориентир по цели составляет примерно %eta%.",
+        draftWeeklyTargetTitle: "Скорректировать недельную частоту",
+        draftWeeklyTargetSummary:
+          "Обновить недельную цель до %target% тренировок, чтобы она лучше соответствовала текущей нагрузке и восстановлению.",
+        draftAddDayTitle: "Добавить тренировочный день",
+        draftAddDaySummary:
+          "Добавить ещё один день в программу \"%programTitle%\", чтобы приблизить её к рекомендуемой частоте.",
+        draftAddDayWorkoutTitle: "Тренировка %index%",
+        draftDeleteDayTitle: "Убрать лишний тренировочный день",
+        draftDeleteDaySummary:
+          "Удалить день \"%workoutTitle%\", чтобы программа лучше соответствовала целевой частоте.",
+      }
+    : {
+        summaryAligned:
+          "Your current plan broadly matches your goal. Below are the highest-value adjustments for progress and adherence.",
+        summaryAdjustments:
+          "Your current plan needs %count% adjustments to better match your goal.",
+        frequencyRange:
+          "Keep training frequency around %lower%-%upper% sessions per week.",
+        repRange:
+          "Keep main lifts around %mainLower%-%mainUpper% reps and accessories around %accessoryLower%-%accessoryUpper% reps.",
+        volumeRange:
+          "Aim for roughly %lower%-%upper% hard sets per muscle group each week.",
+        consistencyGap:
+          "You completed %completed% of %target% planned sessions this week, so consistency matters more than extra load right now.",
+        streak:
+          "You have a %weeks%-week consistency streak. Keep that rhythm and progress load gradually.",
+        etaWeeks: "%lower%-%upper% weeks",
+        etaMonths: "%lower%-%upper% months",
+        etaRecommendation:
+          "At the current pace, your goal timeline looks roughly like %eta%.",
+        draftWeeklyTargetTitle: "Adjust weekly training target",
+        draftWeeklyTargetSummary:
+          "Update the weekly target to %target% sessions so it better matches your current workload and recovery.",
+        draftAddDayTitle: "Add a workout day",
+        draftAddDaySummary:
+          "Add another day to \"%programTitle%\" so the program better matches the recommended frequency.",
+        draftAddDayWorkoutTitle: "Workout %index%",
+        draftDeleteDayTitle: "Remove an extra workout day",
+        draftDeleteDaySummary:
+          "Remove \"%workoutTitle%\" so the program better matches the target frequency.",
+      };
+
+  return Object.entries(params).reduce(
+    (text, [name, value]) => text.replaceAll(`%${name}%`, String(value)),
+    templates[key]
+  );
+}
+
+function buildGoalEtaRecommendation(
+  locale: string,
+  goal: CoachProfileInsightsRequest["context"]["analytics"]["goal"]
+): string | undefined {
+  if (
+    goal.etaWeeksLowerBound === undefined ||
+    goal.etaWeeksUpperBound === undefined
+  ) {
+    return undefined;
+  }
+
+  const etaText =
+    goal.etaWeeksUpperBound >= 8
+      ? localizedCoachText(locale, "etaMonths", {
+          lower: Math.max(Math.ceil(goal.etaWeeksLowerBound / 4.345), 1),
+          upper: Math.max(Math.ceil(goal.etaWeeksUpperBound / 4.345), 1),
+        })
+      : localizedCoachText(locale, "etaWeeks", {
+          lower: goal.etaWeeksLowerBound,
+          upper: goal.etaWeeksUpperBound,
+        });
+
+  return localizedCoachText(locale, "etaRecommendation", {
+    eta: etaText,
+  });
+}
+
+function localizedWorkoutFocus(locale: string, goal: string): string {
+  const ru = locale.toLowerCase().startsWith("ru");
+
+  switch (goal) {
+    case "strength":
+      return ru ? "Силовой акцент" : "Strength focus";
+    case "hypertrophy":
+      return ru ? "Гипертрофия" : "Hypertrophy focus";
+    case "fatLoss":
+      return ru ? "Расход энергии и объём" : "Energy expenditure and volume";
+    case "generalFitness":
+      return ru ? "Общая физическая подготовка" : "General fitness";
+    default:
+      return ru ? "Дополнительная тренировка" : "Additional training day";
+  }
+}
+
+function clamp(value: number, lower: number, upper: number): number {
+  return Math.min(Math.max(value, lower), upper);
+}
+
 function buildOpaqueResponseID(): string {
   return `coach-turn_${crypto.randomUUID()}`;
 }
@@ -745,26 +997,6 @@ const guidedSuggestedChangeJsonSchema = {
     suggestedWeight: { type: "number" },
   },
   required: ["id", "type", "title", "summary"],
-} as const;
-
-const profileInsightsJsonSchema = {
-  type: "object",
-  properties: {
-    summary: {
-      type: "string",
-    },
-    recommendations: {
-      type: "array",
-      items: {
-        type: "string",
-      },
-    },
-    suggestedChanges: {
-      type: "array",
-      items: guidedSuggestedChangeJsonSchema,
-    },
-  },
-  required: ["summary", "recommendations", "suggestedChanges"],
 } as const;
 
 const chatResponseJsonSchema = {

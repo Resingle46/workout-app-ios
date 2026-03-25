@@ -291,9 +291,13 @@ describe("WorkersAICoachService", () => {
     expect(result.data.responseID).toMatch(/^coach-turn_/);
   });
 
-  it("parses structured JSON wrapped in code fences", async () => {
+  it("parses plain-text profile insights", async () => {
     const aiRun = vi.fn().mockResolvedValue({
-      response: "```json\n{\"summary\":\"Recovery is adequate.\",\"recommendations\":[\"Keep volume stable this week.\"],\"suggestedChanges\":[]}\n```",
+      response: [
+        "Summary: Recovery is adequate.",
+        "",
+        "- Keep volume stable this week.",
+      ].join("\n"),
     });
 
     const service = new WorkersAICoachService(makeEnv({ AI: { run: aiRun } }));
@@ -307,54 +311,17 @@ describe("WorkersAICoachService", () => {
     ]);
   });
 
-  it("falls back to plain-text profile insights when structured output fails", async () => {
-    const aiRun = vi
-      .fn()
-      .mockResolvedValueOnce({
-        response: "{\"summaary\":\"Bad JSON key\"",
-      })
-      .mockResolvedValueOnce({
-        response: [
-          "Summary: Your current split supports hypertrophy, but weekly gym frequency is lower than your goal.",
-          "",
-          "- Add one more gym session if recovery and schedule allow.",
-          "- Keep compound lifts in the 6 to 10 rep range for now.",
-        ].join("\n"),
-      });
+  it("falls back to deterministic profile insights when plain-text inference fails", async () => {
+    const aiRun = vi.fn().mockRejectedValue(new Error("Request timed out"));
 
     const service = new WorkersAICoachService(makeEnv({ AI: { run: aiRun } }));
-    const result = await service.generateProfileInsights(
-      makeProfileInsightsRequestFixture()
+    const result = await service.generateProfileInsights(makeProfileInsightsRequestFixture());
+
+    expect(aiRun).toHaveBeenCalledTimes(1);
+    expect(result.data.summary).toBe(
+      "Your current plan broadly matches your goal. Below are the highest-value adjustments for progress and adherence."
     );
-
-    expect(aiRun).toHaveBeenCalledTimes(2);
-    expect(aiRun.mock.calls[1]?.[1]).not.toHaveProperty("guided_json");
-    expect(result.data).toEqual({
-      summary:
-        "Your current split supports hypertrophy, but weekly gym frequency is lower than your goal.",
-      recommendations: [
-        "Add one more gym session if recovery and schedule allow.",
-        "Keep compound lifts in the 6 to 10 rep range for now.",
-      ],
-      suggestedChanges: [],
-    });
-  });
-
-  it("maps timeout-like upstream errors to 504", async () => {
-    const service = new WorkersAICoachService(
-      makeEnv({
-        AI: {
-          run: vi.fn().mockRejectedValue(new Error("Request timed out")),
-        },
-      })
-    );
-
-    await expect(
-      service.generateProfileInsights(makeProfileInsightsRequestFixture())
-    ).rejects.toMatchObject({
-      code: "upstream_timeout",
-      status: 504,
-    });
+    expect(result.data.recommendations.length).toBeGreaterThan(0);
   });
 
   it("cuts off long-running profile insight requests before the client disconnects", async () => {
@@ -373,16 +340,33 @@ describe("WorkersAICoachService", () => {
       const requestPromise = service.generateProfileInsights(
         makeProfileInsightsRequestFixture()
       );
-      const expectation = expect(requestPromise).rejects.toMatchObject({
-        code: "upstream_timeout",
-        status: 504,
+      const expectation = expect(requestPromise).resolves.toMatchObject({
+        data: {
+          summary:
+            "Your current plan broadly matches your goal. Below are the highest-value adjustments for progress and adherence.",
+        },
       });
 
-      await vi.advanceTimersByTimeAsync(12_050);
+      await vi.advanceTimersByTimeAsync(8_050);
       await expectation;
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("maps timeout-like upstream errors to 504 for chat", async () => {
+    const service = new WorkersAICoachService(
+      makeEnv({
+        AI: {
+          run: vi.fn().mockRejectedValue(new Error("Request timed out")),
+        },
+      })
+    );
+
+    await expect(service.generateChat(makeChatRequestFixture())).rejects.toMatchObject({
+      code: "upstream_timeout",
+      status: 504,
+    });
   });
 });
 
