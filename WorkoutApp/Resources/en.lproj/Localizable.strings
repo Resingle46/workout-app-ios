@@ -1,6 +1,7 @@
 "tab.programs" = "Programs";
 "tab.workout" = "Workout";
 "tab.statistics" = "Statistics";
+"tab.coach" = "Coach";
 "tab.profile" = "Profile";
 "tabbar.tabs" = "Tabs";
 
@@ -12,6 +13,8 @@
 "header.statistics.subtitle" = "Progress Metrics";
 "header.profile.title" = "Profile";
 "header.profile.subtitle" = "Your training at a glance";
+"header.coach.title" = "Coach";
+"header.coach.subtitle" = "Ask for training guidance with your app context";
 
 "programs.title" = "Programs";
 "programs.subtitle" = "Build plans, launch workouts, and keep every session ready.";
@@ -227,6 +230,16 @@
 "profile.card.recommendations.split.upper_lower" = "Upper / lower";
 "profile.card.recommendations.split.upper_lower_plus" = "Upper-lower + specialization";
 "profile.card.recommendations.split.high_frequency" = "High-frequency split";
+"profile.card.ai.eyebrow" = "Coach";
+"profile.card.ai.title" = "AI guidance";
+"profile.card.ai.source.remote" = "Live AI insights";
+"profile.card.ai.source.fallback" = "Local fallback insights";
+"profile.card.ai.loading" = "Refreshing coach insights...";
+"profile.card.ai.empty" = "AI guidance will appear after your profile and training context are analyzed.";
+"profile.card.ai.open_coach" = "Open Coach";
+"profile.card.ai.drafts_eyebrow" = "Drafts";
+"profile.card.ai.drafts_title" = "Suggested changes";
+"profile.card.ai.no_drafts" = "No coach-applied draft changes right now. Ask Coach for a plan adjustment or progression check.";
 
 "profile.card.compatibility.eyebrow" = "Fit";
 "profile.card.compatibility.title" = "Goal compatibility";
@@ -250,6 +263,50 @@
 "profile.card.relative_strength.lift.squat" = "Squat";
 "profile.card.relative_strength.lift.deadlift" = "Deadlift";
 "profile.card.relative_strength.lift.ohp" = "Overhead press";
+"coach.error.feature_disabled" = "AI Coach is disabled in app configuration.";
+"coach.error.missing_base_url" = "AI Coach backend URL is missing.";
+"coach.error.invalid_response" = "AI Coach returned an unreadable response.";
+"coach.error.http_status" = "AI Coach request failed with status %d.";
+"coach.error.chat_unavailable" = "Coach chat is unavailable until the backend is configured.";
+"coach.loading.insights" = "Refreshing coach insights...";
+"coach.quick_prompt.title" = "Quick prompts";
+"coach.quick_prompt.analyze" = "Analyze my current program";
+"coach.quick_prompt.volume" = "Is my weekly volume enough?";
+"coach.quick_prompt.progression" = "How should I progress next week?";
+"coach.quick_prompt.recovery" = "What recovery issue do you see?";
+"coach.chat.title" = "Conversation";
+"coach.suggested_changes.title" = "Suggested changes";
+"coach.ask.title" = "Ask Coach";
+"coach.ask.placeholder" = "Ask about training, progression, recovery, or how to adjust your plan";
+"coach.action.send" = "Send";
+"coach.action.review_apply" = "Review and apply";
+"coach.action.open_profile" = "Open Profile";
+"coach.action.apply" = "Apply";
+"coach.apply.alert.title" = "Apply coach suggestion?";
+"coach.status.remote" = "Remote AI active";
+"coach.status.remote_description" = "The app can request live AI responses from your backend.";
+"coach.status.fallback" = "Fallback mode";
+"coach.status.fallback_description" = "Profile guidance uses local analytics. Chat stays unavailable until the backend is configured.";
+"coach.insights.title" = "Coach summary";
+"coach.insights.source.remote" = "Remote AI";
+"coach.insights.source.fallback" = "Local fallback";
+"coach.message.coach" = "Coach";
+"coach.message.you" = "You";
+"coach.fallback.goal_eta" = "Estimated timeline: %@.";
+"coach.fallback.summary.aligned" = "Your profile, target, and recent rhythm look broadly aligned for the current plan.";
+"coach.fallback.summary.adjustments" = "Coach found %d area(s) worth adjusting before the plan fits your goal more closely.";
+"coach.draft.weekly_target.title" = "Adjust weekly target";
+"coach.draft.weekly_target.summary" = "Set your weekly training target to %d sessions.";
+"coach.draft.add_day.title" = "Add a workout day";
+"coach.draft.add_day.summary" = "Add one more day to %@ so the saved split matches your target frequency.";
+"coach.draft.add_day.default_title" = "Day %d";
+"coach.draft.add_day.focus.strength" = "Strength emphasis";
+"coach.draft.add_day.focus.hypertrophy" = "Hypertrophy emphasis";
+"coach.draft.add_day.focus.fat_loss" = "Conditioning and fat loss";
+"coach.draft.add_day.focus.general_fitness" = "General fitness";
+"coach.draft.add_day.focus.default" = "Coach-added workout";
+"coach.draft.delete_day.title" = "Remove a workout day";
+"coach.draft.delete_day.summary" = "Remove %@ so the saved split matches your current weekly target.";
 
 "backup.section" = "Backups";
 "backup.status" = "Status";

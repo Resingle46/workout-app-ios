@@ -5,6 +5,7 @@ import UIKit
 @MainActor
 struct ProfileView: View {
     @Environment(AppStore.self) private var store
+    @Environment(CoachStore.self) private var coachStore
     @Environment(\.appBottomRailInset) private var bottomRailInset
     @State private var showingProfileEditor = false
 
@@ -28,12 +29,12 @@ struct ProfileView: View {
         store.profileMetabolismSummary()
     }
 
-    private var trainingRecommendationSummary: ProfileTrainingRecommendationSummary {
-        store.profileTrainingRecommendationSummary()
-    }
-
-    private var goalCompatibilitySummary: ProfileGoalCompatibilitySummary {
-        store.profileGoalCompatibilitySummary()
+    private var profileRefreshSeed: String {
+        [
+            store.selectedLanguageCode,
+            store.localStateUpdatedAt?.timeIntervalSince1970.appNumberText ?? "none",
+            store.activeSession?.id.uuidString ?? "no-active-session"
+        ].joined(separator: "|")
     }
 
     var body: some View {
@@ -73,19 +74,25 @@ struct ProfileView: View {
 
                 ProfileMetabolismCard(summary: metabolismSummary)
 
-                Button {
-                    showingProfileEditor = true
-                } label: {
-                    ProfileTrainingRecommendationsCard(summary: trainingRecommendationSummary)
-                }
-                .buttonStyle(AppInteractiveCardButtonStyle(pressedOpacity: 0.97))
+                ProfileCoachInsightsCard(
+                    insights: coachStore.profileInsights,
+                    origin: coachStore.profileInsightsOrigin,
+                    isLoading: coachStore.isLoadingProfileInsights,
+                    onOpenCoach: {
+                        store.selectedTab = .coach
+                    }
+                )
 
-                Button {
-                    showingProfileEditor = true
-                } label: {
-                    ProfileGoalCompatibilityCard(summary: goalCompatibilitySummary)
-                }
-                .buttonStyle(AppInteractiveCardButtonStyle(pressedOpacity: 0.97))
+                ProfileCoachDraftsCard(
+                    changes: coachStore.profileInsights?.suggestedChanges ?? [],
+                    isLoading: coachStore.isLoadingProfileInsights && coachStore.profileInsights == nil,
+                    onOpenCoach: {
+                        store.selectedTab = .coach
+                    },
+                    onReviewChange: { change in
+                        coachStore.requestSuggestedChangeReview(change)
+                    }
+                )
 
                 Button {
                     store.selectedTab = .statistics
@@ -120,6 +127,43 @@ struct ProfileView: View {
             }
             .presentationDetents([.large])
             .presentationBackground(AppTheme.background)
+        }
+        .task(id: profileRefreshSeed) {
+            if store.selectedTab == .profile {
+                await coachStore.refreshProfileInsights(using: store)
+            }
+        }
+        .onChange(of: store.selectedTab, initial: true) { _, newValue in
+            guard newValue == .profile else {
+                return
+            }
+
+            Task {
+                await coachStore.refreshProfileInsights(using: store)
+            }
+        }
+        .alert(
+            Text("coach.apply.alert.title"),
+            isPresented: Binding(
+                get: { coachStore.pendingSuggestedChange != nil },
+                set: { newValue in
+                    if !newValue {
+                        coachStore.cancelSuggestedChangeReview()
+                    }
+                }
+            ),
+            presenting: coachStore.pendingSuggestedChange
+        ) { _ in
+            Button("coach.action.apply") {
+                Task {
+                    _ = await coachStore.confirmPendingSuggestedChange(using: store)
+                }
+            }
+            Button("action.cancel", role: .cancel) {
+                coachStore.cancelSuggestedChangeReview()
+            }
+        } message: { change in
+            Text(change.summary)
         }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .navigationBar)
@@ -655,6 +699,122 @@ private struct ProfileMetabolismCard: View {
                         accent: .cyan
                     )
                 }
+            }
+        }
+    }
+}
+
+private struct ProfileCoachInsightsCard: View {
+    let insights: CoachProfileInsights?
+    let origin: CoachInsightsOrigin
+    let isLoading: Bool
+    let onOpenCoach: () -> Void
+
+    private var sourceText: String {
+        switch origin {
+        case .remote:
+            return localizedString("profile.card.ai.source.remote")
+        case .fallback:
+            return localizedString("profile.card.ai.source.fallback")
+        }
+    }
+
+    var body: some View {
+        ProfileAccentCard(accent: .aqua) {
+            VStack(alignment: .leading, spacing: 18) {
+                ProfileCardHeader(
+                    eyebrowKey: "profile.card.ai.eyebrow",
+                    titleKey: "profile.card.ai.title",
+                    systemImage: "sparkles",
+                    showsChevron: false
+                )
+
+                if isLoading && insights == nil {
+                    HStack(spacing: 12) {
+                        ProgressView()
+                            .tint(AppTheme.primaryText)
+                        Text("profile.card.ai.loading")
+                            .font(AppTypography.body(size: 16, weight: .medium))
+                            .foregroundStyle(DashboardCardAccent.aqua.secondaryText)
+                    }
+                } else {
+                    Text(insights?.summary ?? localizedString("profile.card.ai.empty"))
+                        .font(AppTypography.heading(size: 24))
+                        .foregroundStyle(AppTheme.primaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    Text(sourceText)
+                        .font(AppTypography.caption(size: 13, weight: .medium))
+                        .foregroundStyle(DashboardCardAccent.aqua.secondaryText)
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(Array((insights?.recommendations ?? []).prefix(4).enumerated()), id: \.offset) { _, recommendation in
+                            HStack(alignment: .top, spacing: 10) {
+                                Circle()
+                                    .fill(Color.white.opacity(0.82))
+                                    .frame(width: 7, height: 7)
+                                    .padding(.top, 8)
+
+                                Text(recommendation)
+                                    .font(AppTypography.body(size: 15, weight: .medium, relativeTo: .subheadline))
+                                    .foregroundStyle(AppTheme.primaryText)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                    }
+                }
+
+                Button("profile.card.ai.open_coach") {
+                    onOpenCoach()
+                }
+                .buttonStyle(AppSecondaryButtonStyle())
+            }
+        }
+    }
+}
+
+private struct ProfileCoachDraftsCard: View {
+    let changes: [CoachSuggestedChange]
+    let isLoading: Bool
+    let onOpenCoach: () -> Void
+    let onReviewChange: (CoachSuggestedChange) -> Void
+
+    var body: some View {
+        ProfileAccentCard(accent: .orange) {
+            VStack(alignment: .leading, spacing: 18) {
+                ProfileCardHeader(
+                    eyebrowKey: "profile.card.ai.drafts_eyebrow",
+                    titleKey: "profile.card.ai.drafts_title",
+                    systemImage: "wand.and.stars",
+                    showsChevron: false
+                )
+
+                if isLoading {
+                    HStack(spacing: 12) {
+                        ProgressView()
+                            .tint(AppTheme.primaryText)
+                        Text("profile.card.ai.loading")
+                            .font(AppTypography.body(size: 16, weight: .medium))
+                            .foregroundStyle(DashboardCardAccent.orange.secondaryText)
+                    }
+                } else if changes.isEmpty {
+                    Text("profile.card.ai.no_drafts")
+                        .font(AppTypography.body(size: 16, weight: .medium, relativeTo: .subheadline))
+                        .foregroundStyle(DashboardCardAccent.orange.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    CoachSuggestedChangesList(
+                        changes: Array(changes.prefix(3)),
+                        applyButtonTitle: localizedString("coach.action.review_apply")
+                    ) { change in
+                        onReviewChange(change)
+                    }
+                }
+
+                Button("profile.card.ai.open_coach") {
+                    onOpenCoach()
+                }
+                .buttonStyle(AppSecondaryButtonStyle())
             }
         }
     }

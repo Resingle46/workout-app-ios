@@ -1,6 +1,7 @@
 "tab.programs" = "Программы";
 "tab.workout" = "Тренировка";
 "tab.statistics" = "Статистика";
+"tab.coach" = "Coach";
 "tab.profile" = "Профиль";
 "tabbar.tabs" = "Вкладки";
 
@@ -12,6 +13,8 @@
 "header.statistics.subtitle" = "Метрики прогресса";
 "header.profile.title" = "Профиль";
 "header.profile.subtitle" = "Ваш прогресс и личные настройки";
+"header.coach.title" = "Coach";
+"header.coach.subtitle" = "Вопросы по тренировкам с учётом данных приложения";
 
 "programs.title" = "Программы";
 "programs.subtitle" = "Собирайте планы, быстро запускайте тренировки и держите весь цикл под рукой.";
@@ -227,6 +230,16 @@
 "profile.card.recommendations.split.upper_lower" = "Верх / низ";
 "profile.card.recommendations.split.upper_lower_plus" = "Верх-низ + специализация";
 "profile.card.recommendations.split.high_frequency" = "Высокочастотный сплит";
+"profile.card.ai.eyebrow" = "Coach";
+"profile.card.ai.title" = "AI-рекомендации";
+"profile.card.ai.source.remote" = "Живые AI-инсайты";
+"profile.card.ai.source.fallback" = "Локальный fallback";
+"profile.card.ai.loading" = "Обновляем рекомендации Coach...";
+"profile.card.ai.empty" = "AI-рекомендации появятся после анализа профиля и тренировочного контекста.";
+"profile.card.ai.open_coach" = "Открыть Coach";
+"profile.card.ai.drafts_eyebrow" = "Черновики";
+"profile.card.ai.drafts_title" = "Предлагаемые изменения";
+"profile.card.ai.no_drafts" = "Сейчас нет готовых изменений для применения. Спросите Coach про корректировку плана или прогрессию.";
 
 "profile.card.compatibility.eyebrow" = "Проверка";
 "profile.card.compatibility.title" = "Совместимость цели";
@@ -250,6 +263,50 @@
 "profile.card.relative_strength.lift.squat" = "Присед";
 "profile.card.relative_strength.lift.deadlift" = "Становая";
 "profile.card.relative_strength.lift.ohp" = "Жим стоя";
+"coach.error.feature_disabled" = "AI Coach отключён в конфигурации приложения.";
+"coach.error.missing_base_url" = "Не задан URL backend-сервиса для AI Coach.";
+"coach.error.invalid_response" = "AI Coach вернул ответ, который не удалось прочитать.";
+"coach.error.http_status" = "Запрос к AI Coach завершился статусом %d.";
+"coach.error.chat_unavailable" = "Чат Coach недоступен, пока не настроен backend.";
+"coach.loading.insights" = "Обновляем рекомендации Coach...";
+"coach.quick_prompt.title" = "Быстрые вопросы";
+"coach.quick_prompt.analyze" = "Проанализируй мою текущую программу";
+"coach.quick_prompt.volume" = "Хватает ли мне недельного объёма?";
+"coach.quick_prompt.progression" = "Как прогрессировать на следующей неделе?";
+"coach.quick_prompt.recovery" = "Где у меня проблема с восстановлением?";
+"coach.chat.title" = "Диалог";
+"coach.suggested_changes.title" = "Предлагаемые изменения";
+"coach.ask.title" = "Вопрос к Coach";
+"coach.ask.placeholder" = "Спросите про тренировки, прогрессию, восстановление или как изменить план";
+"coach.action.send" = "Отправить";
+"coach.action.review_apply" = "Проверить и применить";
+"coach.action.open_profile" = "Открыть профиль";
+"coach.action.apply" = "Применить";
+"coach.apply.alert.title" = "Применить предложение Coach?";
+"coach.status.remote" = "Удалённый AI активен";
+"coach.status.remote_description" = "Приложение может получать живые AI-ответы через ваш backend.";
+"coach.status.fallback" = "Режим fallback";
+"coach.status.fallback_description" = "В профиле используются локальные расчёты. Чат станет доступен после настройки backend.";
+"coach.insights.title" = "Сводка Coach";
+"coach.insights.source.remote" = "Удалённый AI";
+"coach.insights.source.fallback" = "Локальный fallback";
+"coach.message.coach" = "Coach";
+"coach.message.you" = "Вы";
+"coach.fallback.goal_eta" = "Оценочный срок: %@.";
+"coach.fallback.summary.aligned" = "Профиль, цель и недавний ритм в целом согласованы с текущим планом.";
+"coach.fallback.summary.adjustments" = "Coach нашёл %d зону(ы), которые стоит подправить, чтобы план лучше соответствовал цели.";
+"coach.draft.weekly_target.title" = "Изменить недельную цель";
+"coach.draft.weekly_target.summary" = "Поставить недельную цель на %d тренировок.";
+"coach.draft.add_day.title" = "Добавить тренировочный день";
+"coach.draft.add_day.summary" = "Добавить ещё один день в %@, чтобы сплит соответствовал целевой частоте.";
+"coach.draft.add_day.default_title" = "День %d";
+"coach.draft.add_day.focus.strength" = "Акцент на силу";
+"coach.draft.add_day.focus.hypertrophy" = "Акцент на гипертрофию";
+"coach.draft.add_day.focus.fat_loss" = "Кондиция и жиросжигание";
+"coach.draft.add_day.focus.general_fitness" = "Общая физподготовка";
+"coach.draft.add_day.focus.default" = "Тренировка от Coach";
+"coach.draft.delete_day.title" = "Удалить тренировочный день";
+"coach.draft.delete_day.summary" = "Удалить %@, чтобы сплит соответствовал текущей недельной цели.";
 
 "muscle.chest" = "Грудь";
 "muscle.back" = "Спина";

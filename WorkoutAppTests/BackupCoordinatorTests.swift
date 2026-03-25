@@ -1112,6 +1112,292 @@ final class BackupCoordinatorTests: XCTestCase {
         XCTAssertNil(deadliftLift?.relativeToBodyWeight)
     }
 
+    @MainActor
+    func testCoachContextBuilderCapsRecentHistoryAndPropagatesLocale() {
+        let exercise = makeExercise(id: UUID(uuidString: "EFEF1111-1111-1111-1111-111111111111")!, name: "Bench")
+        let workoutID = UUID(uuidString: "CDCD1111-1111-1111-1111-111111111111")!
+        let sessions = (1...10).map { day in
+            WorkoutSession(
+                workoutTemplateID: workoutID,
+                title: "Session \(day)",
+                startedAt: makeDate(year: 2024, month: 3, day: day, hour: 10),
+                endedAt: makeDate(year: 2024, month: 3, day: day, hour: 11),
+                exercises: [
+                    WorkoutExerciseLog(
+                        templateExerciseID: UUID(),
+                        exerciseID: exercise.id,
+                        groupKind: .regular,
+                        groupID: nil,
+                        sets: [
+                            WorkoutSetLog(reps: 5, weight: Double(60 + day), completedAt: makeDate(year: 2024, month: 3, day: day, hour: 10, minute: 5))
+                        ]
+                    )
+                ]
+            )
+        }
+        let program = WorkoutProgram(
+            title: "Strength",
+            workouts: [
+                WorkoutTemplate(
+                    id: workoutID,
+                    title: "Day 1",
+                    focus: "Chest",
+                    exercises: [
+                        WorkoutExerciseTemplate(
+                            exerciseID: exercise.id,
+                            sets: [WorkoutSetTemplate(reps: 5, suggestedWeight: 80)]
+                        )
+                    ]
+                )
+            ]
+        )
+
+        let store = AppStore()
+        var snapshot = AppSnapshot(
+            programs: [program],
+            exercises: [exercise],
+            history: sessions,
+            profile: UserProfile(
+                sex: "M",
+                age: 29,
+                weight: 88,
+                height: 182,
+                appLanguageCode: "ru",
+                primaryGoal: .strength,
+                experienceLevel: .intermediate,
+                weeklyWorkoutTarget: 4,
+                targetBodyWeight: nil
+            )
+        )
+        snapshot.history.sort { $0.startedAt > $1.startedAt }
+        store.apply(snapshot: snapshot)
+
+        let payload = CoachContextBuilder().build(from: store)
+
+        XCTAssertEqual(payload.localeIdentifier, "ru")
+        XCTAssertEqual(payload.historyMode, "summary_recent_history")
+        XCTAssertEqual(payload.recentFinishedSessions.count, 8)
+        XCTAssertEqual(payload.recentFinishedSessions.first?.title, "Session 10")
+        XCTAssertEqual(payload.preferredProgram?.title, "Strength")
+        XCTAssertEqual(payload.preferredProgram?.workouts.first?.exercises.first?.exerciseName, exercise.localizedName)
+    }
+
+    @MainActor
+    func testCoachStoreFallsBackWhenRemoteInsightsFail() async {
+        let store = AppStore()
+        store.apply(snapshot: makeSnapshot())
+
+        let coachStore = CoachStore(
+            client: StubCoachAPIClient(
+                shouldFailInsights: true,
+                shouldFailChat: false
+            ),
+            configuration: CoachRuntimeConfiguration(
+                isFeatureEnabled: true,
+                backendBaseURL: URL(string: "https://example.com")
+            )
+        )
+
+        await coachStore.refreshProfileInsights(using: store)
+
+        XCTAssertNotNil(coachStore.profileInsights)
+        XCTAssertEqual(coachStore.profileInsightsOrigin, .fallback)
+        XCTAssertNotNil(coachStore.lastInsightsErrorDescription)
+    }
+
+    @MainActor
+    func testApplyCoachSuggestedChangeUpdatesWeeklyWorkoutTarget() {
+        let store = AppStore()
+        store.apply(snapshot: makeSnapshot())
+
+        let applied = store.applyCoachSuggestedChange(
+            CoachSuggestedChange(
+                id: "set-target",
+                type: .setWeeklyWorkoutTarget,
+                title: "Target",
+                summary: "Summary",
+                weeklyWorkoutTarget: 5
+            )
+        )
+
+        XCTAssertTrue(applied)
+        XCTAssertEqual(store.profile.weeklyWorkoutTarget, 5)
+    }
+
+    @MainActor
+    func testApplyCoachSuggestedChangeAddsWorkoutDay() {
+        let store = AppStore()
+        let snapshot = makeSnapshot()
+        store.apply(snapshot: snapshot)
+        let programID = try! XCTUnwrap(snapshot.programs.first?.id)
+
+        let applied = store.applyCoachSuggestedChange(
+            CoachSuggestedChange(
+                id: "add-day",
+                type: .addWorkoutDay,
+                title: "Add",
+                summary: "Summary",
+                programID: programID,
+                workoutTitle: "Coach Day",
+                workoutFocus: "Upper"
+            )
+        )
+
+        XCTAssertTrue(applied)
+        XCTAssertEqual(store.programs.first?.workouts.count, 2)
+        XCTAssertEqual(store.programs.first?.workouts.last?.title, "Coach Day")
+    }
+
+    @MainActor
+    func testApplyCoachSuggestedChangeDeletesWorkoutDay() {
+        let store = AppStore()
+        var snapshot = makeSnapshot()
+        let secondWorkoutID = UUID(uuidString: "99999999-AAAA-BBBB-CCCC-DDDDDDDDDDDD")!
+        snapshot.programs[0].workouts.append(
+            WorkoutTemplate(
+                id: secondWorkoutID,
+                title: "Delete Me",
+                focus: "Legs",
+                exercises: []
+            )
+        )
+        store.apply(snapshot: snapshot)
+        let programID = snapshot.programs[0].id
+
+        let applied = store.applyCoachSuggestedChange(
+            CoachSuggestedChange(
+                id: "delete-day",
+                type: .deleteWorkoutDay,
+                title: "Delete",
+                summary: "Summary",
+                programID: programID,
+                workoutID: secondWorkoutID
+            )
+        )
+
+        XCTAssertTrue(applied)
+        XCTAssertEqual(store.programs.first?.workouts.count, 1)
+        XCTAssertNil(store.programs.first?.workouts.first(where: { $0.id == secondWorkoutID }))
+    }
+
+    @MainActor
+    func testApplyCoachSuggestedChangeSwapsWorkoutExercise() {
+        let originalExercise = makeExercise(id: UUID(uuidString: "11111111-AAAA-BBBB-CCCC-111111111111")!, name: "Bench")
+        let replacementExercise = makeExercise(id: UUID(uuidString: "22222222-AAAA-BBBB-CCCC-222222222222")!, name: "Incline Bench")
+        let templateExerciseID = UUID(uuidString: "33333333-AAAA-BBBB-CCCC-333333333333")!
+        let workoutID = UUID(uuidString: "44444444-AAAA-BBBB-CCCC-444444444444")!
+        let programID = UUID(uuidString: "55555555-AAAA-BBBB-CCCC-555555555555")!
+
+        let snapshot = AppSnapshot(
+            programs: [
+                WorkoutProgram(
+                    id: programID,
+                    title: "Program",
+                    workouts: [
+                        WorkoutTemplate(
+                            id: workoutID,
+                            title: "Day",
+                            focus: "",
+                            exercises: [
+                                WorkoutExerciseTemplate(
+                                    id: templateExerciseID,
+                                    exerciseID: originalExercise.id,
+                                    sets: [WorkoutSetTemplate(reps: 8, suggestedWeight: 80)]
+                                )
+                            ]
+                        )
+                    ]
+                )
+            ],
+            exercises: [originalExercise, replacementExercise],
+            history: [],
+            profile: UserProfile(sex: "M", age: 29, weight: 88, height: 182, appLanguageCode: "en")
+        )
+
+        let store = AppStore()
+        store.apply(snapshot: snapshot)
+
+        let applied = store.applyCoachSuggestedChange(
+            CoachSuggestedChange(
+                id: "swap-exercise",
+                type: .swapWorkoutExercise,
+                title: "Swap",
+                summary: "Summary",
+                programID: programID,
+                workoutID: workoutID,
+                templateExerciseID: templateExerciseID,
+                replacementExerciseID: replacementExercise.id
+            )
+        )
+
+        XCTAssertTrue(applied)
+        XCTAssertEqual(store.workout(programID: programID, workoutID: workoutID)?.exercises.first?.exerciseID, replacementExercise.id)
+    }
+
+    @MainActor
+    func testApplyCoachSuggestedChangeUpdatesTemplatePrescription() {
+        let snapshot = makeSnapshot()
+        let programID = snapshot.programs[0].id
+        let workoutID = snapshot.programs[0].workouts[0].id
+        let templateExerciseID = snapshot.programs[0].workouts[0].exercises[0].id
+
+        let store = AppStore()
+        store.apply(snapshot: snapshot)
+
+        let applied = store.applyCoachSuggestedChange(
+            CoachSuggestedChange(
+                id: "update-template",
+                type: .updateTemplateExercisePrescription,
+                title: "Update",
+                summary: "Summary",
+                programID: programID,
+                workoutID: workoutID,
+                templateExerciseID: templateExerciseID,
+                reps: 10,
+                setsCount: 4,
+                suggestedWeight: 92.5
+            )
+        )
+
+        XCTAssertTrue(applied)
+        let updatedExercise = store.workout(programID: programID, workoutID: workoutID)?.exercises.first
+        XCTAssertEqual(updatedExercise?.sets.count, 4)
+        XCTAssertEqual(updatedExercise?.sets.first?.reps, 10)
+        XCTAssertEqual(updatedExercise?.sets.first?.suggestedWeight, 92.5)
+    }
+
+    @MainActor
+    func testCoachConversationIsEphemeralAndNotPersistedInSnapshot() async throws {
+        let store = AppStore()
+        store.apply(snapshot: makeSnapshot())
+
+        let coachStore = CoachStore(
+            client: StubCoachAPIClient(
+                shouldFailInsights: false,
+                shouldFailChat: false
+            ),
+            configuration: CoachRuntimeConfiguration(
+                isFeatureEnabled: true,
+                backendBaseURL: URL(string: "https://example.com")
+            )
+        )
+
+        await coachStore.sendMessage("How should I progress?", using: store)
+
+        XCTAssertEqual(coachStore.messages.count, 2)
+        XCTAssertEqual(coachStore.messages.first?.role, .user)
+        XCTAssertEqual(coachStore.messages.last?.role, .assistant)
+
+        let snapshotData = try JSONEncoder().encode(store.currentSnapshot())
+        let snapshotJSON = String(data: snapshotData, encoding: .utf8) ?? ""
+        XCTAssertFalse(snapshotJSON.contains("How should I progress?"))
+        XCTAssertFalse(snapshotJSON.contains("Coach answer"))
+
+        coachStore.resetConversation()
+
+        XCTAssertTrue(coachStore.messages.isEmpty)
+    }
+
     private func backupFiles(in folderURL: URL) throws -> [URL] {
         try FileManager.default.contentsOfDirectory(
             at: folderURL,
@@ -1316,5 +1602,59 @@ private final class TestClock: @unchecked Sendable {
 
     init(currentDate: Date) {
         self.currentDate = currentDate
+    }
+}
+
+private struct StubCoachAPIClient: CoachAPIClient {
+    let shouldFailInsights: Bool
+    let shouldFailChat: Bool
+
+    func fetchProfileInsights(
+        locale: String,
+        context: CoachContextPayload,
+        capabilityScope: CoachCapabilityScope
+    ) async throws -> CoachProfileInsights {
+        if shouldFailInsights {
+            throw StubCoachError.failedInsights
+        }
+
+        return CoachProfileInsights(
+            summary: "Remote summary",
+            recommendations: ["Remote recommendation"],
+            suggestedChanges: []
+        )
+    }
+
+    func sendChat(
+        locale: String,
+        question: String,
+        previousResponseID: String?,
+        context: CoachContextPayload,
+        capabilityScope: CoachCapabilityScope
+    ) async throws -> CoachChatResponse {
+        if shouldFailChat {
+            throw StubCoachError.failedChat
+        }
+
+        return CoachChatResponse(
+            answerMarkdown: "Coach answer",
+            responseID: "response-1",
+            followUps: ["Next question"],
+            suggestedChanges: []
+        )
+    }
+}
+
+private enum StubCoachError: LocalizedError, Sendable {
+    case failedInsights
+    case failedChat
+
+    var errorDescription: String? {
+        switch self {
+        case .failedInsights:
+            return "Insights failed"
+        case .failedChat:
+            return "Chat failed"
+        }
     }
 }

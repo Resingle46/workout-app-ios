@@ -149,6 +149,7 @@ struct RootTabBarPresentationResolver {
 @MainActor
 struct RootTabView: View {
     @Environment(AppStore.self) private var store
+    @Environment(CoachStore.self) private var coachStore
     @State private var showBackupSetupPrompt = false
     @State private var launchBackupPickerMode: BackupDocumentPickerMode?
     @State private var launchRestoreRequest: BackupRestoreRequest?
@@ -170,14 +171,18 @@ struct RootTabView: View {
                 rootNavigationStack(for: .programs, bottomRailInset: bottomRailInset)
                 rootNavigationStack(for: .workout, bottomRailInset: bottomRailInset)
                 rootNavigationStack(for: .statistics, bottomRailInset: bottomRailInset)
+                rootNavigationStack(for: .coach, bottomRailInset: bottomRailInset)
                 rootNavigationStack(for: .profile, bottomRailInset: bottomRailInset)
             }
             .onChange(of: store.shouldPromptForBackupSetup, initial: true) { _, newValue in
                 showBackupSetupPrompt = newValue
             }
-            .onChange(of: store.selectedTab) { _, newValue in
+            .onChange(of: store.selectedTab, initial: false) { oldValue, newValue in
                 if newValue != .workout {
                     workoutTabsExpanded = false
+                }
+                if oldValue == .coach, newValue != .coach {
+                    coachStore.resetConversation()
                 }
             }
             .onChange(of: store.activeSession?.id) { _, newValue in
@@ -241,6 +246,8 @@ struct RootTabView: View {
                 ActiveWorkoutView()
             case .statistics:
                 StatisticsView()
+            case .coach:
+                CoachView()
             case .profile:
                 ProfileView()
             }
@@ -723,6 +730,8 @@ private extension RootTab {
             return "timer"
         case .statistics:
             return "chart.line.uptrend.xyaxis"
+        case .coach:
+            return "sparkles"
         case .profile:
             return "person.crop.circle"
         }
@@ -736,6 +745,8 @@ private extension RootTab {
             return "tab.workout"
         case .statistics:
             return "tab.statistics"
+        case .coach:
+            return "tab.coach"
         case .profile:
             return "tab.profile"
         }

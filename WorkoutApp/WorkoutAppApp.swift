@@ -4,16 +4,25 @@ import SwiftUI
 struct WorkoutAppApp: App {
     @Environment(\.scenePhase) private var scenePhase
     @State private var store: AppStore
+    @State private var coachStore: CoachStore
 
     init() {
         AppTypography.configureGlobalAppearance()
         _store = State(initialValue: AppStore())
+        let configuration = CoachRuntimeConfiguration(bundle: .main)
+        _coachStore = State(
+            initialValue: CoachStore(
+                client: CoachAPIHTTPClient(configuration: configuration),
+                configuration: configuration
+            )
+        )
     }
 
     var body: some Scene {
         WindowGroup {
             RootTabView()
                 .environment(store)
+                .environment(coachStore)
                 .preferredColorScheme(.dark)
                 .task {
                     await store.handleAppLaunch()

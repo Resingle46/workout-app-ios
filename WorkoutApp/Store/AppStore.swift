@@ -299,6 +299,79 @@ final class AppStore {
         save()
     }
 
+    func applyCoachSuggestedChange(_ change: CoachSuggestedChange) -> Bool {
+        guard change.isApplicable else {
+            return false
+        }
+
+        switch change.type {
+        case .setWeeklyWorkoutTarget:
+            guard let weeklyWorkoutTarget = change.weeklyWorkoutTarget else {
+                return false
+            }
+            updateProfile { profile in
+                profile.weeklyWorkoutTarget = weeklyWorkoutTarget
+            }
+            return true
+
+        case .addWorkoutDay:
+            guard let programID = change.programID,
+                  let workoutTitle = change.workoutTitle,
+                  program(for: programID) != nil else {
+                return false
+            }
+            addWorkout(
+                programID: programID,
+                title: workoutTitle,
+                focus: change.workoutFocus ?? ""
+            )
+            return true
+
+        case .deleteWorkoutDay:
+            guard let programID = change.programID,
+                  let workoutID = change.workoutID,
+                  workout(programID: programID, workoutID: workoutID) != nil else {
+                return false
+            }
+            deleteWorkout(programID: programID, workoutID: workoutID)
+            return true
+
+        case .swapWorkoutExercise:
+            guard let programID = change.programID,
+                  let workoutID = change.workoutID,
+                  let templateExerciseID = change.templateExerciseID,
+                  let replacementExerciseID = change.replacementExerciseID else {
+                return false
+            }
+            return swapTemplateExercise(
+                programID: programID,
+                workoutID: workoutID,
+                templateExerciseID: templateExerciseID,
+                replacementExerciseID: replacementExerciseID
+            )
+
+        case .updateTemplateExercisePrescription:
+            guard let programID = change.programID,
+                  let workoutID = change.workoutID,
+                  let templateExerciseID = change.templateExerciseID,
+                  let reps = change.reps,
+                  let setsCount = change.setsCount,
+                  let suggestedWeight = change.suggestedWeight,
+                  templateExerciseLocation(programID: programID, workoutID: workoutID, templateExerciseID: templateExerciseID) != nil else {
+                return false
+            }
+            updateTemplateExercise(
+                programID: programID,
+                workoutID: workoutID,
+                templateExerciseID: templateExerciseID,
+                reps: reps,
+                setsCount: setsCount,
+                suggestedWeight: suggestedWeight
+            )
+            return true
+        }
+    }
+
     func addExercise(
         to workoutID: UUID,
         exerciseID: UUID,
@@ -399,6 +472,22 @@ final class AppStore {
             programs[location.programIndex].workouts[location.workoutIndex].exercises
         )
         save()
+    }
+
+    func swapTemplateExercise(
+        programID: UUID,
+        workoutID: UUID,
+        templateExerciseID: UUID,
+        replacementExerciseID: UUID
+    ) -> Bool {
+        guard exercise(for: replacementExerciseID) != nil,
+              let location = templateExerciseLocation(programID: programID, workoutID: workoutID, templateExerciseID: templateExerciseID) else {
+            return false
+        }
+
+        programs[location.programIndex].workouts[location.workoutIndex].exercises[location.exerciseIndex].exerciseID = replacementExerciseID
+        save()
+        return true
     }
 
     func deleteTemplateExercise(programID: UUID, workoutID: UUID, templateExerciseID: UUID) {

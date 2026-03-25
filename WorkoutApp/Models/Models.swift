@@ -4,6 +4,7 @@ enum RootTab: CaseIterable, Hashable, Sendable {
     case programs
     case workout
     case statistics
+    case coach
     case profile
 }
 
