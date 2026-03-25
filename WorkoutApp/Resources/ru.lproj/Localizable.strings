@@ -43,7 +43,7 @@
 "action.create_program" = "Создать программу";
 "action.add_workout" = "Добавить тренировку";
 "action.edit" = "Изменить";
-"action.done" = "Done";
+"action.done" = "Готово";
 
 "program.create" = "Новая программа";
 "program.name" = "Название программы";
@@ -300,6 +300,10 @@
 "coach.context.comment.placeholder" = "Например: я тренируюсь 3 раза в неделю, но прохожу 4-дневный сплит по порядку";
 "coach.context.comment.hint" = "Комментарий сохраняется в snapshot приложения и отправляется вместе с запросами к Coach.";
 "coach.context.saving" = "Сохраняем...";
+"coach.context.saved" = "Сохранено";
+"coach.context.ready_title" = "Контекст уже задан";
+"coach.context.ready_description" = "Coach будет использовать сохранённую программу и комментарий в следующем анализе.";
+"coach.context.edit" = "Изменить";
 "coach.action.send" = "Отправить";
 "coach.action.review_apply" = "Проверить и применить";
 "coach.action.open_profile" = "Открыть профиль";

@@ -300,6 +300,10 @@
 "coach.context.comment.placeholder" = "Example: I train 3 days per week, but I rotate through a 4-day split in order";
 "coach.context.comment.hint" = "This note is saved in the app snapshot and sent with Coach requests.";
 "coach.context.saving" = "Saving...";
+"coach.context.saved" = "Saved";
+"coach.context.ready_title" = "Context is already set";
+"coach.context.ready_description" = "Coach will use your saved program and comment in the next analysis.";
+"coach.context.edit" = "Edit";
 "coach.action.send" = "Send";
 "coach.action.review_apply" = "Review and apply";
 "coach.action.open_profile" = "Open Profile";

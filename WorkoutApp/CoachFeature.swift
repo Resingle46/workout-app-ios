@@ -1170,7 +1170,7 @@ final class CoachStore {
     var messages: [CoachChatMessage] = []
     var isLoadingProfileInsights = false
     var isSendingMessage = false
-    var isSavingAnalysisSettings = false
+    var analysisSettingsSaveState: CoachAnalysisSettingsSaveState = .idle
     var lastInsightsErrorDescription: String?
     var lastChatErrorDescription: String?
     var selectedProgramIDDraft: UUID?
@@ -1198,6 +1198,10 @@ final class CoachStore {
 
     var canUseRemoteCoach: Bool {
         configuration.canUseRemoteCoach
+    }
+
+    var isSavingAnalysisSettings: Bool {
+        analysisSettingsSaveState == .saving
     }
 
     func updateConfiguration(_ configuration: CoachRuntimeConfiguration) {
@@ -1285,8 +1289,12 @@ final class CoachStore {
     }
 
     func saveAnalysisSettings(using appStore: AppStore) async {
-        isSavingAnalysisSettings = true
-        defer { isSavingAnalysisSettings = false }
+        guard analysisSettingsSaveState != .saving else {
+            return
+        }
+
+        analysisSettingsSaveState = .saving
+        let saveStartedAt = Date()
 
         let normalizedComment = String(
             programCommentDraft
@@ -1304,6 +1312,21 @@ final class CoachStore {
         syncAnalysisSettingsDrafts(using: appStore)
         await syncSnapshotIfNeeded(using: appStore)
         await refreshProfileInsights(using: appStore)
+
+        let minimumSavingStateDuration: TimeInterval = 1.35
+        let elapsedSavingTime = Date().timeIntervalSince(saveStartedAt)
+        let remainingSavingTime = minimumSavingStateDuration - elapsedSavingTime
+        if remainingSavingTime > 0 {
+            try? await Task.sleep(
+                nanoseconds: UInt64(remainingSavingTime * 1_000_000_000)
+            )
+        }
+
+        analysisSettingsSaveState = .saved
+        try? await Task.sleep(nanoseconds: 2_400_000_000)
+        if analysisSettingsSaveState == .saved {
+            analysisSettingsSaveState = .idle
+        }
     }
 
     func sendMessage(_ question: String, using appStore: AppStore) async {
@@ -1445,6 +1468,17 @@ private struct CoachSnapshotPackage {
     var includedInlineSnapshot: Bool
 }
 
+private enum CoachAnalysisSettingsSaveState: Equatable {
+    case idle
+    case saving
+    case saved
+}
+
+private enum CoachFocusField: Hashable {
+    case question
+    case comment
+}
+
 @MainActor
 struct CoachView: View {
     @Environment(AppStore.self) private var store
@@ -1452,6 +1486,8 @@ struct CoachView: View {
     @Environment(\.appBottomRailInset) private var bottomRailInset
     @State private var draftQuestion = ""
     @State private var refreshButtonScale: CGFloat = 1
+    @State private var isEditingAnalysisContext = false
+    @FocusState private var focusedField: CoachFocusField?
 
     private var quickPrompts: [String] {
         [
@@ -1466,6 +1502,19 @@ struct CoachView: View {
         store.programs
     }
 
+    private var hasSavedAnalysisContext: Bool {
+        store.coachAnalysisSettings.selectedProgramID != nil &&
+            !store.coachAnalysisSettings.programComment.isEmpty
+    }
+
+    private var savedAnalysisProgramTitle: String? {
+        guard let selectedProgramID = store.coachAnalysisSettings.selectedProgramID else {
+            return nil
+        }
+
+        return store.program(for: selectedProgramID)?.title
+    }
+
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 20) {
@@ -1474,6 +1523,7 @@ struct CoachView: View {
                     subtitleKey: "header.coach.subtitle"
                 ) {
                     Button {
+                        focusedField = nil
                         animateRefreshTap()
                         Task {
                             await coachStore.refreshProfileInsights(using: store)
@@ -1516,10 +1566,23 @@ struct CoachView: View {
                         set: { coachStore.programCommentDraft = String($0.prefix(500)) }
                     ),
                     programs: availablePrograms,
-                    isSaving: coachStore.isSavingAnalysisSettings
+                    saveState: coachStore.analysisSettingsSaveState,
+                    isExpanded: isEditingAnalysisContext || !hasSavedAnalysisContext,
+                    savedProgramTitle: savedAnalysisProgramTitle,
+                    savedProgramComment: store.coachAnalysisSettings.programComment,
+                    commentFieldFocus: $focusedField
                 ) {
+                    focusedField = nil
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) {
+                        isEditingAnalysisContext = true
+                    }
+                ) {
+                    focusedField = nil
                     Task {
                         await coachStore.saveAnalysisSettings(using: store)
+                        withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
+                            isEditingAnalysisContext = !hasSavedAnalysisContext
+                        }
                     }
                 }
 
@@ -1550,6 +1613,7 @@ struct CoachView: View {
                             .textFieldStyle(.plain)
                             .font(AppTypography.body(size: 16))
                             .foregroundStyle(AppTheme.primaryText)
+                            .focused($focusedField, equals: .question)
                             .disabled(coachStore.isSendingMessage)
                             .padding(16)
                             .background(
@@ -1562,6 +1626,7 @@ struct CoachView: View {
                             )
 
                         Button {
+                            focusedField = nil
                             sendQuestion(draftQuestion)
                         } label: {
                             HStack(spacing: 10) {
@@ -1588,6 +1653,7 @@ struct CoachView: View {
                         FlowLayout(spacing: 10) {
                             ForEach(quickPrompts, id: \.self) { prompt in
                                 Button(prompt) {
+                                    focusedField = nil
                                     sendQuestion(prompt)
                                 }
                                 .buttonStyle(CoachPromptButtonStyle())
@@ -1616,16 +1682,32 @@ struct CoachView: View {
             .padding(.horizontal, 20)
             .padding(.top, 0)
             .padding(.bottom, 24 + bottomRailInset)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                focusedField = nil
+            }
         }
+        .scrollDismissesKeyboard(.immediately)
         .task(id: store.selectedTab) {
             if store.selectedTab == .coach {
                 coachStore.syncAnalysisSettingsDrafts(using: store)
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) {
+                    isEditingAnalysisContext = !hasSavedAnalysisContext
+                }
                 if coachStore.profileInsights == nil {
                     await coachStore.refreshProfileInsights(using: store)
                 }
             }
         }
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("action.done") {
+                    focusedField = nil
+                }
+            }
+        }
         .toolbar(.hidden, for: .navigationBar)
         .appScreenBackground()
     }
@@ -1753,92 +1835,151 @@ private struct CoachContextPreferencesCard: View {
     @Binding var programComment: String
 
     let programs: [WorkoutProgram]
-    let isSaving: Bool
+    let saveState: CoachAnalysisSettingsSaveState
+    let isExpanded: Bool
+    let savedProgramTitle: String?
+    let savedProgramComment: String
+    let commentFieldFocus: FocusState<CoachFocusField?>.Binding
+    let onEdit: () -> Void
     let onSave: () -> Void
+
+    private var isSaving: Bool {
+        saveState == .saving
+    }
+
+    private var isSaved: Bool {
+        saveState == .saved
+    }
 
     var body: some View {
         AppCard {
-            VStack(alignment: .leading, spacing: 16) {
-                AppSectionTitle(titleKey: "coach.context.title")
+            if isExpanded {
+                VStack(alignment: .leading, spacing: 16) {
+                    AppSectionTitle(titleKey: "coach.context.title")
 
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("coach.context.program")
-                        .font(AppTypography.caption(size: 13, weight: .semibold))
-                        .foregroundStyle(AppTheme.secondaryText)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("coach.context.program")
+                            .font(AppTypography.caption(size: 13, weight: .semibold))
+                            .foregroundStyle(AppTheme.secondaryText)
 
-                    Picker(
-                        coachLocalizedString("coach.context.program"),
-                        selection: $selectedProgramID
-                    ) {
-                        if programs.isEmpty {
-                            Text("coach.context.program.none")
-                                .tag(Optional<UUID>.none)
-                        } else {
-                            ForEach(programs) { program in
-                                Text(program.title)
-                                    .tag(Optional(program.id))
+                        Picker(
+                            coachLocalizedString("coach.context.program"),
+                            selection: $selectedProgramID
+                        ) {
+                            if programs.isEmpty {
+                                Text("coach.context.program.none")
+                                    .tag(Optional<UUID>.none)
+                            } else {
+                                ForEach(programs) { program in
+                                    Text(program.title)
+                                        .tag(Optional(program.id))
+                                }
                             }
                         }
-                    }
-                    .pickerStyle(.menu)
-                    .disabled(programs.isEmpty)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 14)
-                    .background(
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .fill(AppTheme.surface)
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .stroke(AppTheme.border, lineWidth: 1)
-                    )
-                }
-
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("coach.context.comment")
-                        .font(AppTypography.caption(size: 13, weight: .semibold))
-                        .foregroundStyle(AppTheme.secondaryText)
-
-                    TextField("coach.context.comment.placeholder", text: $programComment, axis: .vertical)
-                        .textFieldStyle(.plain)
-                        .font(AppTypography.body(size: 16))
-                        .foregroundStyle(AppTheme.primaryText)
-                        .lineLimit(3...5)
-                        .padding(16)
+                        .pickerStyle(.menu)
+                        .disabled(programs.isEmpty || isSaving || isSaved)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 14)
                         .background(
-                            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
                                 .fill(AppTheme.surface)
                         )
                         .overlay(
-                            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
                                 .stroke(AppTheme.border, lineWidth: 1)
                         )
+                    }
 
-                    Text("coach.context.comment.hint")
-                        .font(AppTypography.caption(size: 12, weight: .medium))
-                        .foregroundStyle(AppTheme.secondaryText)
-                }
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("coach.context.comment")
+                            .font(AppTypography.caption(size: 13, weight: .semibold))
+                            .foregroundStyle(AppTheme.secondaryText)
 
-                Button {
-                    onSave()
-                } label: {
-                    HStack(spacing: 10) {
-                        if isSaving {
-                            ProgressView()
-                                .tint(.white)
-                        }
+                        TextField("coach.context.comment.placeholder", text: $programComment, axis: .vertical)
+                            .textFieldStyle(.plain)
+                            .font(AppTypography.body(size: 16))
+                            .foregroundStyle(AppTheme.primaryText)
+                            .focused(commentFieldFocus, equals: .comment)
+                            .disabled(isSaving || isSaved)
+                            .lineLimit(3...5)
+                            .padding(16)
+                            .background(
+                                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                                    .fill(AppTheme.surface)
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                                    .stroke(AppTheme.border, lineWidth: 1)
+                            )
 
-                        if isSaving {
-                            Text("coach.context.saving")
-                        } else {
-                            Text("action.save")
+                        Text("coach.context.comment.hint")
+                            .font(AppTypography.caption(size: 12, weight: .medium))
+                            .foregroundStyle(AppTheme.secondaryText)
+                    }
+
+                    Button {
+                        onSave()
+                    } label: {
+                        HStack(spacing: 10) {
+                            if isSaving {
+                                ProgressView()
+                                    .tint(.white)
+                            } else if isSaved {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .font(AppTypography.icon(size: 16, weight: .semibold))
+                            }
+
+                            if isSaving {
+                                Text("coach.context.saving")
+                            } else if isSaved {
+                                Text("coach.context.saved")
+                            } else {
+                                Text("action.save")
+                            }
                         }
                     }
+                    .buttonStyle(CoachContextSaveButtonStyle(state: saveState))
+                    .disabled(isSaving || isSaved)
+                    .opacity(isSaving || isSaved ? 0.92 : 1)
                 }
-                .buttonStyle(AppPrimaryButtonStyle())
-                .disabled(isSaving)
-                .opacity(isSaving ? 0.75 : 1)
+            } else {
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack(alignment: .firstTextBaseline, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            AppSectionTitle(titleKey: "coach.context.title")
+
+                            Text("coach.context.ready_title")
+                                .font(AppTypography.body(size: 16, weight: .semibold))
+                                .foregroundStyle(AppTheme.primaryText)
+                        }
+
+                        Spacer(minLength: 12)
+
+                        Button("coach.context.edit") {
+                            onEdit()
+                        }
+                        .buttonStyle(CoachPromptButtonStyle())
+                    }
+
+                    Text("coach.context.ready_description")
+                        .font(AppTypography.body(size: 14, weight: .medium, relativeTo: .subheadline))
+                        .foregroundStyle(AppTheme.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    if let savedProgramTitle {
+                        Text(savedProgramTitle)
+                            .font(AppTypography.body(size: 15, weight: .semibold))
+                            .foregroundStyle(AppTheme.primaryText)
+                            .lineLimit(1)
+                    }
+
+                    Text(savedProgramComment)
+                        .font(AppTypography.caption(size: 13, weight: .medium))
+                        .foregroundStyle(AppTheme.secondaryText)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
     }
@@ -2033,6 +2174,33 @@ private struct CoachPromptButtonStyle: ButtonStyle {
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .stroke(AppTheme.border, lineWidth: 1)
             )
+    }
+}
+
+private struct CoachContextSaveButtonStyle: ButtonStyle {
+    let state: CoachAnalysisSettingsSaveState
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(AppTypography.button())
+            .foregroundStyle(Color.white)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 17)
+            .background(
+                backgroundColor(isPressed: configuration.isPressed),
+                in: Capsule()
+            )
+    }
+
+    private func backgroundColor(isPressed: Bool) -> Color {
+        switch state {
+        case .idle:
+            return isPressed ? AppTheme.accent.opacity(0.86) : AppTheme.accent
+        case .saving:
+            return isPressed ? AppTheme.accent.opacity(0.82) : AppTheme.accent.opacity(0.92)
+        case .saved:
+            return isPressed ? AppTheme.success.opacity(0.82) : AppTheme.success
+        }
     }
 }
 
