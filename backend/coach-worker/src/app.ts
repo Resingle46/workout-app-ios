@@ -255,5 +255,11 @@ function logRequest(payload: {
   errorCode?: string;
   errorDetails?: unknown;
 }) {
-  console.log(JSON.stringify(payload));
+  const serialized = JSON.stringify(payload);
+  if (payload.status >= 400) {
+    console.error(serialized);
+    return;
+  }
+
+  console.log(serialized);
 }
