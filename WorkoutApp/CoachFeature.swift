@@ -5,16 +5,22 @@ import SwiftUI
 struct CoachRuntimeConfiguration: Hashable, Sendable {
     var isFeatureEnabled: Bool
     var backendBaseURL: URL?
+    var internalBearerToken: String?
 
-    init(isFeatureEnabled: Bool, backendBaseURL: URL?) {
+    init(isFeatureEnabled: Bool, backendBaseURL: URL?, internalBearerToken: String? = nil) {
         self.isFeatureEnabled = isFeatureEnabled
         self.backendBaseURL = backendBaseURL
+        self.internalBearerToken = internalBearerToken?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .nilIfEmpty
     }
 
     init(bundle: Bundle) {
         let infoDictionary = bundle.infoDictionary ?? [:]
-        let isFeatureEnabled = infoDictionary["CoachFeatureEnabled"] as? Bool ?? false
+        let isFeatureEnabled = Self.parseBoolean(infoDictionary["CoachFeatureEnabled"])
         let baseURLString = (infoDictionary["CoachBackendBaseURL"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let internalBearerToken = (infoDictionary["CoachInternalBearerToken"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let backendBaseURL: URL?
         if let baseURLString, !baseURLString.isEmpty {
@@ -25,18 +31,36 @@ struct CoachRuntimeConfiguration: Hashable, Sendable {
 
         self.init(
             isFeatureEnabled: isFeatureEnabled,
-            backendBaseURL: backendBaseURL
+            backendBaseURL: backendBaseURL,
+            internalBearerToken: internalBearerToken
         )
     }
 
     var canUseRemoteCoach: Bool {
-        isFeatureEnabled && backendBaseURL != nil
+        isFeatureEnabled && backendBaseURL != nil && internalBearerToken != nil
+    }
+
+    private static func parseBoolean(_ value: Any?) -> Bool {
+        if let value = value as? Bool {
+            return value
+        }
+        guard let value = value as? String else {
+            return false
+        }
+
+        switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "1", "true", "yes":
+            return true
+        default:
+            return false
+        }
     }
 }
 
 enum CoachClientError: LocalizedError, Equatable {
     case featureDisabled
     case missingBaseURL
+    case missingAuthToken
     case invalidResponse
     case httpStatus(Int)
 
@@ -46,6 +70,8 @@ enum CoachClientError: LocalizedError, Equatable {
             return coachLocalizedString("coach.error.feature_disabled")
         case .missingBaseURL:
             return coachLocalizedString("coach.error.missing_base_url")
+        case .missingAuthToken:
+            return coachLocalizedString("coach.error.missing_auth_token")
         case .invalidResponse:
             return coachLocalizedString("coach.error.invalid_response")
         case .httpStatus(let code):
@@ -402,11 +428,15 @@ struct CoachAPIHTTPClient: CoachAPIClient {
         guard let baseURL = configuration.backendBaseURL else {
             throw CoachClientError.missingBaseURL
         }
+        guard let internalBearerToken = configuration.internalBearerToken else {
+            throw CoachClientError.missingAuthToken
+        }
 
         var request = URLRequest(url: baseURL.appending(path: path))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("Bearer \(internalBearerToken)", forHTTPHeaderField: "Authorization")
         request.httpBody = try Self.encoder.encode(body)
 
         let (data, response) = try await session.data(for: request)
@@ -1594,5 +1624,11 @@ private func coachCompatibilityMessage(_ issue: ProfileGoalCompatibilityIssue) -
             format: coachLocalizedString("profile.card.compatibility.issue_long_eta"),
             issue.etaWeeksUpperBound ?? 0
         )
+    }
+}
+
+private extension String {
+    var nilIfEmpty: String? {
+        isEmpty ? nil : self
     }
 }

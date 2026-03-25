@@ -9,6 +9,12 @@ build/
 # macOS metadata
 .DS_Store
 
+# Node / backend
+node_modules/
+coverage/
+backend/coach-worker/.dev.vars
+backend/coach-worker/.wrangler/
+
 # Signing files and accidental secrets
 *.p8
 *.p12

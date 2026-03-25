@@ -1,0 +1,11 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "workoutapp-ai-coach",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-03-25",
+  "workers_dev": true,
+  "vars": {
+    "OPENAI_MODEL": "gpt-5-mini",
+    "COACH_PROMPT_VERSION": "2026-03-25.v1"
+  }
+}

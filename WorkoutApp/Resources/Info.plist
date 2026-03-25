@@ -19,9 +19,11 @@
     <key>CFBundleVersion</key>
     <string>1</string>
     <key>CoachBackendBaseURL</key>
-    <string></string>
+    <string>$(COACH_BACKEND_BASE_URL)</string>
     <key>CoachFeatureEnabled</key>
-    <false/>
+    <string>$(COACH_FEATURE_ENABLED)</string>
+    <key>CoachInternalBearerToken</key>
+    <string>$(COACH_INTERNAL_BEARER_TOKEN)</string>
     <key>LSRequiresIPhoneOS</key>
     <true/>
     <key>UIAppFonts</key>

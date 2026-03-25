@@ -1194,7 +1194,8 @@ final class BackupCoordinatorTests: XCTestCase {
             ),
             configuration: CoachRuntimeConfiguration(
                 isFeatureEnabled: true,
-                backendBaseURL: URL(string: "https://example.com")
+                backendBaseURL: URL(string: "https://example.com"),
+                internalBearerToken: "internal-token"
             )
         )
 
@@ -1378,7 +1379,8 @@ final class BackupCoordinatorTests: XCTestCase {
             ),
             configuration: CoachRuntimeConfiguration(
                 isFeatureEnabled: true,
-                backendBaseURL: URL(string: "https://example.com")
+                backendBaseURL: URL(string: "https://example.com"),
+                internalBearerToken: "internal-token"
             )
         )
 

@@ -265,6 +265,7 @@
 "profile.card.relative_strength.lift.ohp" = "Overhead press";
 "coach.error.feature_disabled" = "AI Coach is disabled in app configuration.";
 "coach.error.missing_base_url" = "AI Coach backend URL is missing.";
+"coach.error.missing_auth_token" = "AI Coach internal bearer token is missing.";
 "coach.error.invalid_response" = "AI Coach returned an unreadable response.";
 "coach.error.http_status" = "AI Coach request failed with status %d.";
 "coach.error.chat_unavailable" = "Coach chat is unavailable until the backend is configured.";

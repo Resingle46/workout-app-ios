@@ -1,0 +1,41 @@
+name: Coach Worker Check
+
+on:
+  push:
+    branches:
+      - main
+      - codex/**
+    paths:
+      - "backend/coach-worker/**"
+      - ".github/workflows/coach-worker-check.yml"
+  pull_request:
+    paths:
+      - "backend/coach-worker/**"
+      - ".github/workflows/coach-worker-check.yml"
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend/coach-worker
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: backend/coach-worker/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test

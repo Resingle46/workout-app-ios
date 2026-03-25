@@ -265,6 +265,7 @@
 "profile.card.relative_strength.lift.ohp" = "Жим стоя";
 "coach.error.feature_disabled" = "AI Coach отключён в конфигурации приложения.";
 "coach.error.missing_base_url" = "Не задан URL backend-сервиса для AI Coach.";
+"coach.error.missing_auth_token" = "Не задан внутренний bearer token для AI Coach.";
 "coach.error.invalid_response" = "AI Coach вернул ответ, который не удалось прочитать.";
 "coach.error.http_status" = "Запрос к AI Coach завершился статусом %d.";
 "coach.error.chat_unavailable" = "Чат Coach недоступен, пока не настроен backend.";

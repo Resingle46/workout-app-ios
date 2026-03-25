@@ -1,0 +1,4 @@
+OPENAI_API_KEY=sk-...
+COACH_INTERNAL_TOKEN=replace-with-internal-token
+OPENAI_MODEL=gpt-5-mini
+COACH_PROMPT_VERSION=2026-03-25.v1
