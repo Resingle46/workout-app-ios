@@ -1,27 +1,29 @@
-import OpenAI from "openai";
 import {
-  chatResponseSchema,
-  profileInsightsResponseSchema,
+  chatResponseModelOutputSchema,
+  profileInsightsModelOutputSchema,
+  suggestedChangeSchema,
   type CoachChatRequest,
   type CoachChatResponse,
   type CoachProfileInsightsRequest,
   type CoachProfileInsightsResponse,
 } from "./schemas";
-import { buildChatMessages, buildProfileInsightsMessages } from "./prompts";
+import {
+  buildChatMessages,
+  buildFallbackChatMessages,
+  buildProfileInsightsMessages,
+} from "./prompts";
 
-export interface Env {
-  OPENAI_API_KEY: string;
-  COACH_INTERNAL_TOKEN: string;
-  OPENAI_MODEL?: string;
-  COACH_PROMPT_VERSION?: string;
+export const DEFAULT_AI_MODEL = "@cf/mistralai/mistral-small-3.1-24b-instruct";
+
+interface WorkersAI {
+  run(model: string, inputs: Record<string, unknown>): Promise<unknown>;
 }
 
-interface ResponsesSDK {
-  create(request: Record<string, unknown>): Promise<{
-    id?: string;
-    output_text?: string;
-    usage?: unknown;
-  }>;
+export interface Env {
+  AI?: WorkersAI;
+  COACH_INTERNAL_TOKEN: string;
+  AI_MODEL?: string;
+  COACH_PROMPT_VERSION?: string;
 }
 
 export interface InferenceResult<T> {
@@ -40,188 +42,347 @@ export interface CoachInferenceService {
   ): Promise<InferenceResult<CoachChatResponse>>;
 }
 
-export class OpenAIServiceError extends Error {
+export class CoachInferenceServiceError extends Error {
   constructor(
     readonly status: number,
     readonly code: string,
     message: string
   ) {
     super(message);
-    this.name = "OpenAIServiceError";
+    this.name = "CoachInferenceServiceError";
   }
 }
 
-export function createOpenAICoachService(env: Env): CoachInferenceService {
-  const client = new OpenAI({
-    apiKey: env.OPENAI_API_KEY,
-  });
-
-  return new OpenAICoachService(client.responses, env);
+export function createWorkersAICoachService(env: Env): CoachInferenceService {
+  return new WorkersAICoachService(env);
 }
 
-export class OpenAICoachService implements CoachInferenceService {
-  constructor(
-    private readonly responses: ResponsesSDK,
-    private readonly env: Env
-  ) {}
-
+export class WorkersAICoachService implements CoachInferenceService {
+  constructor(private readonly env: Env) {}
   async generateProfileInsights(
     request: CoachProfileInsightsRequest
   ): Promise<InferenceResult<CoachProfileInsightsResponse>> {
-    const response = await this.createStructuredResponse({
-      schemaName: "coach_profile_insights",
+    const rawResponse = await this.runStructured({
+      messages: buildProfileInsightsMessages(request),
       schema: profileInsightsJsonSchema,
-      store: false,
-      input: buildProfileInsightsMessages(request),
+      maxTokens: 850,
     });
 
+    const response = parseStructuredOutput(
+      rawResponse,
+      profileInsightsModelOutputSchema,
+      "profile insights"
+    );
     return {
-      data: normalizeProfileInsights(
-        parseStructuredOutput(
-          response.output_text,
-          profileInsightsResponseSchema,
-          "profile insights"
-        )
-      ),
-      responseId: response.id,
+      data: normalizeProfileInsights(response),
       model: this.modelName,
-      usage: response.usage,
+      usage: extractUsage(rawResponse),
     };
   }
 
   async generateChat(
     request: CoachChatRequest
   ): Promise<InferenceResult<CoachChatResponse>> {
-    const response = await this.createStructuredResponse({
-      schemaName: "coach_chat_response",
-      schema: chatResponseJsonSchema,
-      store: true,
-      previousResponseID: request.previousResponseID,
-      input: buildChatMessages(request),
-    });
+    const turnID = buildOpaqueResponseID();
+    const messages = buildChatMessages(request);
 
-    const parsed = normalizeChatResponse(
-      parseStructuredOutput(response.output_text, chatResponseSchema, "chat")
-    );
+    try {
+      const rawResponse = await this.runStructured({
+        messages,
+        schema: chatResponseJsonSchema,
+        maxTokens: 900,
+      });
+      const parsed = normalizeChatResponse(
+        parseStructuredOutput(
+          rawResponse,
+          chatResponseModelOutputSchema,
+          "chat"
+        )
+      );
 
-    return {
-      data: {
-        ...parsed,
-        responseID: response.id ?? parsed.responseID,
-      },
-      responseId: response.id,
-      model: this.modelName,
-      usage: response.usage,
-    };
+      return {
+        data: {
+          ...parsed,
+          responseID: turnID,
+        },
+        responseId: turnID,
+        model: this.modelName,
+        usage: extractUsage(rawResponse),
+      };
+    } catch (error) {
+      if (!(error instanceof CoachInferenceServiceError)) {
+        throw error;
+      }
+
+      const fallbackResponse = await this.runPlainText({
+        messages: buildFallbackChatMessages(request),
+        maxTokens: 750,
+      });
+      const answerMarkdown = extractPlainText(fallbackResponse, "chat fallback");
+
+      return {
+        data: {
+          answerMarkdown,
+          responseID: turnID,
+          followUps: [],
+          suggestedChanges: [],
+        },
+        responseId: turnID,
+        model: this.modelName,
+        usage: extractUsage(fallbackResponse),
+      };
+    }
   }
 
   private get modelName(): string {
-    return this.env.OPENAI_MODEL?.trim() || "gpt-5-mini";
+    return this.env.AI_MODEL?.trim() || DEFAULT_AI_MODEL;
   }
 
-  private async createStructuredResponse(input: {
-    schemaName: string;
+  private async runStructured(input: {
+    messages: PromptMessage[];
     schema: Record<string, unknown>;
-    store: boolean;
-    previousResponseID?: string;
-    input: Array<{ role: "system" | "user"; content: string }>;
-  }) {
-    try {
-      return await this.responses.create({
-        model: this.modelName,
-        store: input.store,
-        previous_response_id: input.previousResponseID,
-        input: input.input,
-        text: {
-          format: {
-            type: "json_schema",
-            name: input.schemaName,
-            strict: true,
-            schema: input.schema,
-          },
-        },
-      });
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "Unknown OpenAI error";
-      const normalizedMessage = message.toLowerCase();
-      if (
-        normalizedMessage.includes("timeout") ||
-        normalizedMessage.includes("timed out") ||
-        normalizedMessage.includes("deadline")
-      ) {
-        throw new OpenAIServiceError(
-          504,
-          "upstream_timeout",
-          "OpenAI request timed out"
-        );
-      }
+    maxTokens: number;
+  }): Promise<unknown> {
+    return this.runModel({
+      messages: input.messages,
+      guided_json: input.schema,
+      max_tokens: input.maxTokens,
+      temperature: 0.2,
+    });
+  }
 
-      throw new OpenAIServiceError(
-        502,
-        "upstream_request_failed",
-        "OpenAI request failed"
+  private async runPlainText(input: {
+    messages: PromptMessage[];
+    maxTokens: number;
+  }): Promise<unknown> {
+    return this.runModel({
+      messages: [
+        {
+          role: "system",
+          content:
+            "The previous structured-output attempt failed. Keep the answer compact and in markdown only.",
+        },
+        ...input.messages,
+      ],
+      max_tokens: input.maxTokens,
+      temperature: 0.25,
+    });
+  }
+
+  private async runModel(payload: Record<string, unknown>): Promise<unknown> {
+    if (!this.env.AI) {
+      throw new CoachInferenceServiceError(
+        500,
+        "server_misconfigured",
+        "Workers AI binding is not configured"
       );
+    }
+
+    try {
+      return await this.env.AI.run(this.modelName, payload);
+    } catch (error) {
+      throw normalizeWorkersAIError(error);
     }
   }
 }
 
 function parseStructuredOutput<T>(
-  outputText: string | undefined,
+  rawResponse: unknown,
   schema: { parse(input: unknown): T },
   label: string
 ): T {
-  const trimmed = outputText?.trim();
-  if (!trimmed) {
-    throw new OpenAIServiceError(
-      502,
-      "upstream_empty_output",
-      `OpenAI returned empty ${label} output`
-    );
-  }
-
-  let parsedJSON: unknown;
-  try {
-    parsedJSON = JSON.parse(trimmed);
-  } catch {
-    throw new OpenAIServiceError(
-      502,
-      "upstream_invalid_json",
-      `OpenAI returned invalid ${label} JSON`
-    );
-  }
+  const rawPayload = extractResponsePayload(rawResponse, label);
+  const parsedJSON =
+    typeof rawPayload === "string" ? parseJSONPayload(rawPayload, label) : rawPayload;
 
   try {
     return schema.parse(parsedJSON);
   } catch {
-    throw new OpenAIServiceError(
+    throw new CoachInferenceServiceError(
       502,
       "upstream_invalid_output",
-      `OpenAI returned schema-invalid ${label} output`
+      `Workers AI returned schema-invalid ${label} output`
     );
   }
 }
 
 function normalizeProfileInsights(
-  response: CoachProfileInsightsResponse
+  response: {
+    summary: string;
+    recommendations: string[];
+    suggestedChanges: unknown[];
+  }
 ): CoachProfileInsightsResponse {
   return {
     summary: response.summary.trim(),
     recommendations: dedupeText(response.recommendations).slice(0, 8),
-    suggestedChanges: response.suggestedChanges.slice(0, 5),
+    suggestedChanges: normalizeSuggestedChanges(response.suggestedChanges),
   };
 }
 
 function normalizeChatResponse(
-  response: CoachChatResponse
-): CoachChatResponse {
+  response: {
+    answerMarkdown: string;
+    followUps: string[];
+    suggestedChanges: unknown[];
+  }
+): Omit<CoachChatResponse, "responseID"> {
   return {
     answerMarkdown: response.answerMarkdown.trim(),
-    responseID: response.responseID.trim(),
     followUps: dedupeText(response.followUps).slice(0, 4),
-    suggestedChanges: response.suggestedChanges.slice(0, 5),
+    suggestedChanges: normalizeSuggestedChanges(response.suggestedChanges),
   };
 }
+
+function normalizeSuggestedChanges(
+  values: unknown[]
+): CoachProfileInsightsResponse["suggestedChanges"] {
+  const result: CoachProfileInsightsResponse["suggestedChanges"] = [];
+
+  for (const value of values) {
+    const parsed = suggestedChangeSchema.safeParse(value);
+    if (!parsed.success) {
+      continue;
+    }
+
+    result.push(parsed.data);
+    if (result.length >= 5) {
+      break;
+    }
+  }
+
+  return result;
+}
+
+function extractPlainText(rawResponse: unknown, label: string): string {
+  const payload = extractResponsePayload(rawResponse, label);
+  if (typeof payload === "string") {
+    const trimmed = payload.trim();
+    if (trimmed) {
+      return trimmed;
+    }
+  }
+
+  if (isRecord(payload)) {
+    const answerMarkdown = payload.answerMarkdown;
+    if (typeof answerMarkdown === "string" && answerMarkdown.trim()) {
+      return answerMarkdown.trim();
+    }
+  }
+
+  throw new CoachInferenceServiceError(
+    502,
+    "upstream_empty_output",
+    `Workers AI returned empty ${label} output`
+  );
+}
+
+function extractUsage(rawResponse: unknown): unknown {
+  if (!isRecord(rawResponse)) {
+    return undefined;
+  }
+
+  if (rawResponse.usage !== undefined) {
+    return rawResponse.usage;
+  }
+
+  if (isRecord(rawResponse.result) && rawResponse.result.usage !== undefined) {
+    return rawResponse.result.usage;
+  }
+
+  if (rawResponse.metrics !== undefined) {
+    return rawResponse.metrics;
+  }
+
+  return undefined;
+}
+
+function extractResponsePayload(rawResponse: unknown, label: string): unknown {
+  if (typeof rawResponse === "string") {
+    const trimmed = rawResponse.trim();
+    if (trimmed) {
+      return trimmed;
+    }
+  }
+
+  if (isRecord(rawResponse)) {
+    if (rawResponse.response !== undefined) {
+      return rawResponse.response;
+    }
+
+    if (isRecord(rawResponse.result) && rawResponse.result.response !== undefined) {
+      return rawResponse.result.response;
+    }
+
+    if (typeof rawResponse.output_text === "string" && rawResponse.output_text.trim()) {
+      return rawResponse.output_text;
+    }
+  }
+
+  throw new CoachInferenceServiceError(
+    502,
+    "upstream_empty_output",
+    `Workers AI returned empty ${label} output`
+  );
+}
+
+function parseJSONPayload(payload: string, label: string): unknown {
+  const trimmed = payload.trim();
+  if (!trimmed) {
+    throw new CoachInferenceServiceError(
+      502,
+      "upstream_empty_output",
+      `Workers AI returned empty ${label} output`
+    );
+  }
+
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    throw new CoachInferenceServiceError(
+      502,
+      "upstream_invalid_json",
+      `Workers AI returned invalid ${label} JSON`
+    );
+  }
+}
+
+function normalizeWorkersAIError(error: unknown): CoachInferenceServiceError {
+  const message =
+    error instanceof Error ? error.message : "Unknown Workers AI error";
+  const normalizedMessage = message.toLowerCase();
+
+  if (
+    normalizedMessage.includes("timeout") ||
+    normalizedMessage.includes("timed out") ||
+    normalizedMessage.includes("deadline")
+  ) {
+    return new CoachInferenceServiceError(
+      504,
+      "upstream_timeout",
+      "Workers AI request timed out"
+    );
+  }
+
+  return new CoachInferenceServiceError(
+    502,
+    "upstream_request_failed",
+    "Workers AI request failed"
+  );
+}
+
+function buildOpaqueResponseID(): string {
+  return `coach-turn_${crypto.randomUUID()}`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+type PromptMessage = {
+  role: "system" | "user" | "assistant";
+  content: string;
+};
 
 function dedupeText(values: string[]): string[] {
   const seen = new Set<string>();
@@ -368,10 +529,6 @@ const chatResponseJsonSchema = {
       type: "string",
       minLength: 1,
     },
-    responseID: {
-      type: "string",
-      minLength: 1,
-    },
     followUps: {
       type: "array",
       items: {
@@ -388,5 +545,5 @@ const chatResponseJsonSchema = {
       maxItems: 5,
     },
   },
-  required: ["answerMarkdown", "responseID", "followUps", "suggestedChanges"],
+  required: ["answerMarkdown", "followUps", "suggestedChanges"],
 } as const;

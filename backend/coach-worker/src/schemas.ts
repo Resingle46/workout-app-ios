@@ -232,6 +232,17 @@ export const chatRequestSchema = z
     locale: nonEmptyStringSchema,
     question: nonEmptyStringSchema,
     previousResponseID: optionalTrimmedStringSchema,
+    conversationMessages: z
+      .array(
+        z
+          .object({
+            role: z.enum(["user", "assistant"]),
+            content: nonEmptyStringSchema.max(6000),
+          })
+          .strict()
+      )
+      .max(8)
+      .default([]),
     context: coachContextPayloadSchema,
     capabilityScope: capabilityScopeSchema,
   })
@@ -310,12 +321,29 @@ export const profileInsightsResponseSchema = z
   })
   .strict();
 
+export const profileInsightsModelOutputSchema = z
+  .object({
+    summary: nonEmptyStringSchema.max(1200),
+    recommendations: z.array(nonEmptyStringSchema.max(280)).max(8),
+    suggestedChanges: z.array(z.unknown()).max(5).default([]),
+  })
+  .strict();
+
 export const chatResponseSchema = z
   .object({
     answerMarkdown: nonEmptyStringSchema.max(6000),
     responseID: nonEmptyStringSchema.max(200),
     followUps: z.array(nonEmptyStringSchema.max(160)).max(4),
     suggestedChanges: z.array(suggestedChangeSchema).max(5),
+  })
+  .strict();
+
+export const chatResponseModelOutputSchema = z
+  .object({
+    answerMarkdown: nonEmptyStringSchema.max(6000),
+    responseID: nonEmptyStringSchema.max(200).optional(),
+    followUps: z.array(nonEmptyStringSchema.max(160)).max(4),
+    suggestedChanges: z.array(z.unknown()).max(5).default([]),
   })
   .strict();
 

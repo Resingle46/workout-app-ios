@@ -1401,6 +1401,34 @@ final class BackupCoordinatorTests: XCTestCase {
     }
 
     @MainActor
+    func testCoachStoreSendsOnlyLastEightConversationMessages() async throws {
+        let store = AppStore()
+        store.apply(snapshot: makeSnapshot())
+        let recorder = ChatRequestRecorder()
+        let coachStore = CoachStore(
+            client: RecordingCoachAPIClient(recorder: recorder),
+            configuration: CoachRuntimeConfiguration(
+                isFeatureEnabled: true,
+                backendBaseURL: URL(string: "https://example.com"),
+                internalBearerToken: "internal-token"
+            )
+        )
+
+        for index in 1...5 {
+            await coachStore.sendMessage("Question \(index)", using: store)
+        }
+
+        await coachStore.sendMessage("Question 6", using: store)
+        let requests = await recorder.requests
+        let lastRequest = try XCTUnwrap(requests.last)
+
+        XCTAssertEqual(lastRequest.question, "Question 6")
+        XCTAssertEqual(lastRequest.conversationMessages.count, 8)
+        XCTAssertEqual(lastRequest.conversationMessages.first?.content, "Question 2")
+        XCTAssertEqual(lastRequest.conversationMessages.last?.content, "Coach answer")
+    }
+
+    @MainActor
     func testCoachRuntimeConfigurationStorePersistsOverridesOutsideSnapshot() throws {
         let suiteName = "CoachRuntimeConfigurationStoreTests-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
@@ -1689,13 +1717,64 @@ private struct StubCoachAPIClient: CoachAPIClient {
     func sendChat(
         locale: String,
         question: String,
-        previousResponseID: String?,
+        conversationMessages: [CoachConversationMessage],
         context: CoachContextPayload,
         capabilityScope: CoachCapabilityScope
     ) async throws -> CoachChatResponse {
         if shouldFailChat {
             throw StubCoachError.failedChat
         }
+
+        return CoachChatResponse(
+            answerMarkdown: "Coach answer",
+            responseID: "response-1",
+            followUps: ["Next question"],
+            suggestedChanges: []
+        )
+    }
+}
+
+private actor ChatRequestRecorder {
+    private(set) var requests: [RecordedCoachChatRequest] = []
+
+    func record(_ request: RecordedCoachChatRequest) {
+        requests.append(request)
+    }
+}
+
+private struct RecordedCoachChatRequest: Sendable {
+    var question: String
+    var conversationMessages: [CoachConversationMessage]
+}
+
+private struct RecordingCoachAPIClient: CoachAPIClient {
+    let recorder: ChatRequestRecorder
+
+    func fetchProfileInsights(
+        locale: String,
+        context: CoachContextPayload,
+        capabilityScope: CoachCapabilityScope
+    ) async throws -> CoachProfileInsights {
+        CoachProfileInsights(
+            summary: "Remote summary",
+            recommendations: ["Remote recommendation"],
+            suggestedChanges: []
+        )
+    }
+
+    func sendChat(
+        locale: String,
+        question: String,
+        conversationMessages: [CoachConversationMessage],
+        context: CoachContextPayload,
+        capabilityScope: CoachCapabilityScope
+    ) async throws -> CoachChatResponse {
+        await recorder.record(
+            RecordedCoachChatRequest(
+                question: question,
+                conversationMessages: conversationMessages
+            )
+        )
 
         return CoachChatResponse(
             answerMarkdown: "Coach answer",

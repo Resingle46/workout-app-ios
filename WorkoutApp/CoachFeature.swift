@@ -211,7 +211,7 @@ protocol CoachAPIClient: Sendable {
     func sendChat(
         locale: String,
         question: String,
-        previousResponseID: String?,
+        conversationMessages: [CoachConversationMessage],
         context: CoachContextPayload,
         capabilityScope: CoachCapabilityScope
     ) async throws -> CoachChatResponse
@@ -226,7 +226,7 @@ struct CoachProfileInsightsRequest: Codable, Sendable {
 struct CoachChatRequest: Codable, Sendable {
     var locale: String
     var question: String
-    var previousResponseID: String?
+    var conversationMessages: [CoachConversationMessage]
     var context: CoachContextPayload
     var capabilityScope: CoachCapabilityScope
 }
@@ -242,6 +242,11 @@ struct CoachChatResponse: Codable, Hashable, Sendable {
     var responseID: String?
     var followUps: [String]
     var suggestedChanges: [CoachSuggestedChange]
+}
+
+struct CoachConversationMessage: Codable, Hashable, Sendable {
+    var role: CoachChatRole
+    var content: String
 }
 
 enum CoachChatRole: String, Codable, Hashable, Sendable {
@@ -509,7 +514,7 @@ struct CoachAPIHTTPClient: CoachAPIClient {
     func sendChat(
         locale: String,
         question: String,
-        previousResponseID: String?,
+        conversationMessages: [CoachConversationMessage],
         context: CoachContextPayload,
         capabilityScope: CoachCapabilityScope
     ) async throws -> CoachChatResponse {
@@ -518,7 +523,7 @@ struct CoachAPIHTTPClient: CoachAPIClient {
             body: CoachChatRequest(
                 locale: locale,
                 question: question,
-                previousResponseID: previousResponseID,
+                conversationMessages: conversationMessages,
                 context: context,
                 capabilityScope: capabilityScope
             ),
@@ -1010,7 +1015,6 @@ final class CoachStore {
     @ObservationIgnored private let contextBuilder: CoachContextBuilder
     private var configuration: CoachRuntimeConfiguration
     @ObservationIgnored private let capabilityScope: CoachCapabilityScope
-    @ObservationIgnored private var previousResponseID: String?
 
     init(
         client: any CoachAPIClient,
@@ -1079,6 +1083,8 @@ final class CoachStore {
             return
         }
 
+        let priorConversation = recentConversationMessages()
+
         messages.append(
             CoachChatMessage(
                 role: .user,
@@ -1101,11 +1107,10 @@ final class CoachStore {
             let response = try await client.sendChat(
                 locale: appStore.selectedLanguageCode,
                 question: trimmedQuestion,
-                previousResponseID: previousResponseID,
+                conversationMessages: priorConversation,
                 context: context,
                 capabilityScope: capabilityScope
             )
-            previousResponseID = response.responseID
             messages.append(
                 CoachChatMessage(
                     role: .assistant,
@@ -1147,10 +1152,18 @@ final class CoachStore {
 
     func resetConversation() {
         messages = []
-        previousResponseID = nil
         lastChatErrorDescription = nil
         pendingSuggestedChange = nil
         isSendingMessage = false
+    }
+
+    private func recentConversationMessages(limit: Int = 8) -> [CoachConversationMessage] {
+        Array(messages.suffix(limit)).map { message in
+            CoachConversationMessage(
+                role: message.role,
+                content: message.content
+            )
+        }
     }
 }
 

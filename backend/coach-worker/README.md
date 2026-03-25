@@ -26,9 +26,8 @@ npm install
 3. Create `.dev.vars` in this folder:
 
 ```txt
-OPENAI_API_KEY=sk-...
 COACH_INTERNAL_TOKEN=replace-with-internal-token
-OPENAI_MODEL=gpt-5-mini
+AI_MODEL=@cf/mistralai/mistral-small-3.1-24b-instruct
 COACH_PROMPT_VERSION=2026-03-25.v1
 ```
 
@@ -57,13 +56,15 @@ Configure the Worker in Cloudflare with:
 
 Set runtime secrets in Cloudflare:
 
-- `OPENAI_API_KEY`
 - `COACH_INTERNAL_TOKEN`
 
-Set runtime vars in Cloudflare:
+Set runtime vars and bindings in Cloudflare:
 
-- `OPENAI_MODEL=gpt-5-mini`
+- AI binding: `AI`
+- `AI_MODEL=@cf/mistralai/mistral-small-3.1-24b-instruct`
 - `COACH_PROMPT_VERSION=2026-03-25.v1`
+
+The Worker uses Cloudflare Workers AI directly and does not require an OpenAI API key.
 
 ## iOS config
 

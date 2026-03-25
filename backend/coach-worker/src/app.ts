@@ -3,8 +3,9 @@ import {
   profileInsightsRequestSchema,
 } from "./schemas";
 import {
-  OpenAIServiceError,
-  createOpenAICoachService,
+  CoachInferenceServiceError,
+  DEFAULT_AI_MODEL,
+  createWorkersAICoachService,
   type CoachInferenceService,
   type Env,
 } from "./openai";
@@ -19,7 +20,7 @@ export function createApp(
   overrides: Partial<AppDependencies> = {}
 ): { fetch: (request: Request, env: Env) => Promise<Response> } {
   const deps: AppDependencies = {
-    createInferenceService: createOpenAICoachService,
+    createInferenceService: createWorkersAICoachService,
     now: () => Date.now(),
     requestId: () => crypto.randomUUID(),
     ...overrides,
@@ -118,7 +119,7 @@ function buildHealthPayload(env: Env): {
   const missing = missingSecrets(env);
   return {
     status: missing.length === 0 ? "ok" : "error",
-    model: env.OPENAI_MODEL?.trim() || "gpt-5-mini",
+    model: env.AI_MODEL?.trim() || DEFAULT_AI_MODEL,
     promptVersion: env.COACH_PROMPT_VERSION?.trim() || "2026-03-25.v1",
     ...(missing.length > 0 ? { missing } : {}),
   };
@@ -137,8 +138,8 @@ function assertRuntimeSecrets(env: Env): void {
 
 function missingSecrets(env: Env): string[] {
   const missing: string[] = [];
-  if (!env.OPENAI_API_KEY?.trim()) {
-    missing.push("OPENAI_API_KEY");
+  if (!env.AI) {
+    missing.push("AI");
   }
   if (!env.COACH_INTERNAL_TOKEN?.trim()) {
     missing.push("COACH_INTERNAL_TOKEN");
@@ -182,7 +183,7 @@ function mapError(
     };
   }
 
-  if (error instanceof OpenAIServiceError) {
+  if (error instanceof CoachInferenceServiceError) {
     return {
       status: error.status,
       body: {

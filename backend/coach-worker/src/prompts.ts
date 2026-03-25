@@ -3,6 +3,11 @@ import type {
   CoachProfileInsightsRequest,
 } from "./schemas";
 
+type PromptMessage = {
+  role: "system" | "user" | "assistant";
+  content: string;
+};
+
 function localeInstruction(locale: string): string {
   return locale.toLowerCase().startsWith("ru")
     ? "Write all user-facing text in Russian."
@@ -30,7 +35,7 @@ function sharedRules(locale: string): string {
 
 export function buildProfileInsightsMessages(
   request: CoachProfileInsightsRequest
-): Array<{ role: "system" | "user"; content: string }> {
+): PromptMessage[] {
   return [
     {
       role: "system",
@@ -55,23 +60,57 @@ export function buildProfileInsightsMessages(
 
 export function buildChatMessages(
   request: CoachChatRequest
-): Array<{ role: "system" | "user"; content: string }> {
+): PromptMessage[] {
   return [
     {
       role: "system",
       content: [
         sharedRules(request.locale),
         "Task: answer the user's training question using the supplied app context.",
+        "Use the supplied recent conversation turns only as short-term context. The current app context in the final user message is authoritative.",
         "Return markdown in answerMarkdown when formatting helps, but keep it compact.",
         "Include up to 4 follow-up questions that naturally continue the conversation.",
       ].join("\n\n"),
     },
+    ...request.conversationMessages.map((message) => ({
+      role: message.role,
+      content: message.content,
+    })),
     {
       role: "user",
       content: [
         `Capability scope: ${request.capabilityScope}`,
         `Question: ${request.question}`,
         "Return JSON that strictly matches the provided schema.",
+        "Current app context JSON:",
+        JSON.stringify(request.context),
+      ].join("\n\n"),
+    },
+  ];
+}
+
+export function buildFallbackChatMessages(
+  request: CoachChatRequest
+): PromptMessage[] {
+  return [
+    {
+      role: "system",
+      content: [
+        sharedRules(request.locale),
+        "Task: answer the user's training question using the supplied app context.",
+        "Use the supplied recent conversation turns only as short-term context. The current app context in the final user message is authoritative.",
+        "Return a concise markdown answer only. Do not return JSON.",
+      ].join("\n\n"),
+    },
+    ...request.conversationMessages.map((message) => ({
+      role: message.role,
+      content: message.content,
+    })),
+    {
+      role: "user",
+      content: [
+        `Capability scope: ${request.capabilityScope}`,
+        `Question: ${request.question}`,
         "Current app context JSON:",
         JSON.stringify(request.context),
       ].join("\n\n"),

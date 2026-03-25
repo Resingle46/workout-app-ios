@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app";
 import {
-  OpenAICoachService,
-  OpenAIServiceError,
+  CoachInferenceServiceError,
+  DEFAULT_AI_MODEL,
+  WorkersAICoachService,
   type CoachInferenceService,
   type Env,
 } from "../src/openai";
@@ -12,13 +13,6 @@ import type {
   CoachProfileInsightsRequest,
   CoachProfileInsightsResponse,
 } from "../src/schemas";
-
-const env: Env = {
-  OPENAI_API_KEY: "test-openai-key",
-  COACH_INTERNAL_TOKEN: "internal-token",
-  OPENAI_MODEL: "gpt-5-mini",
-  COACH_PROMPT_VERSION: "test.v1",
-};
 
 describe("coach worker app", () => {
   it("returns health for configured runtime", async () => {
@@ -30,13 +24,13 @@ describe("coach worker app", () => {
 
     const response = await app.fetch(
       new Request("https://coach.example.workers.dev/health"),
-      env
+      makeEnv()
     );
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
       status: "ok",
-      model: "gpt-5-mini",
+      model: DEFAULT_AI_MODEL,
       promptVersion: "test.v1",
     });
   });
@@ -54,7 +48,7 @@ describe("coach worker app", () => {
         },
         body: JSON.stringify(makeProfileInsightsRequestFixture()),
       }),
-      env
+      makeEnv()
     );
 
     expect(response.status).toBe(401);
@@ -79,7 +73,7 @@ describe("coach worker app", () => {
         },
         body: JSON.stringify(makeProfileInsightsRequestFixture()),
       }),
-      env
+      makeEnv()
     );
 
     expect(response.status).toBe(401);
@@ -106,7 +100,7 @@ describe("coach worker app", () => {
         },
         body: JSON.stringify(makeProfileInsightsRequestFixture()),
       }),
-      env
+      makeEnv()
     );
 
     expect(response.status).toBe(200);
@@ -117,11 +111,11 @@ describe("coach worker app", () => {
     });
   });
 
-  it("accepts valid chat request with current app JSON shape", async () => {
+  it("accepts valid chat request with replayed conversation messages", async () => {
     const service = stubInferenceService({
       chat: {
         answerMarkdown: "Increase load conservatively next week.",
-        responseID: "resp_123",
+        responseID: "coach-turn_123",
         followUps: ["Do you want a set-by-set progression?"],
         suggestedChanges: [],
       },
@@ -139,13 +133,13 @@ describe("coach worker app", () => {
         },
         body: JSON.stringify(makeChatRequestFixture()),
       }),
-      env
+      makeEnv()
     );
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
       answerMarkdown: "Increase load conservatively next week.",
-      responseID: "resp_123",
+      responseID: "coach-turn_123",
       followUps: ["Do you want a set-by-set progression?"],
       suggestedChanges: [],
     });
@@ -165,7 +159,7 @@ describe("coach worker app", () => {
         },
         body: JSON.stringify({ locale: "en" }),
       }),
-      env
+      makeEnv()
     );
 
     expect(response.status).toBe(400);
@@ -180,10 +174,10 @@ describe("coach worker app", () => {
     const app = createApp({
       createInferenceService: () =>
         stubInferenceService({
-          chatError: new OpenAIServiceError(
+          chatError: new CoachInferenceServiceError(
             502,
             "upstream_request_failed",
-            "OpenAI request failed"
+            "Workers AI request failed"
           ),
         }),
     });
@@ -197,7 +191,7 @@ describe("coach worker app", () => {
         },
         body: JSON.stringify(makeChatRequestFixture()),
       }),
-      env
+      makeEnv()
     );
 
     expect(response.status).toBe(502);
@@ -210,44 +204,102 @@ describe("coach worker app", () => {
   });
 });
 
-describe("OpenAICoachService", () => {
-  it("forwards previous_response_id for chat continuity", async () => {
-    const create = vi.fn().mockResolvedValue({
-      id: "resp_next",
-      output_text: JSON.stringify({
+describe("WorkersAICoachService", () => {
+  it("replays recent conversation turns and ignores previousResponseID", async () => {
+    const aiRun = vi.fn().mockResolvedValue({
+      response: {
         answerMarkdown: "Use +2.5kg if RPE stayed below 8.",
-        responseID: "resp_from_model",
         followUps: ["Want a double progression version?"],
         suggestedChanges: [],
-      }),
+      },
       usage: { total_tokens: 321 },
     });
 
-    const service = new OpenAICoachService({ create }, env);
+    const service = new WorkersAICoachService(makeEnv({ AI: { run: aiRun } }));
     const result = await service.generateChat(makeChatRequestFixture());
 
-    expect(create).toHaveBeenCalledTimes(1);
-    expect(create.mock.calls[0]?.[0]).toMatchObject({
-      previous_response_id: "resp_prev_001",
-      store: true,
-      model: "gpt-5-mini",
+    expect(aiRun).toHaveBeenCalledTimes(1);
+    const [model, payload] = aiRun.mock.calls[0] ?? [];
+    expect(model).toBe(DEFAULT_AI_MODEL);
+    expect(payload).toMatchObject({
+      max_tokens: 900,
+      temperature: 0.2,
+      guided_json: expect.any(Object),
     });
-    expect(result.data.responseID).toBe("resp_next");
+    expect(payload).not.toHaveProperty("previous_response_id");
+    expect(payload?.messages).toEqual(
+      expect.arrayContaining([
+        {
+          role: "user",
+          content: "Last week I was close to failure on my top sets.",
+        },
+        {
+          role: "assistant",
+          content: "Coach: keep one rep in reserve before pushing load.",
+        },
+      ])
+    );
+    expect(result.data.responseID).toMatch(/^coach-turn_/);
   });
 
-  it("rejects invalid structured output", async () => {
-    const service = new OpenAICoachService(
-      {
-        create: vi.fn().mockResolvedValue({
-          id: "resp_bad",
-          output_text: JSON.stringify({
-            summary: "",
-            recommendations: [],
-            suggestedChanges: [],
-          }),
-        }),
+  it("drops invalid suggestedChanges instead of failing the whole chat response", async () => {
+    const aiRun = vi.fn().mockResolvedValue({
+      response: {
+        answerMarkdown: "Keep one rep in reserve on compounds this week.",
+        followUps: ["Want that translated into set targets?"],
+        suggestedChanges: [
+          {
+            id: "bad-change",
+            type: "setWeeklyWorkoutTarget",
+            title: "Broken draft",
+            summary: "Missing weekly target value",
+          },
+        ],
       },
-      env
+    });
+
+    const service = new WorkersAICoachService(makeEnv({ AI: { run: aiRun } }));
+    const result = await service.generateChat(makeChatRequestFixture());
+
+    expect(result.data.suggestedChanges).toEqual([]);
+  });
+
+  it("falls back to plain-text chat when structured output fails", async () => {
+    const aiRun = vi
+      .fn()
+      .mockResolvedValueOnce({
+        response: "not valid json",
+      })
+      .mockResolvedValueOnce({
+        response: "Keep load the same next week and add one rep to the final set.",
+      });
+
+    const service = new WorkersAICoachService(makeEnv({ AI: { run: aiRun } }));
+    const result = await service.generateChat(makeChatRequestFixture());
+
+    expect(aiRun).toHaveBeenCalledTimes(2);
+    expect(aiRun.mock.calls[1]?.[1]).not.toHaveProperty("guided_json");
+    expect(result.data.answerMarkdown).toBe(
+      "Keep load the same next week and add one rep to the final set."
+    );
+    expect(result.data.followUps).toEqual([]);
+    expect(result.data.suggestedChanges).toEqual([]);
+    expect(result.data.responseID).toMatch(/^coach-turn_/);
+  });
+
+  it("rejects invalid structured profile output", async () => {
+    const service = new WorkersAICoachService(
+      makeEnv({
+        AI: {
+          run: vi.fn().mockResolvedValue({
+            response: {
+              summary: "",
+              recommendations: [],
+              suggestedChanges: [],
+            },
+          }),
+        },
+      })
     );
 
     await expect(
@@ -259,14 +311,17 @@ describe("OpenAICoachService", () => {
   });
 
   it("maps timeout-like upstream errors to 504", async () => {
-    const service = new OpenAICoachService(
-      {
-        create: vi.fn().mockRejectedValue(new Error("Request timed out")),
-      },
-      env
+    const service = new WorkersAICoachService(
+      makeEnv({
+        AI: {
+          run: vi.fn().mockRejectedValue(new Error("Request timed out")),
+        },
+      })
     );
 
-    await expect(service.generateChat(makeChatRequestFixture())).rejects.toMatchObject({
+    await expect(
+      service.generateProfileInsights(makeProfileInsightsRequestFixture())
+    ).rejects.toMatchObject({
       code: "upstream_timeout",
       status: 504,
     });
@@ -286,7 +341,7 @@ function stubInferenceService(overrides?: {
           recommendations: ["Recommendation"],
           suggestedChanges: [],
         },
-        model: "gpt-5-mini",
+        model: DEFAULT_AI_MODEL,
       };
     },
     async generateChat() {
@@ -296,14 +351,26 @@ function stubInferenceService(overrides?: {
       return {
         data: overrides?.chat ?? {
           answerMarkdown: "Answer",
-          responseID: "resp_1",
+          responseID: "coach-turn_1",
           followUps: [],
           suggestedChanges: [],
         },
-        responseId: "resp_1",
-        model: "gpt-5-mini",
+        responseId: "coach-turn_1",
+        model: DEFAULT_AI_MODEL,
       };
     },
+  };
+}
+
+function makeEnv(overrides: Partial<Env> = {}): Env {
+  return {
+    AI: {
+      run: vi.fn(),
+    },
+    COACH_INTERNAL_TOKEN: "internal-token",
+    AI_MODEL: DEFAULT_AI_MODEL,
+    COACH_PROMPT_VERSION: "test.v1",
+    ...overrides,
   };
 }
 
@@ -475,5 +542,15 @@ function makeChatRequestFixture(): CoachChatRequest {
     ...makeProfileInsightsRequestFixture(),
     question: "How should I progress next week?",
     previousResponseID: "resp_prev_001",
+    conversationMessages: [
+      {
+        role: "user",
+        content: "Last week I was close to failure on my top sets.",
+      },
+      {
+        role: "assistant",
+        content: "Coach: keep one rep in reserve before pushing load.",
+      },
+    ],
   };
 }
