@@ -71,7 +71,30 @@ The Worker uses Cloudflare Workers AI directly and does not require an OpenAI AP
 
 ## Cloudflare KV setup
 
-Create a KV namespace in Cloudflare, for example:
+`wrangler.jsonc` now declares:
+
+```jsonc
+"kv_namespaces": [
+  {
+    "binding": "COACH_STATE_KV"
+  }
+]
+```
+
+With Cloudflare Git / dashboard deploys, this lets Workers automatically provision and keep the KV binding instead of dropping it on the next deploy.
+
+If you want to pin the Worker to an existing namespace instead of auto-provisioning a new one, replace the binding with the explicit namespace ID after you copy it from the Cloudflare dashboard:
+
+```jsonc
+"kv_namespaces": [
+  {
+    "binding": "COACH_STATE_KV",
+    "id": "<KV_NAMESPACE_ID>"
+  }
+]
+```
+
+Create a KV namespace in Cloudflare manually only if you want to reuse a specific existing namespace, for example:
 
 - Namespace name: `workoutapp-ai-coach-state`
 
