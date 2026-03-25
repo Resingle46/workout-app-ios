@@ -523,122 +523,42 @@ function dedupeText(values: string[]): string[] {
   return result;
 }
 
-const suggestedChangeOneOf = [
-  {
-    type: "object",
-    additionalProperties: false,
-    properties: {
-      id: { type: "string", minLength: 1 },
-      type: { const: "setWeeklyWorkoutTarget" },
-      title: { type: "string", minLength: 1 },
-      summary: { type: "string", minLength: 1 },
-      weeklyWorkoutTarget: { type: "integer", minimum: 1 },
-    },
-    required: ["id", "type", "title", "summary", "weeklyWorkoutTarget"],
+const guidedSuggestedChangeJsonSchema = {
+  type: "object",
+  properties: {
+    id: { type: "string" },
+    type: { type: "string" },
+    title: { type: "string" },
+    summary: { type: "string" },
+    weeklyWorkoutTarget: { type: "integer" },
+    programID: { type: "string" },
+    workoutID: { type: "string" },
+    templateExerciseID: { type: "string" },
+    replacementExerciseID: { type: "string" },
+    workoutTitle: { type: "string" },
+    workoutFocus: { type: "string" },
+    reps: { type: "integer" },
+    setsCount: { type: "integer" },
+    suggestedWeight: { type: "number" },
   },
-  {
-    type: "object",
-    additionalProperties: false,
-    properties: {
-      id: { type: "string", minLength: 1 },
-      type: { const: "addWorkoutDay" },
-      title: { type: "string", minLength: 1 },
-      summary: { type: "string", minLength: 1 },
-      programID: { type: "string", format: "uuid" },
-      workoutTitle: { type: "string", minLength: 1 },
-      workoutFocus: { type: "string" },
-    },
-    required: ["id", "type", "title", "summary", "programID", "workoutTitle"],
-  },
-  {
-    type: "object",
-    additionalProperties: false,
-    properties: {
-      id: { type: "string", minLength: 1 },
-      type: { const: "deleteWorkoutDay" },
-      title: { type: "string", minLength: 1 },
-      summary: { type: "string", minLength: 1 },
-      programID: { type: "string", format: "uuid" },
-      workoutID: { type: "string", format: "uuid" },
-    },
-    required: ["id", "type", "title", "summary", "programID", "workoutID"],
-  },
-  {
-    type: "object",
-    additionalProperties: false,
-    properties: {
-      id: { type: "string", minLength: 1 },
-      type: { const: "swapWorkoutExercise" },
-      title: { type: "string", minLength: 1 },
-      summary: { type: "string", minLength: 1 },
-      programID: { type: "string", format: "uuid" },
-      workoutID: { type: "string", format: "uuid" },
-      templateExerciseID: { type: "string", format: "uuid" },
-      replacementExerciseID: { type: "string", format: "uuid" },
-    },
-    required: [
-      "id",
-      "type",
-      "title",
-      "summary",
-      "programID",
-      "workoutID",
-      "templateExerciseID",
-      "replacementExerciseID",
-    ],
-  },
-  {
-    type: "object",
-    additionalProperties: false,
-    properties: {
-      id: { type: "string", minLength: 1 },
-      type: { const: "updateTemplateExercisePrescription" },
-      title: { type: "string", minLength: 1 },
-      summary: { type: "string", minLength: 1 },
-      programID: { type: "string", format: "uuid" },
-      workoutID: { type: "string", format: "uuid" },
-      templateExerciseID: { type: "string", format: "uuid" },
-      reps: { type: "integer", minimum: 1 },
-      setsCount: { type: "integer", minimum: 1 },
-      suggestedWeight: { type: "number", minimum: 0 },
-    },
-    required: [
-      "id",
-      "type",
-      "title",
-      "summary",
-      "programID",
-      "workoutID",
-      "templateExerciseID",
-      "reps",
-      "setsCount",
-      "suggestedWeight",
-    ],
-  },
-];
+  required: ["id", "type", "title", "summary"],
+} as const;
 
 const profileInsightsJsonSchema = {
   type: "object",
-  additionalProperties: false,
   properties: {
     summary: {
       type: "string",
-      minLength: 1,
     },
     recommendations: {
       type: "array",
       items: {
         type: "string",
-        minLength: 1,
       },
-      maxItems: 8,
     },
     suggestedChanges: {
       type: "array",
-      items: {
-        oneOf: suggestedChangeOneOf,
-      },
-      maxItems: 5,
+      items: guidedSuggestedChangeJsonSchema,
     },
   },
   required: ["summary", "recommendations", "suggestedChanges"],
@@ -646,26 +566,19 @@ const profileInsightsJsonSchema = {
 
 const chatResponseJsonSchema = {
   type: "object",
-  additionalProperties: false,
   properties: {
     answerMarkdown: {
       type: "string",
-      minLength: 1,
     },
     followUps: {
       type: "array",
       items: {
         type: "string",
-        minLength: 1,
       },
-      maxItems: 4,
     },
     suggestedChanges: {
       type: "array",
-      items: {
-        oneOf: suggestedChangeOneOf,
-      },
-      maxItems: 5,
+      items: guidedSuggestedChangeJsonSchema,
     },
   },
   required: ["answerMarkdown", "followUps", "suggestedChanges"],

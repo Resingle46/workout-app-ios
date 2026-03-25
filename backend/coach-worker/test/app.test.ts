@@ -226,6 +226,10 @@ describe("WorkersAICoachService", () => {
       temperature: 0.2,
       guided_json: expect.any(Object),
     });
+    expect(payload?.guided_json?.properties?.suggestedChanges?.items).toMatchObject({
+      type: "object",
+      required: ["id", "type", "title", "summary"],
+    });
     expect(payload).not.toHaveProperty("previous_response_id");
     expect(payload?.messages).toEqual(
       expect.arrayContaining([
