@@ -213,7 +213,11 @@ export function createApp(
       } catch (error) {
         const mapped = mapError(error, requestID);
         const errorDetails =
-          error instanceof CoachInferenceServiceError ? error.details : undefined;
+          error instanceof CoachInferenceServiceError
+            ? error.details
+            : error instanceof RequestError
+              ? error.details
+              : undefined;
         logRequest({
           requestID,
           route: pathname,
@@ -233,7 +237,8 @@ class RequestError extends Error {
   constructor(
     readonly status: number,
     readonly code: string,
-    readonly publicMessage: string
+    readonly publicMessage: string,
+    readonly details?: Record<string, unknown>
   ) {
     super(publicMessage);
   }
@@ -260,7 +265,8 @@ function assertRuntimeSecrets(env: Env): void {
     throw new RequestError(
       500,
       "server_misconfigured",
-      "Coach backend is not configured."
+      "Coach backend is not configured.",
+      { missing }
     );
   }
 }
@@ -285,7 +291,8 @@ function mustGetStateKV(env: Env) {
     throw new RequestError(
       500,
       "server_misconfigured",
-      "Coach backend is not configured."
+      "Coach backend is not configured.",
+      { missing: ["COACH_STATE_KV"] }
     );
   }
 

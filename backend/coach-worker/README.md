@@ -5,6 +5,8 @@ Cloudflare Worker backend for the in-app AI Coach.
 ## Routes
 
 - `GET /health`
+- `PUT /v1/coach/snapshot`
+- `DELETE /v1/coach/state`
 - `POST /v1/coach/profile-insights`
 - `POST /v1/coach/chat`
 
@@ -61,10 +63,23 @@ Set runtime secrets in Cloudflare:
 Set runtime vars and bindings in Cloudflare:
 
 - AI binding: `AI`
+- KV binding: `COACH_STATE_KV`
 - `AI_MODEL=@cf/mistralai/mistral-small-3.1-24b-instruct`
 - `COACH_PROMPT_VERSION=2026-03-25.v1`
 
 The Worker uses Cloudflare Workers AI directly and does not require an OpenAI API key.
+
+## Cloudflare KV setup
+
+Create a KV namespace in Cloudflare, for example:
+
+- Namespace name: `workoutapp-ai-coach-state`
+
+Then bind that namespace to the Worker with:
+
+- Binding name: `COACH_STATE_KV`
+
+Without `COACH_STATE_KV`, `/health` will return `status: "error"` and coach requests will fail with `server_misconfigured`.
 
 ## iOS config
 
