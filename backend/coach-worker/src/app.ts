@@ -86,6 +86,8 @@ export function createApp(
         throw new RequestError(404, "not_found", "Route not found");
       } catch (error) {
         const mapped = mapError(error, requestID);
+        const errorDetails =
+          error instanceof CoachInferenceServiceError ? error.details : undefined;
         logRequest({
           requestID,
           route: pathname,
@@ -93,6 +95,7 @@ export function createApp(
           status: mapped.status,
           durationMs: deps.now() - startedAt,
           errorCode: mapped.body.error.code,
+          errorDetails,
         });
         return json(mapped.body, mapped.status);
       }
@@ -250,6 +253,7 @@ function logRequest(payload: {
   responseID?: string;
   usage?: unknown;
   errorCode?: string;
+  errorDetails?: unknown;
 }) {
   console.log(JSON.stringify(payload));
 }

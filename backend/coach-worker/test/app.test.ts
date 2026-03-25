@@ -287,6 +287,22 @@ describe("WorkersAICoachService", () => {
     expect(result.data.responseID).toMatch(/^coach-turn_/);
   });
 
+  it("parses structured JSON wrapped in code fences", async () => {
+    const aiRun = vi.fn().mockResolvedValue({
+      response: "```json\n{\"summary\":\"Recovery is adequate.\",\"recommendations\":[\"Keep volume stable this week.\"],\"suggestedChanges\":[]}\n```",
+    });
+
+    const service = new WorkersAICoachService(makeEnv({ AI: { run: aiRun } }));
+    const result = await service.generateProfileInsights(
+      makeProfileInsightsRequestFixture()
+    );
+
+    expect(result.data.summary).toBe("Recovery is adequate.");
+    expect(result.data.recommendations).toEqual([
+      "Keep volume stable this week.",
+    ]);
+  });
+
   it("rejects invalid structured profile output", async () => {
     const service = new WorkersAICoachService(
       makeEnv({

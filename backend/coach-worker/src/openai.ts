@@ -46,7 +46,8 @@ export class CoachInferenceServiceError extends Error {
   constructor(
     readonly status: number,
     readonly code: string,
-    message: string
+    message: string,
+    readonly details?: Record<string, unknown>
   ) {
     super(message);
     this.name = "CoachInferenceServiceError";
@@ -62,7 +63,9 @@ export class WorkersAICoachService implements CoachInferenceService {
   async generateProfileInsights(
     request: CoachProfileInsightsRequest
   ): Promise<InferenceResult<CoachProfileInsightsResponse>> {
+    const operation = "profile_insights";
     const rawResponse = await this.runStructured({
+      operation,
       messages: buildProfileInsightsMessages(request),
       schema: profileInsightsJsonSchema,
       maxTokens: 850,
@@ -71,7 +74,11 @@ export class WorkersAICoachService implements CoachInferenceService {
     const response = parseStructuredOutput(
       rawResponse,
       profileInsightsModelOutputSchema,
-      "profile insights"
+      "profile insights",
+      {
+        operation,
+        model: this.modelName,
+      }
     );
     return {
       data: normalizeProfileInsights(response),
@@ -83,11 +90,13 @@ export class WorkersAICoachService implements CoachInferenceService {
   async generateChat(
     request: CoachChatRequest
   ): Promise<InferenceResult<CoachChatResponse>> {
+    const operation = "chat";
     const turnID = buildOpaqueResponseID();
     const messages = buildChatMessages(request);
 
     try {
       const rawResponse = await this.runStructured({
+        operation,
         messages,
         schema: chatResponseJsonSchema,
         maxTokens: 900,
@@ -96,7 +105,12 @@ export class WorkersAICoachService implements CoachInferenceService {
         parseStructuredOutput(
           rawResponse,
           chatResponseModelOutputSchema,
-          "chat"
+          "chat",
+          {
+            operation,
+            model: this.modelName,
+            turnID,
+          }
         )
       );
 
@@ -114,7 +128,19 @@ export class WorkersAICoachService implements CoachInferenceService {
         throw error;
       }
 
+      console.warn(
+        JSON.stringify({
+          event: "coach_chat_structured_fallback",
+          operation,
+          model: this.modelName,
+          turnID,
+          reasonCode: error.code,
+          reasonDetails: error.details,
+        })
+      );
+
       const fallbackResponse = await this.runPlainText({
+        operation,
         messages: buildFallbackChatMessages(request),
         maxTokens: 750,
       });
@@ -139,23 +165,34 @@ export class WorkersAICoachService implements CoachInferenceService {
   }
 
   private async runStructured(input: {
+    operation: "profile_insights" | "chat";
     messages: PromptMessage[];
     schema: Record<string, unknown>;
     maxTokens: number;
   }): Promise<unknown> {
-    return this.runModel({
+    return this.runModel(
+      {
       messages: input.messages,
       guided_json: input.schema,
       max_tokens: input.maxTokens,
       temperature: 0.2,
-    });
+      },
+      {
+        operation: input.operation,
+        mode: "structured",
+        messageCount: input.messages.length,
+        maxTokens: input.maxTokens,
+      }
+    );
   }
 
   private async runPlainText(input: {
+    operation: "profile_insights" | "chat";
     messages: PromptMessage[];
     maxTokens: number;
   }): Promise<unknown> {
-    return this.runModel({
+    return this.runModel(
+      {
       messages: [
         {
           role: "system",
@@ -166,22 +203,36 @@ export class WorkersAICoachService implements CoachInferenceService {
       ],
       max_tokens: input.maxTokens,
       temperature: 0.25,
-    });
+      },
+      {
+        operation: input.operation,
+        mode: "plain_text_fallback",
+        messageCount: input.messages.length,
+        maxTokens: input.maxTokens,
+      }
+    );
   }
 
-  private async runModel(payload: Record<string, unknown>): Promise<unknown> {
+  private async runModel(
+    payload: Record<string, unknown>,
+    details: Record<string, unknown>
+  ): Promise<unknown> {
     if (!this.env.AI) {
       throw new CoachInferenceServiceError(
         500,
         "server_misconfigured",
-        "Workers AI binding is not configured"
+        "Workers AI binding is not configured",
+        details
       );
     }
 
     try {
       return await this.env.AI.run(this.modelName, payload);
     } catch (error) {
-      throw normalizeWorkersAIError(error);
+      throw normalizeWorkersAIError(error, {
+        ...details,
+        model: this.modelName,
+      });
     }
   }
 }
@@ -189,7 +240,8 @@ export class WorkersAICoachService implements CoachInferenceService {
 function parseStructuredOutput<T>(
   rawResponse: unknown,
   schema: { parse(input: unknown): T },
-  label: string
+  label: string,
+  details: Record<string, unknown>
 ): T {
   const rawPayload = extractResponsePayload(rawResponse, label);
   const parsedJSON =
@@ -201,7 +253,11 @@ function parseStructuredOutput<T>(
     throw new CoachInferenceServiceError(
       502,
       "upstream_invalid_output",
-      `Workers AI returned schema-invalid ${label} output`
+      `Workers AI returned schema-invalid ${label} output`,
+      {
+        ...details,
+        responseShape: describeResponseShape(rawResponse),
+      }
     );
   }
 }
@@ -322,12 +378,15 @@ function extractResponsePayload(rawResponse: unknown, label: string): unknown {
   throw new CoachInferenceServiceError(
     502,
     "upstream_empty_output",
-    `Workers AI returned empty ${label} output`
+    `Workers AI returned empty ${label} output`,
+    {
+      responseShape: describeResponseShape(rawResponse),
+    }
   );
 }
 
 function parseJSONPayload(payload: string, label: string): unknown {
-  const trimmed = payload.trim();
+  const trimmed = normalizePotentialJSON(payload);
   if (!trimmed) {
     throw new CoachInferenceServiceError(
       502,
@@ -342,12 +401,18 @@ function parseJSONPayload(payload: string, label: string): unknown {
     throw new CoachInferenceServiceError(
       502,
       "upstream_invalid_json",
-      `Workers AI returned invalid ${label} JSON`
+      `Workers AI returned invalid ${label} JSON`,
+      {
+        payloadPreview: trimmed.slice(0, 200),
+      }
     );
   }
 }
 
-function normalizeWorkersAIError(error: unknown): CoachInferenceServiceError {
+function normalizeWorkersAIError(
+  error: unknown,
+  details: Record<string, unknown>
+): CoachInferenceServiceError {
   const message =
     error instanceof Error ? error.message : "Unknown Workers AI error";
   const normalizedMessage = message.toLowerCase();
@@ -360,15 +425,73 @@ function normalizeWorkersAIError(error: unknown): CoachInferenceServiceError {
     return new CoachInferenceServiceError(
       504,
       "upstream_timeout",
-      "Workers AI request timed out"
+      "Workers AI request timed out",
+      {
+        ...details,
+        providerMessage: message.slice(0, 200),
+      }
     );
   }
 
   return new CoachInferenceServiceError(
     502,
     "upstream_request_failed",
-    "Workers AI request failed"
+    "Workers AI request failed",
+    {
+      ...details,
+      providerMessage: message.slice(0, 200),
+    }
   );
+}
+
+function normalizePotentialJSON(payload: string): string {
+  const trimmed = payload.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+
+  if (trimmed.startsWith("```")) {
+    const withoutOpeningFence = trimmed.replace(/^```(?:json)?\s*/i, "");
+    return withoutOpeningFence.replace(/\s*```$/, "").trim();
+  }
+
+  const objectStart = trimmed.indexOf("{");
+  const objectEnd = trimmed.lastIndexOf("}");
+  if (objectStart >= 0 && objectEnd > objectStart) {
+    return trimmed.slice(objectStart, objectEnd + 1).trim();
+  }
+
+  const arrayStart = trimmed.indexOf("[");
+  const arrayEnd = trimmed.lastIndexOf("]");
+  if (arrayStart >= 0 && arrayEnd > arrayStart) {
+    return trimmed.slice(arrayStart, arrayEnd + 1).trim();
+  }
+
+  return trimmed;
+}
+
+function describeResponseShape(rawResponse: unknown): Record<string, unknown> {
+  if (!isRecord(rawResponse)) {
+    return {
+      rawType: typeof rawResponse,
+    };
+  }
+
+  const response = rawResponse.response;
+  const resultResponse =
+    isRecord(rawResponse.result) ? rawResponse.result.response : undefined;
+  const effectiveResponse = response ?? resultResponse;
+
+  return {
+    rawType: "object",
+    topLevelKeys: Object.keys(rawResponse).slice(0, 12),
+    responseType: Array.isArray(effectiveResponse)
+      ? "array"
+      : typeof effectiveResponse,
+    responseKeys: isRecord(effectiveResponse)
+      ? Object.keys(effectiveResponse).slice(0, 12)
+      : undefined,
+  };
 }
 
 function buildOpaqueResponseID(): string {
