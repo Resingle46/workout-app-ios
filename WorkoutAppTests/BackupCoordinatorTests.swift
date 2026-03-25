@@ -923,6 +923,41 @@ final class BackupCoordinatorTests: XCTestCase {
     }
 
     @MainActor
+    func testProfileTrainingRecommendationSummaryUsesSavedProgramWorkoutCountForSplit() {
+        let store = AppStore()
+        var snapshot = makeStatisticsSnapshot(exercises: [], history: [])
+        snapshot.programs = [
+            WorkoutProgram(
+                title: "4 Day Program",
+                workouts: [
+                    WorkoutTemplate(title: "Day 1", focus: "", exercises: []),
+                    WorkoutTemplate(title: "Day 2", focus: "", exercises: []),
+                    WorkoutTemplate(title: "Day 3", focus: "", exercises: []),
+                    WorkoutTemplate(title: "Day 4", focus: "", exercises: [])
+                ]
+            )
+        ]
+        snapshot.profile = UserProfile(
+            sex: "M",
+            age: 29,
+            weight: 88,
+            height: 182,
+            appLanguageCode: "en",
+            primaryGoal: .strength,
+            experienceLevel: .intermediate,
+            weeklyWorkoutTarget: 2,
+            targetBodyWeight: nil
+        )
+        store.apply(snapshot: snapshot)
+
+        let summary = store.profileTrainingRecommendationSummary()
+
+        XCTAssertEqual(summary.splitWorkoutDays, 4)
+        XCTAssertEqual(summary.splitProgramTitle, "4 Day Program")
+        XCTAssertEqual(summary.split, .upperLower)
+    }
+
+    @MainActor
     func testProfileGoalCompatibilitySummaryFlagsDirectionMismatchAndLowFrequency() {
         let store = AppStore()
         var snapshot = makeStatisticsSnapshot(exercises: [], history: [])
@@ -988,6 +1023,42 @@ final class BackupCoordinatorTests: XCTestCase {
         XCTAssertTrue(summary.issues.contains { $0.kind == .adherenceGap })
         XCTAssertTrue(summary.issues.contains { $0.kind == .longGoalTimeline })
         XCTAssertEqual(try XCTUnwrap(summary.averageWorkoutsPerWeek), 0.5, accuracy: 0.001)
+    }
+
+    @MainActor
+    func testProfileGoalCompatibilitySummaryFlagsSavedProgramFrequencyMismatch() {
+        let store = AppStore()
+        var snapshot = makeStatisticsSnapshot(exercises: [], history: [])
+        snapshot.programs = [
+            WorkoutProgram(
+                title: "4 Day Program",
+                workouts: [
+                    WorkoutTemplate(title: "Day 1", focus: "", exercises: []),
+                    WorkoutTemplate(title: "Day 2", focus: "", exercises: []),
+                    WorkoutTemplate(title: "Day 3", focus: "", exercises: []),
+                    WorkoutTemplate(title: "Day 4", focus: "", exercises: [])
+                ]
+            )
+        ]
+        snapshot.profile = UserProfile(
+            sex: "M",
+            age: 29,
+            weight: 88,
+            height: 182,
+            appLanguageCode: "en",
+            primaryGoal: .generalFitness,
+            experienceLevel: .intermediate,
+            weeklyWorkoutTarget: 2,
+            targetBodyWeight: nil
+        )
+        store.apply(snapshot: snapshot)
+
+        let summary = store.profileGoalCompatibilitySummary(
+            referenceDate: makeDate(year: 2024, month: 3, day: 25, hour: 12),
+            calendar: statisticsCalendar(localeIdentifier: "en_US")
+        )
+
+        XCTAssertTrue(summary.issues.contains { $0.kind == .programFrequencyMismatch })
     }
 
     @MainActor

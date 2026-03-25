@@ -307,6 +307,8 @@ struct ProfileTrainingRecommendationSummary: Hashable, Sendable {
     var weeklySetsLowerBound: Int
     var weeklySetsUpperBound: Int
     var split: ProfileTrainingSplitRecommendation
+    var splitWorkoutDays: Int? = nil
+    var splitProgramTitle: String? = nil
     var isGenericFallback: Bool
 }
 
@@ -315,6 +317,7 @@ enum ProfileGoalCompatibilityIssueKind: String, Hashable, Sendable {
     case goalTargetMismatch
     case frequencyTooLow
     case frequencyTooHighForBeginner
+    case programFrequencyMismatch
     case adherenceGap
     case longGoalTimeline
 }
@@ -324,6 +327,7 @@ struct ProfileGoalCompatibilityIssue: Identifiable, Hashable, Sendable {
     var kind: ProfileGoalCompatibilityIssueKind
     var currentWeeklyTarget: Int?
     var recommendedWeeklyTargetLowerBound: Int?
+    var programWorkoutCount: Int? = nil
     var observedWorkoutsPerWeek: Double?
     var etaWeeksUpperBound: Int?
     var systemImage: String

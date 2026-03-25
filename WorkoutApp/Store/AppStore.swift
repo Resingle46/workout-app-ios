@@ -739,9 +739,15 @@ final class AppStore {
 
     func profileTrainingRecommendationSummary() -> ProfileTrainingRecommendationSummary {
         let isGenericFallback = profile.primaryGoal == .notSet || profile.experienceLevel == .notSet
-        let split = isGenericFallback
-            ? ProfileTrainingSplitRecommendation.fullBody
-            : splitRecommendation(for: profile.weeklyWorkoutTarget)
+        let preferredProgram = preferredProgramForProfileInsights()
+        let splitWorkoutDays = preferredProgram.flatMap { program in
+            program.workouts.isEmpty ? nil : program.workouts.count
+        }
+        let split = splitWorkoutDays.map { splitRecommendation(for: $0) }
+            ?? (isGenericFallback
+                ? ProfileTrainingSplitRecommendation.fullBody
+                : splitRecommendation(for: profile.weeklyWorkoutTarget))
+        let splitProgramTitle = splitWorkoutDays == nil ? nil : preferredProgram?.title
 
         if isGenericFallback {
             return ProfileTrainingRecommendationSummary(
@@ -757,6 +763,8 @@ final class AppStore {
                 weeklySetsLowerBound: 6,
                 weeklySetsUpperBound: 10,
                 split: split,
+                splitWorkoutDays: splitWorkoutDays,
+                splitProgramTitle: splitProgramTitle,
                 isGenericFallback: true
             )
         }
@@ -779,6 +787,8 @@ final class AppStore {
             weeklySetsLowerBound: recommendation.weeklySets.lower,
             weeklySetsUpperBound: recommendation.weeklySets.upper,
             split: split,
+            splitWorkoutDays: splitWorkoutDays,
+            splitProgramTitle: splitProgramTitle,
             isGenericFallback: false
         )
     }
@@ -789,6 +799,7 @@ final class AppStore {
     ) -> ProfileGoalCompatibilitySummary {
         let goalSummary = profileGoalSummary()
         let workoutAverage = recentAverageWorkoutsPerWeek(referenceDate: referenceDate, calendar: calendar)
+        let preferredProgram = preferredProgramForProfileInsights()
         let usesObservedHistory = workoutAverage.source == .history
         var issues: [ProfileGoalCompatibilityIssue] = []
 
@@ -864,6 +875,23 @@ final class AppStore {
                     observedWorkoutsPerWeek: nil,
                     etaWeeksUpperBound: nil,
                     systemImage: "figure.cooldown"
+                )
+            )
+        }
+
+        if let programWorkoutCount = preferredProgram?.workouts.count,
+           programWorkoutCount > 0,
+           programWorkoutCount != profile.weeklyWorkoutTarget {
+            issues.append(
+                ProfileGoalCompatibilityIssue(
+                    id: ProfileGoalCompatibilityIssueKind.programFrequencyMismatch.rawValue,
+                    kind: .programFrequencyMismatch,
+                    currentWeeklyTarget: profile.weeklyWorkoutTarget,
+                    recommendedWeeklyTargetLowerBound: nil,
+                    programWorkoutCount: programWorkoutCount,
+                    observedWorkoutsPerWeek: nil,
+                    etaWeeksUpperBound: nil,
+                    systemImage: "list.bullet.rectangle.portrait"
                 )
             )
         }
@@ -1103,6 +1131,31 @@ final class AppStore {
             return .upperLowerPlusSpecialization
         default:
             return .highFrequencySplit
+        }
+    }
+
+    private func preferredProgramForProfileInsights() -> WorkoutProgram? {
+        if let workoutTemplateID = activeSession?.workoutTemplateID,
+           let program = program(containingWorkoutTemplateID: workoutTemplateID) {
+            return program
+        }
+
+        if let workoutTemplateID = lastFinishedSession?.workoutTemplateID,
+           let program = program(containingWorkoutTemplateID: workoutTemplateID) {
+            return program
+        }
+
+        if let workoutTemplateID = history.first(where: \.isFinished)?.workoutTemplateID,
+           let program = program(containingWorkoutTemplateID: workoutTemplateID) {
+            return program
+        }
+
+        return programs.first(where: { !$0.workouts.isEmpty })
+    }
+
+    private func program(containingWorkoutTemplateID workoutTemplateID: UUID) -> WorkoutProgram? {
+        programs.first { program in
+            program.workouts.contains(where: { $0.id == workoutTemplateID })
         }
     }
 

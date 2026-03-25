@@ -36,10 +36,6 @@ struct ProfileView: View {
         store.profileGoalCompatibilitySummary()
     }
 
-    private var strengthSummary: ProfileStrengthToBodyweightSummary {
-        store.profileStrengthToBodyweightSummary()
-    }
-
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 20) {
@@ -88,13 +84,6 @@ struct ProfileView: View {
                     showingProfileEditor = true
                 } label: {
                     ProfileGoalCompatibilityCard(summary: goalCompatibilitySummary)
-                }
-                .buttonStyle(AppInteractiveCardButtonStyle(pressedOpacity: 0.97))
-
-                Button {
-                    store.selectedTab = .statistics
-                } label: {
-                    ProfileRelativeStrengthCard(summary: strengthSummary)
                 }
                 .buttonStyle(AppInteractiveCardButtonStyle(pressedOpacity: 0.97))
 
@@ -707,6 +696,29 @@ private struct ProfileTrainingRecommendationsCard: View {
         )
     }
 
+    private var splitText: String {
+        if let splitWorkoutDays = summary.splitWorkoutDays {
+            return String(
+                format: localizedString("profile.card.recommendations.split_days_format"),
+                splitWorkoutDays
+            )
+        }
+
+        return summary.split.localizedTitle
+    }
+
+    private var splitSourceText: String? {
+        guard let splitProgramTitle = summary.splitProgramTitle,
+              summary.splitWorkoutDays != nil else {
+            return nil
+        }
+
+        return String(
+            format: localizedString("profile.card.recommendations.split_program_note"),
+            splitProgramTitle
+        )
+    }
+
     var body: some View {
         ProfileAccentCard(accent: .orange) {
             VStack(alignment: .leading, spacing: 18) {
@@ -746,9 +758,23 @@ private struct ProfileTrainingRecommendationsCard: View {
                     )
                     ProfileMetricTile(
                         titleKey: "profile.card.recommendations.split",
-                        value: summary.split.localizedTitle,
+                        value: splitText,
                         accent: .orange
                     )
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    if let splitSourceText {
+                        Text(splitSourceText)
+                            .font(AppTypography.caption(size: 13, weight: .medium))
+                            .foregroundStyle(DashboardCardAccent.orange.secondaryText)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    Text("profile.card.recommendations.rep_range_note")
+                        .font(AppTypography.caption(size: 13, weight: .medium))
+                        .foregroundStyle(DashboardCardAccent.orange.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
@@ -770,6 +796,11 @@ private struct ProfileGoalCompatibilityCard: View {
                     titleKey: "profile.card.compatibility.title",
                     systemImage: summary.isAligned ? "checkmark.seal.fill" : "exclamationmark.bubble.fill"
                 )
+
+                Text("profile.card.compatibility.note")
+                    .font(AppTypography.body(size: 15, weight: .medium, relativeTo: .subheadline))
+                    .foregroundStyle(accent.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
 
                 if summary.isAligned {
                     Text("profile.card.compatibility.aligned")
@@ -806,6 +837,12 @@ private struct ProfileCompatibilityIssueRow: View {
         case .frequencyTooHighForBeginner:
             return String(
                 format: localizedString("profile.card.compatibility.issue_frequency_high_beginner"),
+                issue.currentWeeklyTarget ?? 0
+            )
+        case .programFrequencyMismatch:
+            return String(
+                format: localizedString("profile.card.compatibility.issue_program_frequency_mismatch"),
+                issue.programWorkoutCount ?? 0,
                 issue.currentWeeklyTarget ?? 0
             )
         case .adherenceGap:
@@ -847,45 +884,6 @@ private struct ProfileCompatibilityIssueRow: View {
             RoundedRectangle(cornerRadius: 22, style: .continuous)
                 .stroke(Color.white.opacity(0.08), lineWidth: 1)
         )
-    }
-}
-
-private struct ProfileRelativeStrengthCard: View {
-    let summary: ProfileStrengthToBodyweightSummary
-
-    private var hasRecords: Bool {
-        summary.lifts.contains { $0.relativeToBodyWeight != nil }
-    }
-
-    var body: some View {
-        ProfileAccentCard(accent: .aqua) {
-            VStack(alignment: .leading, spacing: 18) {
-                ProfileCardHeader(
-                    eyebrowKey: "profile.card.relative_strength.eyebrow",
-                    titleKey: "profile.card.relative_strength.title",
-                    systemImage: "dumbbell.fill"
-                )
-
-                Text(hasRecords
-                    ? localizedString("profile.card.relative_strength.best_load")
-                    : localizedString("profile.card.relative_strength.empty"))
-                    .font(AppTypography.body(size: 16, weight: .medium, relativeTo: .subheadline))
-                    .foregroundStyle(DashboardCardAccent.aqua.secondaryText)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
-                    ForEach(summary.lifts) { lift in
-                        ProfileMetricTile(
-                            titleKey: LocalizedStringKey(lift.lift.titleKey),
-                            value: lift.relativeToBodyWeight.map {
-                                String(format: localizedString("profile.card.relative_strength.ratio_format"), $0)
-                            } ?? localizedString("profile.card.relative_strength.missing_pr"),
-                            accent: .aqua
-                        )
-                    }
-                }
-            }
-        }
     }
 }
 
@@ -1803,21 +1801,6 @@ private extension ProfileTrainingSplitRecommendation {
 
     var localizedTitle: String {
         localizedString(titleKey)
-    }
-}
-
-private extension CanonicalStrengthLift {
-    var titleKey: String {
-        switch self {
-        case .benchPress:
-            return "profile.card.relative_strength.lift.bench"
-        case .backSquat:
-            return "profile.card.relative_strength.lift.squat"
-        case .deadlift:
-            return "profile.card.relative_strength.lift.deadlift"
-        case .overheadPress:
-            return "profile.card.relative_strength.lift.ohp"
-        }
     }
 }
 
