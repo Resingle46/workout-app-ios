@@ -56,6 +56,15 @@ export interface InferenceResult<T> {
   modelDurationMs?: number;
 }
 
+type CoachProfileInsightsContent = Omit<
+  CoachProfileInsightsResponse,
+  "generationStatus"
+>;
+type CoachChatContent = Omit<
+  CoachChatResponse,
+  "responseID" | "generationStatus"
+>;
+
 export interface CoachInferenceService {
   generateProfileInsights(
     request: CoachProfileInsightsRequest
@@ -113,7 +122,10 @@ export class WorkersAICoachService implements CoachInferenceService {
       return {
         data: applyProfileInsightsGuardrails(
           request,
-          parsed,
+          {
+            ...parsed,
+            generationStatus: "model",
+          },
           localFallback
         ),
         model: this.modelName,
@@ -167,9 +179,12 @@ export class WorkersAICoachService implements CoachInferenceService {
         return {
           data: applyProfileInsightsGuardrails(
             request,
-            parsePlainProfileInsights(
-              extractPlainText(fallbackInvocation.rawResponse, "profile insights")
-            ),
+            {
+              ...parsePlainProfileInsights(
+                extractPlainText(fallbackInvocation.rawResponse, "profile insights")
+              ),
+              generationStatus: "model",
+            },
             localFallback
           ),
           model: this.modelName,
@@ -241,7 +256,10 @@ export class WorkersAICoachService implements CoachInferenceService {
 
       return {
         data: {
-          ...applyChatGuardrails(request, parsed),
+          ...applyChatGuardrails(request, {
+            ...parsed,
+            generationStatus: "model",
+          }),
           responseID: turnID,
         },
         responseId: turnID,
@@ -321,6 +339,7 @@ export class WorkersAICoachService implements CoachInferenceService {
               answerMarkdown,
               followUps: [],
               suggestedChanges: [],
+              generationStatus: "model",
             }),
             responseID: turnID,
           },
@@ -514,7 +533,7 @@ function normalizeChatResponse(
     followUps: string[];
     suggestedChanges: unknown[];
   }
-): Omit<CoachChatResponse, "responseID"> {
+): CoachChatContent {
   return {
     answerMarkdown: response.answerMarkdown.trim(),
     followUps: dedupeText(response.followUps).slice(0, 4),
@@ -528,7 +547,7 @@ function normalizeProfileInsightsResponse(
     recommendations: string[];
     suggestedChanges: unknown[];
   }
-): CoachProfileInsightsResponse {
+): CoachProfileInsightsContent {
   return {
     summary: response.summary.trim(),
     recommendations: dedupeText(response.recommendations).slice(0, 8),
@@ -538,7 +557,7 @@ function normalizeProfileInsightsResponse(
 
 function parsePlainProfileInsights(
   content: string
-): CoachProfileInsightsResponse {
+): CoachProfileInsightsContent {
   const normalized = content.replace(/\r\n/g, "\n").trim();
   const paragraphs = normalized
     .split(/\n\s*\n+/)
@@ -601,6 +620,7 @@ function applyProfileInsightsGuardrails(
       response.suggestedChanges,
       constraints
     ),
+    generationStatus: response.generationStatus,
   };
 }
 
@@ -620,6 +640,7 @@ function applyChatGuardrails(
       response.suggestedChanges,
       constraints
     ),
+    generationStatus: response.generationStatus,
   };
 }
 
@@ -634,6 +655,7 @@ function buildNeutralProfileInsights(
         localizedCoachText(request.locale, "fallbackProgressionBaseline"),
       ],
       suggestedChanges: [],
+      generationStatus: "fallback",
     };
   }
 
@@ -685,6 +707,7 @@ function buildNeutralProfileInsights(
     summary: localizedCoachText(locale, "fallbackSummary"),
     recommendations: dedupeText(recommendations).slice(0, 5),
     suggestedChanges: [],
+    generationStatus: "fallback",
   };
 }
 
@@ -704,6 +727,7 @@ function buildNeutralChatResponse(
       ),
       followUps: [],
       suggestedChanges: [],
+      generationStatus: "fallback",
     };
   }
 
@@ -752,6 +776,7 @@ function buildNeutralChatResponse(
     ),
     followUps: [],
     suggestedChanges: [],
+    generationStatus: "fallback",
   };
 }
 

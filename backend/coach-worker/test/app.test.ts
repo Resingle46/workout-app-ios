@@ -81,6 +81,7 @@ describe("coach worker app", () => {
               summary: "Remote summary",
               recommendations: ["Remote recommendation"],
               suggestedChanges: [],
+              generationStatus: "model",
             },
             model: DEFAULT_AI_MODEL,
           };
@@ -280,6 +281,7 @@ describe("coach worker app", () => {
               summary: "Summary",
               recommendations: ["Recommendation"],
               suggestedChanges: [],
+              generationStatus: "model",
             },
             model: DEFAULT_AI_MODEL,
           };
@@ -351,6 +353,7 @@ describe("coach worker app", () => {
               responseID: "coach-turn_1",
               followUps: ["Need a progression block?"],
               suggestedChanges: [],
+              generationStatus: "model",
             },
             responseId: "coach-turn_1",
             model: DEFAULT_AI_MODEL,
@@ -439,6 +442,7 @@ describe("coach worker app", () => {
         "Keep load the same next week and add one rep where bar speed stays solid.",
       followUps: [],
       suggestedChanges: [],
+      generationStatus: "model",
     });
   });
 
@@ -646,6 +650,7 @@ describe("WorkersAICoachService", () => {
     );
     expect(result.data.followUps).toEqual([]);
     expect(result.data.suggestedChanges).toEqual([]);
+    expect(result.data.generationStatus).toBe("model");
   });
 
   it("filters conflicting frequency and structure guidance from profile insights", async () => {
@@ -825,6 +830,7 @@ describe("WorkersAICoachService", () => {
           followUps: [],
           suggestedChanges: [],
           responseID: expect.stringMatching(/^coach-turn_/),
+          generationStatus: "fallback",
         },
       });
 
@@ -849,6 +855,7 @@ function stubInferenceService(overrides?: {
           summary: "Summary",
           recommendations: ["Recommendation"],
           suggestedChanges: [],
+          generationStatus: "model",
         },
         model: DEFAULT_AI_MODEL,
       };
@@ -863,6 +870,7 @@ function stubInferenceService(overrides?: {
           responseID: "coach-turn_1",
           followUps: [],
           suggestedChanges: [],
+          generationStatus: "model",
         },
         responseId: "coach-turn_1",
         model: DEFAULT_AI_MODEL,

@@ -12,6 +12,7 @@ import {
   snapshotSyncRequestSchema,
   snapshotSyncResponseSchema,
   stateDeleteRequestSchema,
+  type CoachProfileInsightsResponse,
 } from "./schemas";
 import {
   CoachInferenceServiceError,
@@ -203,6 +204,8 @@ export function createApp(
             : null;
 
           if (cachedResponse) {
+            const normalizedCachedResponse =
+              normalizeProfileInsightsGenerationStatus(cachedResponse);
             logRequest({
               requestID,
               route: pathname,
@@ -213,7 +216,7 @@ export function createApp(
               contextSource: context.source,
               insightsCacheHit: true,
             });
-            return json(cachedResponse, 200);
+            return json(normalizedCachedResponse, 200);
           }
 
           const inferenceStartedAt = deps.now();
@@ -649,4 +652,14 @@ function totalChatTurnChars(
   turns: Array<{ content: string }>
 ): number {
   return turns.reduce((total, turn) => total + turn.content.length, 0);
+}
+
+function normalizeProfileInsightsGenerationStatus(
+  response: CoachProfileInsightsResponse
+): CoachProfileInsightsResponse {
+  return {
+    ...response,
+    generationStatus:
+      response.generationStatus === "model" ? "model" : "fallback",
+  };
 }

@@ -382,6 +382,11 @@ enum CoachInsightsOrigin: Hashable, Sendable {
     case fallback
 }
 
+enum CoachResponseGenerationStatus: String, Codable, Hashable, Sendable {
+    case model
+    case fallback
+}
+
 protocol CoachAPIClient: Sendable {
     func syncSnapshot(_ request: CoachSnapshotSyncRequest) async throws -> CoachSnapshotSyncResponse
 
@@ -540,6 +545,11 @@ struct CoachProfileInsights: Codable, Hashable, Sendable {
     var summary: String
     var recommendations: [String]
     var suggestedChanges: [CoachSuggestedChange]
+    var generationStatus: CoachResponseGenerationStatus? = nil
+
+    var isModelGenerated: Bool {
+        generationStatus == .model
+    }
 }
 
 struct CoachChatResponse: Codable, Hashable, Sendable {
@@ -547,6 +557,11 @@ struct CoachChatResponse: Codable, Hashable, Sendable {
     var responseID: String?
     var followUps: [String]
     var suggestedChanges: [CoachSuggestedChange]
+    var generationStatus: CoachResponseGenerationStatus? = nil
+
+    var isModelGenerated: Bool {
+        generationStatus == .model
+    }
 }
 
 struct CoachConversationMessage: Codable, Hashable, Sendable {
@@ -565,6 +580,7 @@ struct CoachChatMessage: Identifiable, Hashable, Sendable {
     var content: String
     var followUps: [String]
     var suggestedChanges: [CoachSuggestedChange]
+    var generationStatus: CoachResponseGenerationStatus? = nil
     var isLoading: Bool
     var isStatus: Bool
 
@@ -574,6 +590,7 @@ struct CoachChatMessage: Identifiable, Hashable, Sendable {
         content: String,
         followUps: [String] = [],
         suggestedChanges: [CoachSuggestedChange] = [],
+        generationStatus: CoachResponseGenerationStatus? = nil,
         isLoading: Bool = false,
         isStatus: Bool = false
     ) {
@@ -582,6 +599,7 @@ struct CoachChatMessage: Identifiable, Hashable, Sendable {
         self.content = content
         self.followUps = followUps
         self.suggestedChanges = suggestedChanges
+        self.generationStatus = generationStatus
         self.isLoading = isLoading
         self.isStatus = isStatus
     }
@@ -1292,7 +1310,8 @@ struct CoachFallbackInsightsFactory {
         return CoachProfileInsights(
             summary: coachLocalizedString("coach.fallback.summary.raw"),
             recommendations: Array(deduplicatedRecommendations.prefix(5)),
-            suggestedChanges: []
+            suggestedChanges: [],
+            generationStatus: .fallback
         )
     }
 }
@@ -1708,7 +1727,7 @@ final class CoachStore {
                     : nil
             )
             profileInsights = remoteInsights
-            profileInsightsOrigin = .remote
+            profileInsightsOrigin = remoteInsights.isModelGenerated ? .remote : .fallback
             lastInsightsErrorDescription = nil
             markSnapshotAsAcceptedIfNeeded(snapshotPackage)
         } catch {
@@ -1849,7 +1868,8 @@ final class CoachStore {
                     role: .assistant,
                     content: response.answerMarkdown,
                     followUps: response.followUps,
-                    suggestedChanges: response.suggestedChanges
+                    suggestedChanges: response.suggestedChanges,
+                    generationStatus: response.generationStatus
                 )
             )
             markSnapshotAsAcceptedIfNeeded(snapshotPackage)
@@ -2276,7 +2296,10 @@ private struct CoachInsightsOverviewCard: View {
             VStack(alignment: .leading, spacing: 16) {
                 HStack(alignment: .firstTextBaseline, spacing: 12) {
                     VStack(alignment: .leading, spacing: 6) {
-                        AppSectionTitle(titleKey: "coach.insights.title")
+                        HStack(spacing: 8) {
+                            AppSectionTitle(titleKey: "coach.insights.title")
+                            CoachGenerationStatusDot(generationStatus: insights.generationStatus)
+                        }
 
                         Text(sourceKey)
                             .font(AppTypography.caption(size: 13, weight: .medium))
@@ -2535,6 +2558,10 @@ private struct CoachChatMessageCard: View {
         isAssistant ? "coach.message.coach" : "coach.message.you"
     }
 
+    private var showsGenerationStatus: Bool {
+        isAssistant && !message.isLoading && !message.isStatus
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 10) {
@@ -2550,6 +2577,10 @@ private struct CoachChatMessageCard: View {
                 Text(authorKey)
                     .font(AppTypography.body(size: 15, weight: .semibold))
                     .foregroundStyle(AppTheme.primaryText)
+
+                if showsGenerationStatus {
+                    CoachGenerationStatusDot(generationStatus: message.generationStatus)
+                }
             }
 
             if message.isLoading {
@@ -2611,6 +2642,21 @@ private struct CoachChatMessageCard: View {
         }
 
         return isAssistant ? AppTheme.surfaceElevated : AppTheme.surface
+    }
+}
+
+private struct CoachGenerationStatusDot: View {
+    let generationStatus: CoachResponseGenerationStatus?
+
+    private var color: Color {
+        generationStatus == .model ? AppTheme.success : AppTheme.destructive
+    }
+
+    var body: some View {
+        Circle()
+            .fill(color)
+            .frame(width: 8, height: 8)
+            .accessibilityHidden(true)
     }
 }
 

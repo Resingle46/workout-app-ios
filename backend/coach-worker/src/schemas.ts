@@ -534,11 +534,14 @@ export const suggestedChangeSchema = z.discriminatedUnion("type", [
   updateTemplateExercisePrescriptionChangeSchema,
 ]);
 
+export const coachResponseGenerationStatusSchema = z.enum(["model", "fallback"]);
+
 export const profileInsightsResponseSchema = z
   .object({
     summary: nonEmptyStringSchema.max(1200),
     recommendations: z.array(nonEmptyStringSchema.max(280)).max(8),
     suggestedChanges: z.array(suggestedChangeSchema).max(5),
+    generationStatus: coachResponseGenerationStatusSchema.default("fallback"),
   })
   .strict();
 
@@ -556,6 +559,7 @@ export const chatResponseSchema = z
     responseID: nonEmptyStringSchema.max(200),
     followUps: z.array(nonEmptyStringSchema.max(160)).max(4),
     suggestedChanges: z.array(suggestedChangeSchema).max(5),
+    generationStatus: coachResponseGenerationStatusSchema.default("fallback"),
   })
   .strict();
 
