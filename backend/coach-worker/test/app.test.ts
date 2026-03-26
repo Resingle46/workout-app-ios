@@ -83,6 +83,7 @@ describe("coach worker app", () => {
               summary: "Remote summary",
               recommendations: ["Remote recommendation"],
               generationStatus: "model",
+              insightSource: "fresh_model",
             },
             model: DEFAULT_AI_MODEL,
           };
@@ -282,6 +283,7 @@ describe("coach worker app", () => {
               summary: "Summary",
               recommendations: ["Recommendation"],
               generationStatus: "model",
+              insightSource: "fresh_model",
             },
             model: DEFAULT_AI_MODEL,
           };
@@ -350,6 +352,7 @@ describe("coach worker app", () => {
               summary: "Fresh remote summary",
               recommendations: ["Fresh remote recommendation"],
               generationStatus: "model",
+              insightSource: "fresh_model",
             },
             model: DEFAULT_AI_MODEL,
           };
@@ -378,6 +381,7 @@ describe("coach worker app", () => {
       summary: "Cached fallback summary",
       recommendations: ["Cached fallback recommendation"],
       generationStatus: "fallback",
+      insightSource: "fallback",
     });
 
     const response = await app.fetch(
@@ -397,6 +401,147 @@ describe("coach worker app", () => {
     await expect(response.json()).resolves.toMatchObject({
       summary: "Fresh remote summary",
       generationStatus: "model",
+      insightSource: "fresh_model",
+    });
+  });
+
+  it("marks cached model insights as cached without rerunning inference", async () => {
+    const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
+    const upload = makeBackupUploadRequestFixture();
+    let inferenceCalls = 0;
+    const app = createApp({
+      createInferenceService: () => ({
+        async generateProfileInsights() {
+          inferenceCalls += 1;
+          return {
+            data: {
+              summary: "Fresh remote summary",
+              recommendations: ["Fresh remote recommendation"],
+              generationStatus: "model",
+              insightSource: "fresh_model",
+            },
+            model: DEFAULT_AI_MODEL,
+          };
+        },
+        async generateChat() {
+          throw new Error("not used");
+        },
+      }),
+      createStateRepository: () => repository,
+    });
+
+    await app.fetch(
+      authedRequest("https://coach.example.workers.dev/v1/backup", {
+        method: "PUT",
+        body: JSON.stringify(upload),
+      }),
+      makeEnv()
+    );
+
+    const context = await repository.resolveCoachContext({
+      locale: "en",
+      installID: upload.installID,
+      capabilityScope: "draft_changes",
+    });
+    await repository.storeInsightsCache(upload.installID, context.contextHash, {
+      summary: "Cached remote summary",
+      recommendations: ["Cached remote recommendation"],
+      generationStatus: "model",
+      insightSource: "fresh_model",
+    });
+
+    const response = await app.fetch(
+      authedRequest("https://coach.example.workers.dev/v1/coach/profile-insights", {
+        method: "POST",
+        body: JSON.stringify({
+          locale: "en",
+          installID: upload.installID,
+          capabilityScope: "draft_changes",
+        }),
+      }),
+      makeEnv()
+    );
+
+    expect(response.status).toBe(200);
+    expect(inferenceCalls).toBe(0);
+    await expect(response.json()).resolves.toMatchObject({
+      summary: "Cached remote summary",
+      generationStatus: "model",
+      insightSource: "cached_model",
+    });
+  });
+
+  it("force refresh bypasses cache and replaces it with a fresh model insight", async () => {
+    const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
+    const upload = makeBackupUploadRequestFixture();
+    let inferenceCalls = 0;
+    const app = createApp({
+      createInferenceService: () => ({
+        async generateProfileInsights() {
+          inferenceCalls += 1;
+          return {
+            data: {
+              summary: "Fresh remote summary",
+              recommendations: ["Fresh remote recommendation"],
+              generationStatus: "model",
+              insightSource: "fresh_model",
+            },
+            model: DEFAULT_AI_MODEL,
+          };
+        },
+        async generateChat() {
+          throw new Error("not used");
+        },
+      }),
+      createStateRepository: () => repository,
+    });
+
+    await app.fetch(
+      authedRequest("https://coach.example.workers.dev/v1/backup", {
+        method: "PUT",
+        body: JSON.stringify(upload),
+      }),
+      makeEnv()
+    );
+
+    const context = await repository.resolveCoachContext({
+      locale: "en",
+      installID: upload.installID,
+      capabilityScope: "draft_changes",
+    });
+    await repository.storeInsightsCache(upload.installID, context.contextHash, {
+      summary: "Cached remote summary",
+      recommendations: ["Cached remote recommendation"],
+      generationStatus: "model",
+      insightSource: "fresh_model",
+    });
+
+    const response = await app.fetch(
+      authedRequest("https://coach.example.workers.dev/v1/coach/profile-insights", {
+        method: "POST",
+        body: JSON.stringify({
+          locale: "en",
+          installID: upload.installID,
+          capabilityScope: "draft_changes",
+          forceRefresh: true,
+        }),
+      }),
+      makeEnv()
+    );
+
+    expect(response.status).toBe(200);
+    expect(inferenceCalls).toBe(1);
+    await expect(response.json()).resolves.toMatchObject({
+      summary: "Fresh remote summary",
+      generationStatus: "model",
+      insightSource: "fresh_model",
+    });
+    await expect(
+      repository.getInsightsCache(upload.installID, context.contextHash)
+    ).resolves.toMatchObject({
+      summary: "Fresh remote summary",
+      generationStatus: "model",
+      insightSource: "fresh_model",
     });
   });
 
@@ -1177,6 +1322,8 @@ describe("WorkersAICoachService", () => {
     expect(result.data.summary.length).toBeGreaterThan(0);
     expect(result.data.recommendations.length).toBeGreaterThan(0);
     expect(result.data.summary.toLowerCase()).not.toContain("adjustments");
+    expect(result.data.generationStatus).toBe("fallback");
+    expect(result.data.insightSource).toBe("fallback");
   });
 
   it("falls back to plain-text profile insights when structured output times out and budget remains", async () => {
@@ -1203,6 +1350,7 @@ describe("WorkersAICoachService", () => {
       "Keep weekly load stable for one more week.",
     ]);
     expect(result.data.generationStatus).toBe("model");
+    expect(result.data.insightSource).toBe("fresh_model");
   });
 
   it("cuts off long-running profile insight requests before the client disconnects", async () => {
@@ -1274,6 +1422,7 @@ function stubInferenceService(overrides?: {
           summary: "Summary",
           recommendations: ["Recommendation"],
           generationStatus: "model",
+          insightSource: "fresh_model",
         },
         model: DEFAULT_AI_MODEL,
       };
@@ -1458,12 +1607,29 @@ function makeProfileInsightsRequestFixture(): CoachProfileInsightsRequest {
     snapshot: makeCompactSnapshotFixture(),
     snapshotUpdatedAt: "2026-03-25T19:00:00.000Z",
     capabilityScope: "draft_changes",
+    forceRefresh: false,
   };
 }
 
 function makeChatRequestFixture(): CoachChatRequest {
+  const {
+    locale,
+    installID,
+    snapshotHash,
+    snapshot,
+    snapshotUpdatedAt,
+    runtimeContextDelta,
+    capabilityScope,
+  } = makeProfileInsightsRequestFixture();
+
   return {
-    ...makeProfileInsightsRequestFixture(),
+    locale,
+    installID,
+    snapshotHash,
+    snapshot,
+    snapshotUpdatedAt,
+    runtimeContextDelta,
+    capabilityScope,
     question: "How should I progress next week?",
     clientRecentTurns: [
       {

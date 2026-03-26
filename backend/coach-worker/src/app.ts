@@ -216,19 +216,20 @@ export function createApp(
             installID: body.installID,
             contextSource: context.source,
             profileContextVariant: "compact_profile_v1",
+            forceRefresh: body.forceRefresh,
             snapshotBytes,
             programCommentChars,
             recentPrCount,
             relativeStrengthCount,
             preferredProgramWorkoutCount,
           };
-          const cachedResponse = context.cacheAllowed
+          const cachedResponse = !body.forceRefresh && context.cacheAllowed
             ? await stateRepository.getInsightsCache(
                 body.installID,
                 context.contextHash
               )
             : null;
-          const reusableCachedResponse = isReusableProfileInsightsCacheEntry(
+          const reusableCachedResponse = normalizeReusableProfileInsightsCacheEntry(
             cachedResponse
           );
 
@@ -242,7 +243,10 @@ export function createApp(
               installID: body.installID,
               contextSource: context.source,
               profileContextVariant: "compact_profile_v1",
+              forceRefresh: body.forceRefresh,
               insightsCacheHit: true,
+              insightSource: reusableCachedResponse.insightSource,
+              modelInferenceExecuted: false,
               snapshotBytes,
               programCommentChars,
               recentPrCount,
@@ -285,7 +289,10 @@ export function createApp(
             usage: result.usage,
             inferenceMode: result.mode,
             contextSource: context.source,
+            forceRefresh: body.forceRefresh,
             insightsCacheHit: false,
+            insightSource: result.data.insightSource,
+            modelInferenceExecuted: true,
             snapshotBytes,
             programCommentChars,
             recentPrCount,
@@ -942,12 +949,19 @@ function totalChatTurnChars(
   return turns.reduce((total, turn) => total + turn.content.length, 0);
 }
 
-function isReusableProfileInsightsCacheEntry(
+function normalizeReusableProfileInsightsCacheEntry(
   response: CoachProfileInsightsResponse | null
 ): CoachProfileInsightsResponse | null {
   if (!response) {
     return null;
   }
 
-  return response.generationStatus === "model" ? response : null;
+  if (response.generationStatus !== "model") {
+    return null;
+  }
+
+  return {
+    ...response,
+    insightSource: "cached_model",
+  };
 }

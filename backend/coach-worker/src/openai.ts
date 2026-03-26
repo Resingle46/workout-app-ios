@@ -80,7 +80,7 @@ export interface InferenceResult<T> {
 
 type CoachProfileInsightsContent = Omit<
   CoachProfileInsightsResponse,
-  "generationStatus"
+  "generationStatus" | "insightSource"
 >;
 type CoachChatContent = Omit<
   CoachChatResponse,
@@ -163,6 +163,7 @@ export class WorkersAICoachService implements CoachInferenceService {
           {
             ...parsed,
             generationStatus: "model",
+            insightSource: "fresh_model",
           },
           localFallback
         ),
@@ -256,6 +257,7 @@ export class WorkersAICoachService implements CoachInferenceService {
                 extractPlainText(fallbackInvocation.rawResponse, "profile insights")
               ),
               generationStatus: "model",
+              insightSource: "fresh_model",
             },
             localFallback
           ),
@@ -705,6 +707,7 @@ function applyProfileInsightsGuardrails(
     recommendations:
       recommendations.length > 0 ? recommendations : fallback.recommendations,
     generationStatus: response.generationStatus,
+    insightSource: response.insightSource,
   };
 }
 
@@ -735,6 +738,7 @@ function buildNeutralProfileInsights(
         localizedCoachText(request.locale, "fallbackProgressionBaseline"),
       ],
       generationStatus: "fallback",
+      insightSource: "fallback",
     };
   }
 
@@ -786,6 +790,7 @@ function buildNeutralProfileInsights(
     summary: localizedCoachText(locale, "fallbackSummary"),
     recommendations: dedupeText(recommendations).slice(0, 5),
     generationStatus: "fallback",
+    insightSource: "fallback",
   };
 }
 

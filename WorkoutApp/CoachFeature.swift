@@ -408,9 +408,43 @@ enum CoachCapabilityScope: String, Codable, Hashable, Sendable {
     case draftChanges = "draft_changes"
 }
 
-enum CoachInsightsOrigin: Hashable, Sendable {
-    case remote
+enum CoachInsightsOrigin: String, Codable, Hashable, Sendable {
+    case freshModel = "fresh_model"
+    case cachedModel = "cached_model"
     case fallback
+
+    var sourceColor: Color {
+        switch self {
+        case .freshModel:
+            return AppTheme.success
+        case .cachedModel:
+            return AppTheme.warning
+        case .fallback:
+            return AppTheme.destructive
+        }
+    }
+
+    var coachSourceKey: LocalizedStringKey {
+        switch self {
+        case .freshModel:
+            return "coach.insights.source.fresh_model"
+        case .cachedModel:
+            return "coach.insights.source.cached_model"
+        case .fallback:
+            return "coach.insights.source.fallback"
+        }
+    }
+
+    var profileSourceKey: LocalizedStringKey {
+        switch self {
+        case .freshModel:
+            return "profile.card.ai.source.fresh_model"
+        case .cachedModel:
+            return "profile.card.ai.source.cached_model"
+        case .fallback:
+            return "profile.card.ai.source.fallback"
+        }
+    }
 }
 
 enum CoachResponseGenerationStatus: String, Codable, Hashable, Sendable {
@@ -433,7 +467,8 @@ protocol CoachAPIClient: Sendable {
         locale: String,
         snapshotEnvelope: CoachSnapshotEnvelope,
         capabilityScope: CoachCapabilityScope,
-        runtimeContextDelta: CoachRuntimeContextDelta?
+        runtimeContextDelta: CoachRuntimeContextDelta?,
+        forceRefresh: Bool
     ) async throws -> CoachProfileInsights
 
     func createChatJob(
@@ -492,6 +527,7 @@ struct CoachProfileInsightsRequest: Codable, Sendable {
     var snapshotUpdatedAt: Date?
     var runtimeContextDelta: CoachRuntimeContextDelta?
     var capabilityScope: CoachCapabilityScope
+    var forceRefresh: Bool?
 }
 
 struct CoachChatRequest: Codable, Sendable {
@@ -618,9 +654,18 @@ struct CoachProfileInsights: Codable, Hashable, Sendable {
     var summary: String
     var recommendations: [String]
     var generationStatus: CoachResponseGenerationStatus? = nil
+    var insightSource: CoachInsightsOrigin? = nil
+
+    var resolvedInsightSource: CoachInsightsOrigin {
+        if let insightSource {
+            return insightSource
+        }
+
+        return generationStatus == .model ? .freshModel : .fallback
+    }
 
     var isModelGenerated: Bool {
-        generationStatus == .model
+        resolvedInsightSource != .fallback
     }
 }
 
@@ -1006,7 +1051,8 @@ struct CoachAPIHTTPClient: CoachAPIClient {
         locale: String,
         snapshotEnvelope: CoachSnapshotEnvelope,
         capabilityScope: CoachCapabilityScope,
-        runtimeContextDelta: CoachRuntimeContextDelta?
+        runtimeContextDelta: CoachRuntimeContextDelta?,
+        forceRefresh: Bool
     ) async throws -> CoachProfileInsights {
         try await send(
             path: "v1/coach/profile-insights",
@@ -1018,7 +1064,8 @@ struct CoachAPIHTTPClient: CoachAPIClient {
                 snapshot: snapshotEnvelope.snapshot,
                 snapshotUpdatedAt: snapshotEnvelope.snapshotUpdatedAt,
                 runtimeContextDelta: runtimeContextDelta,
-                capabilityScope: capabilityScope
+                capabilityScope: capabilityScope,
+                forceRefresh: forceRefresh ? true : nil
             ),
             session: profileInsightsSession,
             timeoutInterval: Self.profileInsightsRequestTimeoutInterval,
@@ -1486,7 +1533,8 @@ struct CoachFallbackInsightsFactory {
         return CoachProfileInsights(
             summary: coachLocalizedString("coach.fallback.summary.raw"),
             recommendations: Array(deduplicatedRecommendations.prefix(5)),
-            generationStatus: .fallback
+            generationStatus: .fallback,
+            insightSource: .fallback
         )
     }
 }
@@ -1899,7 +1947,10 @@ final class CoachStore {
         }
     }
 
-    func refreshProfileInsights(using appStore: AppStore) async {
+    func refreshProfileInsights(
+        using appStore: AppStore,
+        forceRefresh: Bool = false
+    ) async {
         isLoadingProfileInsights = true
         defer { isLoadingProfileInsights = false }
 
@@ -1927,10 +1978,11 @@ final class CoachStore {
                 capabilityScope: capabilityScope,
                 runtimeContextDelta: canUseServerSideContext
                     ? contextBuilder.runtimeContextDelta(from: appStore)
-                    : nil
+                    : nil,
+                forceRefresh: forceRefresh
             )
             profileInsights = remoteInsights
-            profileInsightsOrigin = remoteInsights.isModelGenerated ? .remote : .fallback
+            profileInsightsOrigin = remoteInsights.resolvedInsightSource
             lastInsightsErrorDescription = nil
             markSnapshotAsAcceptedIfNeeded(snapshotPackage)
         } catch {
@@ -2633,7 +2685,10 @@ struct CoachView: View {
                         focusedField = nil
                         animateRefreshTap()
                         Task {
-                            await coachStore.refreshProfileInsights(using: store)
+                            await coachStore.refreshProfileInsights(
+                                using: store,
+                                forceRefresh: true
+                            )
                         }
                     } label: {
                         Image(systemName: "arrow.clockwise")
@@ -2922,7 +2977,7 @@ private struct CoachInsightsOverviewCard: View {
     let onOpenProfile: () -> Void
 
     private var sourceKey: LocalizedStringKey {
-        origin == .remote ? "coach.insights.source.remote" : "coach.insights.source.fallback"
+        origin.coachSourceKey
     }
 
     var body: some View {
@@ -2932,7 +2987,7 @@ private struct CoachInsightsOverviewCard: View {
                     VStack(alignment: .leading, spacing: 6) {
                         HStack(spacing: 8) {
                             AppSectionTitle(titleKey: "coach.insights.title")
-                            CoachGenerationStatusDot(generationStatus: insights.generationStatus)
+                            CoachInsightsSourceDot(origin: origin)
                         }
 
                         Text(sourceKey)
@@ -3314,6 +3369,14 @@ private struct CoachGenerationStatusDot: View {
 
     var body: some View {
         CoachStatusDot(color: color, size: 8)
+    }
+}
+
+private struct CoachInsightsSourceDot: View {
+    let origin: CoachInsightsOrigin
+
+    var body: some View {
+        CoachStatusDot(color: origin.sourceColor, size: 8)
     }
 }
 

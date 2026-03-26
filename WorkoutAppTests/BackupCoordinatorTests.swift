@@ -1213,6 +1213,63 @@ final class BackupCoordinatorTests: XCTestCase {
     }
 
     @MainActor
+    func testCoachStoreMarksCachedRemoteInsightsAsCachedModel() async {
+        let store = AppStore()
+        store.apply(snapshot: makeSnapshot())
+
+        let coachStore = CoachStore(
+            client: StubCoachAPIClient(
+                shouldFailInsights: false,
+                shouldFailChat: false,
+                profileInsights: CoachProfileInsights(
+                    summary: "Cached remote summary",
+                    recommendations: ["Cached remote recommendation"],
+                    generationStatus: .model,
+                    insightSource: .cachedModel
+                )
+            ),
+            configuration: CoachRuntimeConfiguration(
+                isFeatureEnabled: true,
+                backendBaseURL: URL(string: "https://example.com"),
+                internalBearerToken: "internal-token"
+            )
+        )
+
+        await coachStore.refreshProfileInsights(using: store)
+
+        XCTAssertEqual(coachStore.profileInsights?.summary, "Cached remote summary")
+        XCTAssertEqual(coachStore.profileInsightsOrigin, .cachedModel)
+        XCTAssertNil(coachStore.lastInsightsErrorDescription)
+    }
+
+    @MainActor
+    func testCoachStoreRefreshProfileInsightsForcesCacheBypass() async {
+        let store = AppStore()
+        store.apply(snapshot: makeSnapshot())
+        let recorder = SnapshotRequestRecorder()
+
+        let coachStore = CoachStore(
+            client: StubCoachAPIClient(
+                shouldFailInsights: false,
+                shouldFailChat: false,
+                snapshotRequestRecorder: recorder
+            ),
+            configuration: CoachRuntimeConfiguration(
+                isFeatureEnabled: true,
+                backendBaseURL: URL(string: "https://example.com"),
+                internalBearerToken: "internal-token"
+            )
+        )
+
+        await coachStore.refreshProfileInsights(using: store, forceRefresh: true)
+
+        let requests = await recorder.requests
+        let lastRequest = try! XCTUnwrap(requests.last)
+        XCTAssertTrue(lastRequest.forceRefresh)
+        XCTAssertEqual(coachStore.profileInsightsOrigin, .freshModel)
+    }
+
+    @MainActor
     func testApplyCoachSuggestedChangeUpdatesWeeklyWorkoutTarget() {
         let store = AppStore()
         store.apply(snapshot: makeSnapshot())
@@ -2266,11 +2323,14 @@ private struct CloudSyncRecordingCoachAPIClient: CoachAPIClient {
         locale: String,
         snapshotEnvelope: CoachSnapshotEnvelope,
         capabilityScope: CoachCapabilityScope,
-        runtimeContextDelta: CoachRuntimeContextDelta?
+        runtimeContextDelta: CoachRuntimeContextDelta?,
+        forceRefresh: Bool
     ) async throws -> CoachProfileInsights {
         CoachProfileInsights(
             summary: "Remote summary",
-            recommendations: ["Remote recommendation"]
+            recommendations: ["Remote recommendation"],
+            generationStatus: .model,
+            insightSource: .freshModel
         )
     }
 
@@ -2328,6 +2388,8 @@ private struct StubCoachAPIClient: CoachAPIClient {
     let jobID: String
     let createPollAfterMs: Int
     let jobResponses: ChatJobStatusSequence?
+    let profileInsights: CoachProfileInsights
+    let snapshotRequestRecorder: SnapshotRequestRecorder?
 
     init(
         shouldFailInsights: Bool,
@@ -2335,7 +2397,14 @@ private struct StubCoachAPIClient: CoachAPIClient {
         createConflictJobID: String? = nil,
         jobID: String = "job-1",
         createPollAfterMs: Int = 0,
-        jobResponses: ChatJobStatusSequence? = nil
+        jobResponses: ChatJobStatusSequence? = nil,
+        profileInsights: CoachProfileInsights = CoachProfileInsights(
+            summary: "Remote summary",
+            recommendations: ["Remote recommendation"],
+            generationStatus: .model,
+            insightSource: .freshModel
+        ),
+        snapshotRequestRecorder: SnapshotRequestRecorder? = nil
     ) {
         self.shouldFailInsights = shouldFailInsights
         self.shouldFailChat = shouldFailChat
@@ -2343,6 +2412,8 @@ private struct StubCoachAPIClient: CoachAPIClient {
         self.jobID = jobID
         self.createPollAfterMs = createPollAfterMs
         self.jobResponses = jobResponses
+        self.profileInsights = profileInsights
+        self.snapshotRequestRecorder = snapshotRequestRecorder
     }
 
     func syncSnapshot(_ request: CoachSnapshotSyncRequest) async throws -> CoachSnapshotSyncResponse {
@@ -2426,16 +2497,23 @@ private struct StubCoachAPIClient: CoachAPIClient {
         locale: String,
         snapshotEnvelope: CoachSnapshotEnvelope,
         capabilityScope: CoachCapabilityScope,
-        runtimeContextDelta: CoachRuntimeContextDelta?
+        runtimeContextDelta: CoachRuntimeContextDelta?,
+        forceRefresh: Bool
     ) async throws -> CoachProfileInsights {
         if shouldFailInsights {
             throw StubCoachError.failedInsights
         }
 
-        return CoachProfileInsights(
-            summary: "Remote summary",
-            recommendations: ["Remote recommendation"]
-        )
+        if let snapshotRequestRecorder {
+            await snapshotRequestRecorder.record(
+                RecordedCoachSnapshotRequest(
+                    snapshotEnvelope: snapshotEnvelope,
+                    forceRefresh: forceRefresh
+                )
+            )
+        }
+
+        return profileInsights
     }
 
     func createChatJob(
@@ -2515,6 +2593,7 @@ private struct RecordedCoachChatRequest: Sendable {
 
 private struct RecordedCoachSnapshotRequest: Sendable {
     var snapshotEnvelope: CoachSnapshotEnvelope
+    var forceRefresh: Bool
 }
 
 private struct SequencedChatJobStep: Sendable {
@@ -2689,11 +2768,14 @@ private struct RecordingCoachAPIClient: CoachAPIClient {
         locale: String,
         snapshotEnvelope: CoachSnapshotEnvelope,
         capabilityScope: CoachCapabilityScope,
-        runtimeContextDelta: CoachRuntimeContextDelta?
+        runtimeContextDelta: CoachRuntimeContextDelta?,
+        forceRefresh: Bool
     ) async throws -> CoachProfileInsights {
         CoachProfileInsights(
             summary: "Remote summary",
-            recommendations: ["Remote recommendation"]
+            recommendations: ["Remote recommendation"],
+            generationStatus: .model,
+            insightSource: .freshModel
         )
     }
 
@@ -2823,15 +2905,21 @@ private struct RecordingSnapshotCoachAPIClient: CoachAPIClient {
         locale: String,
         snapshotEnvelope: CoachSnapshotEnvelope,
         capabilityScope: CoachCapabilityScope,
-        runtimeContextDelta: CoachRuntimeContextDelta?
+        runtimeContextDelta: CoachRuntimeContextDelta?,
+        forceRefresh: Bool
     ) async throws -> CoachProfileInsights {
         await recorder.record(
-            RecordedCoachSnapshotRequest(snapshotEnvelope: snapshotEnvelope)
+            RecordedCoachSnapshotRequest(
+                snapshotEnvelope: snapshotEnvelope,
+                forceRefresh: forceRefresh
+            )
         )
 
         return CoachProfileInsights(
             summary: "Remote summary",
-            recommendations: ["Remote recommendation"]
+            recommendations: ["Remote recommendation"],
+            generationStatus: .model,
+            insightSource: .freshModel
         )
     }
 
@@ -2903,15 +2991,21 @@ private struct RecordingLegacySnapshotFallbackCoachAPIClient: CoachAPIClient {
         locale: String,
         snapshotEnvelope: CoachSnapshotEnvelope,
         capabilityScope: CoachCapabilityScope,
-        runtimeContextDelta: CoachRuntimeContextDelta?
+        runtimeContextDelta: CoachRuntimeContextDelta?,
+        forceRefresh: Bool
     ) async throws -> CoachProfileInsights {
         await recorder.record(
-            RecordedCoachSnapshotRequest(snapshotEnvelope: snapshotEnvelope)
+            RecordedCoachSnapshotRequest(
+                snapshotEnvelope: snapshotEnvelope,
+                forceRefresh: forceRefresh
+            )
         )
 
         return CoachProfileInsights(
             summary: "Remote summary",
-            recommendations: ["Remote recommendation"]
+            recommendations: ["Remote recommendation"],
+            generationStatus: .model,
+            insightSource: .freshModel
         )
     }
 

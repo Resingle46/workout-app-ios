@@ -883,13 +883,8 @@ private struct ProfileCoachInsightsCard: View {
     let isLoading: Bool
     let onOpenCoach: () -> Void
 
-    private var sourceText: String {
-        switch origin {
-        case .remote:
-            return localizedString("profile.card.ai.source.remote")
-        case .fallback:
-            return localizedString("profile.card.ai.source.fallback")
-        }
+    private var sourceKey: LocalizedStringKey {
+        origin.profileSourceKey
     }
 
     var body: some View {
@@ -916,9 +911,15 @@ private struct ProfileCoachInsightsCard: View {
                         .foregroundStyle(AppTheme.primaryText)
                         .fixedSize(horizontal: false, vertical: true)
 
-                    Text(sourceText)
-                        .font(AppTypography.caption(size: 13, weight: .medium))
-                        .foregroundStyle(DashboardCardAccent.aqua.secondaryText)
+                    HStack(spacing: 8) {
+                        Circle()
+                            .fill(origin.sourceColor)
+                            .frame(width: 8, height: 8)
+
+                        Text(sourceKey)
+                            .font(AppTypography.caption(size: 13, weight: .medium))
+                            .foregroundStyle(DashboardCardAccent.aqua.secondaryText)
+                    }
 
                     VStack(alignment: .leading, spacing: 10) {
                         ForEach(Array((insights?.recommendations ?? []).prefix(4).enumerated()), id: \.offset) { _, recommendation in

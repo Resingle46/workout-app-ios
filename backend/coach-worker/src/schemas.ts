@@ -251,6 +251,7 @@ export const profileInsightsRequestSchema = z
     snapshotUpdatedAt: isoDateTimeSchema.optional(),
     runtimeContextDelta: runtimeContextDeltaSchema.optional(),
     capabilityScope: capabilityScopeSchema,
+    forceRefresh: z.boolean().optional().default(false),
   })
   .strict();
 
@@ -476,12 +477,18 @@ export const stateDeleteRequestSchema = z
   .strict();
 
 export const coachResponseGenerationStatusSchema = z.enum(["model", "fallback"]);
+export const profileInsightSourceSchema = z.enum([
+  "fresh_model",
+  "cached_model",
+  "fallback",
+]);
 
 export const profileInsightsResponseSchema = z
   .object({
     summary: nonEmptyStringSchema.max(1200),
     recommendations: z.array(nonEmptyStringSchema.max(280)).max(8),
     generationStatus: coachResponseGenerationStatusSchema.default("fallback"),
+    insightSource: profileInsightSourceSchema.default("fallback"),
   })
   .strict();
 

@@ -243,7 +243,8 @@
 "profile.card.recommendations.split.high_frequency" = "Высокочастотный сплит";
 "profile.card.ai.eyebrow" = "Coach";
 "profile.card.ai.title" = "AI-рекомендации";
-"profile.card.ai.source.remote" = "Живые AI-инсайты";
+"profile.card.ai.source.fresh_model" = "Свежие AI-инсайты";
+"profile.card.ai.source.cached_model" = "Кэшированные AI-инсайты";
 "profile.card.ai.source.fallback" = "Локальный fallback";
 "profile.card.ai.loading" = "Обновляем рекомендации Coach...";
 "profile.card.ai.empty" = "AI-рекомендации появятся после анализа профиля и тренировочного контекста.";
@@ -335,7 +336,8 @@
 "coach.status.fallback" = "Режим fallback";
 "coach.status.fallback_description" = "В профиле используются локальные расчёты. Чат станет доступен после настройки backend.";
 "coach.insights.title" = "Сводка Coach";
-"coach.insights.source.remote" = "Удалённый AI";
+"coach.insights.source.fresh_model" = "Свежий AI";
+"coach.insights.source.cached_model" = "AI из кэша";
 "coach.insights.source.fallback" = "Локальный fallback";
 "coach.message.coach" = "Coach";
 "coach.message.you" = "Вы";
