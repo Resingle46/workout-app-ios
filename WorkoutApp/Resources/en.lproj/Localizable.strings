@@ -282,7 +282,9 @@
 "coach.error.chat_unavailable" = "Coach chat is unavailable until the backend is configured.";
 "coach.loading.insights" = "Refreshing coach insights...";
 "coach.loading.response" = "Coach is thinking...";
+"coach.loading.response_delayed" = "Coach is still preparing the answer. Continue waiting when you're ready.";
 "coach.loading.response_short" = "Waiting...";
+"coach.action.resume_waiting" = "Continue waiting";
 "coach.quick_prompt.title" = "Quick prompts";
 "coach.quick_prompt.01" = "Where is my main recovery bottleneck?";
 "coach.quick_prompt.02" = "Is my weekly volume enough?";

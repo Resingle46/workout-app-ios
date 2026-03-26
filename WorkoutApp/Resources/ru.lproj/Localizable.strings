@@ -282,7 +282,9 @@
 "coach.error.chat_unavailable" = "Чат Coach недоступен, пока не настроен backend.";
 "coach.loading.insights" = "Обновляем рекомендации Coach...";
 "coach.loading.response" = "Coach думает...";
+"coach.loading.response_delayed" = "Coach всё ещё готовит ответ. Можно продолжить ожидание позже.";
 "coach.loading.response_short" = "Ждём ответ...";
+"coach.action.resume_waiting" = "Продолжить ожидание";
 "coach.quick_prompt.title" = "Быстрые вопросы";
 "coach.quick_prompt.01" = "Где у меня слабое место в восстановлении?";
 "coach.quick_prompt.02" = "Хватает ли мне недельного объёма?";

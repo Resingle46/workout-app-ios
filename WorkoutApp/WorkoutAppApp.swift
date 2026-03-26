@@ -43,13 +43,20 @@ struct WorkoutAppApp: App {
                 }
         }
         .onChange(of: scenePhase) { _, newPhase in
-            guard newPhase == .background else {
-                return
-            }
-
             Task {
-                await cloudSyncStore.handleSceneDidEnterBackground(using: store)
-                await store.handleSceneDidEnterBackground()
+                switch newPhase {
+                case .active:
+                    if store.selectedTab == .coach {
+                        await coachStore.resumePendingChatJobIfNeeded(using: store)
+                    }
+                case .background:
+                    await cloudSyncStore.handleSceneDidEnterBackground(using: store)
+                    await store.handleSceneDidEnterBackground()
+                case .inactive:
+                    break
+                @unknown default:
+                    break
+                }
             }
         }
     }

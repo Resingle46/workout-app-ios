@@ -175,6 +175,11 @@ export interface CoachChatJobRecord {
   memoryCommittedAt?: string;
 }
 
+export interface ClaimCoachChatJobExecutionResult {
+  job: CoachChatJobRecord | null;
+  claimed: boolean;
+}
+
 export interface CoachStateStore {
   storeLegacySnapshot(
     request: CoachSnapshotSyncRequest
@@ -217,7 +222,7 @@ export interface CoachStateStore {
   markChatJobRunning(
     jobID: string,
     startedAt: string
-  ): Promise<CoachChatJobRecord | null>;
+  ): Promise<ClaimCoachChatJobExecutionResult>;
   completeChatJob(
     jobID: string,
     input: CompleteCoachChatJobInput
@@ -589,20 +594,23 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
   async markChatJobRunning(
     jobID: string,
     startedAt: string
-  ): Promise<CoachChatJobRecord | null> {
-    await this.db
+  ): Promise<ClaimCoachChatJobExecutionResult> {
+    const updateResult = await this.db
       .prepare(
         `
           UPDATE coach_chat_jobs
           SET
-            status = CASE WHEN status = 'queued' THEN 'running' ELSE status END,
+            status = 'running',
             started_at = COALESCE(started_at, ?)
-          WHERE job_id = ?
+          WHERE job_id = ? AND status = 'queued'
         `
       )
       .bind(startedAt, jobID)
       .run();
-    return this.getChatJobByID(jobID);
+    return {
+      job: await this.getChatJobByID(jobID),
+      claimed: d1Changes(updateResult) > 0,
+    };
   }
 
   async completeChatJob(
@@ -1366,17 +1374,28 @@ export class InMemoryCoachStateRepository implements CoachStateStore {
   async markChatJobRunning(
     jobID: string,
     startedAt: string
-  ): Promise<CoachChatJobRecord | null> {
+  ): Promise<ClaimCoachChatJobExecutionResult> {
     const job = this.chatJobs.get(jobID);
     if (!job) {
-      return null;
+      return {
+        job: null,
+        claimed: false,
+      };
     }
 
     if (job.status === "queued") {
       job.status = "running";
+      job.startedAt ??= startedAt;
+      return {
+        job,
+        claimed: true,
+      };
     }
-    job.startedAt ??= startedAt;
-    return job;
+
+    return {
+      job,
+      claimed: false,
+    };
   }
 
   async completeChatJob(
@@ -1738,6 +1757,22 @@ function parseCoachChatJobRow(row: CoachChatJobRow): CoachChatJobRecord {
 
 function nullableNumber(value: number | null): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function d1Changes(result: unknown): number {
+  if (
+    result &&
+    typeof result === "object" &&
+    "meta" in result &&
+    result.meta &&
+    typeof result.meta === "object" &&
+    "changes" in result.meta &&
+    typeof result.meta.changes === "number"
+  ) {
+    return result.meta.changes;
+  }
+
+  return 0;
 }
 
 function isRetryableJobErrorCode(code: string): boolean {

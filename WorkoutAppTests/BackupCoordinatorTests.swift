@@ -1436,6 +1436,94 @@ final class BackupCoordinatorTests: XCTestCase {
     }
 
     @MainActor
+    func testCoachStoreResumesExistingJobAfterCreateConflict() async {
+        let store = AppStore()
+        store.apply(snapshot: makeSnapshot())
+        let existingPlaceholderID = "placeholder-existing"
+        let coachStore = CoachStore(
+            client: StubCoachAPIClient(
+                shouldFailInsights: false,
+                shouldFailChat: false,
+                createConflictJobID: "job-existing",
+                jobResponses: ChatJobStatusSequence([
+                    SequencedChatJobStep(
+                        response: makeCompletedChatJobStatusResponse(jobID: "job-existing")
+                    )
+                ])
+            ),
+            configuration: CoachRuntimeConfiguration(
+                isFeatureEnabled: true,
+                backendBaseURL: URL(string: "https://example.com"),
+                internalBearerToken: "internal-token"
+            )
+        )
+        coachStore.messages = [
+            CoachChatMessage(role: .user, content: "Original question"),
+            CoachChatMessage(
+                id: existingPlaceholderID,
+                role: .assistant,
+                content: coachLocalizedString("coach.loading.response"),
+                isLoading: true,
+                isStatus: true
+            )
+        ]
+        coachStore.draftQuestion = "New question"
+
+        await coachStore.sendMessage("New question", using: store)
+
+        XCTAssertEqual(coachStore.messages.count, 2)
+        XCTAssertEqual(coachStore.messages.first?.content, "Original question")
+        XCTAssertEqual(coachStore.messages.last?.id, existingPlaceholderID)
+        XCTAssertEqual(coachStore.messages.last?.content, "Coach answer")
+        XCTAssertEqual(coachStore.draftQuestion, "New question")
+        XCTAssertNil(coachStore.activeChatJobID)
+    }
+
+    @MainActor
+    func testCoachStoreKeepsPendingJobForResumeWhenPollingStops() async {
+        let store = AppStore()
+        store.apply(snapshot: makeSnapshot())
+        let coachStore = CoachStore(
+            client: StubCoachAPIClient(
+                shouldFailInsights: false,
+                shouldFailChat: false,
+                jobID: "job-pending",
+                createPollAfterMs: 0,
+                jobResponses: ChatJobStatusSequence([
+                    SequencedChatJobStep(
+                        response: makePendingChatJobStatusResponse(jobID: "job-pending", status: .queued),
+                        delayNanoseconds: 30_000_000
+                    ),
+                    SequencedChatJobStep(
+                        response: makeCompletedChatJobStatusResponse(jobID: "job-pending")
+                    )
+                ])
+            ),
+            configuration: CoachRuntimeConfiguration(
+                isFeatureEnabled: true,
+                backendBaseURL: URL(string: "https://example.com"),
+                internalBearerToken: "internal-token"
+            ),
+            maxChatPollingDuration: 0.01
+        )
+        coachStore.draftQuestion = "How should I progress?"
+
+        await coachStore.sendMessage("How should I progress?", using: store)
+
+        XCTAssertEqual(coachStore.messages.count, 2)
+        XCTAssertEqual(coachStore.messages.last?.content, coachLocalizedString("coach.loading.response_delayed"))
+        XCTAssertTrue(coachStore.canResumePendingChatJob)
+        XCTAssertEqual(coachStore.activeChatJobID, "job-pending")
+        XCTAssertEqual(coachStore.draftQuestion, "")
+
+        await coachStore.resumePendingChatJobIfNeeded(using: store)
+
+        XCTAssertEqual(coachStore.messages.last?.content, "Coach answer")
+        XCTAssertNil(coachStore.activeChatJobID)
+        XCTAssertFalse(coachStore.canResumePendingChatJob)
+    }
+
+    @MainActor
     func testCoachStoreSendsOnlyLastEightConversationMessages() async throws {
         let store = AppStore()
         store.apply(snapshot: makeSnapshot())
@@ -2236,6 +2324,26 @@ private actor ReconcileCursor {
 private struct StubCoachAPIClient: CoachAPIClient {
     let shouldFailInsights: Bool
     let shouldFailChat: Bool
+    let createConflictJobID: String?
+    let jobID: String
+    let createPollAfterMs: Int
+    let jobResponses: ChatJobStatusSequence?
+
+    init(
+        shouldFailInsights: Bool,
+        shouldFailChat: Bool,
+        createConflictJobID: String? = nil,
+        jobID: String = "job-1",
+        createPollAfterMs: Int = 0,
+        jobResponses: ChatJobStatusSequence? = nil
+    ) {
+        self.shouldFailInsights = shouldFailInsights
+        self.shouldFailChat = shouldFailChat
+        self.createConflictJobID = createConflictJobID
+        self.jobID = jobID
+        self.createPollAfterMs = createPollAfterMs
+        self.jobResponses = jobResponses
+    }
 
     func syncSnapshot(_ request: CoachSnapshotSyncRequest) async throws -> CoachSnapshotSyncResponse {
         CoachSnapshotSyncResponse(
@@ -2339,13 +2447,29 @@ private struct StubCoachAPIClient: CoachAPIClient {
         capabilityScope: CoachCapabilityScope,
         runtimeContextDelta: CoachRuntimeContextDelta?
     ) async throws -> CoachChatJobCreateResponse {
-        makeQueuedChatJobCreateResponse()
+        if let createConflictJobID {
+            throw CoachClientError.api(
+                statusCode: 409,
+                code: "chat_job_in_progress",
+                message: "Coach chat job already in progress.",
+                jobID: createConflictJobID
+            )
+        }
+
+        return makeQueuedChatJobCreateResponse(
+            jobID: jobID,
+            pollAfterMs: createPollAfterMs
+        )
     }
 
     func getChatJob(
         jobID: String,
         installID: String
     ) async throws -> CoachChatJobStatusResponse {
+        if let jobResponses {
+            return await jobResponses.next()
+        }
+
         if shouldFailChat {
             return makeFailedChatJobStatusResponse(jobID: jobID)
         }
@@ -2393,6 +2517,27 @@ private struct RecordedCoachSnapshotRequest: Sendable {
     var snapshotEnvelope: CoachSnapshotEnvelope
 }
 
+private struct SequencedChatJobStep: Sendable {
+    var response: CoachChatJobStatusResponse
+    var delayNanoseconds: UInt64 = 0
+}
+
+private actor ChatJobStatusSequence {
+    private var steps: [SequencedChatJobStep]
+
+    init(_ steps: [SequencedChatJobStep]) {
+        self.steps = steps
+    }
+
+    func next() async -> CoachChatJobStatusResponse {
+        let step = steps.count > 1 ? steps.removeFirst() : steps[0]
+        if step.delayNanoseconds > 0 {
+            try? await Task.sleep(nanoseconds: step.delayNanoseconds)
+        }
+        return step.response
+    }
+}
+
 private actor SnapshotRequestRecorder {
     private(set) var requests: [RecordedCoachSnapshotRequest] = []
 
@@ -2401,12 +2546,15 @@ private actor SnapshotRequestRecorder {
     }
 }
 
-private func makeQueuedChatJobCreateResponse(jobID: String = "job-1") -> CoachChatJobCreateResponse {
+private func makeQueuedChatJobCreateResponse(
+    jobID: String = "job-1",
+    pollAfterMs: Int = 0
+) -> CoachChatJobCreateResponse {
     CoachChatJobCreateResponse(
         jobID: jobID,
         status: .queued,
         createdAt: .now,
-        pollAfterMs: 0
+        pollAfterMs: pollAfterMs
     )
 }
 
@@ -2427,6 +2575,22 @@ private func makeCompletedChatJobStatusResponse(jobID: String = "job-1") -> Coac
             modelDurationMs: 1200,
             totalJobDurationMs: 1500
         ),
+        error: nil
+    )
+}
+
+private func makePendingChatJobStatusResponse(
+    jobID: String = "job-1",
+    status: CoachChatJobStatus = .queued
+) -> CoachChatJobStatusResponse {
+    let createdAt = Date()
+    return CoachChatJobStatusResponse(
+        jobID: jobID,
+        status: status,
+        createdAt: createdAt,
+        startedAt: status == .running ? createdAt : nil,
+        completedAt: nil,
+        result: nil,
         error: nil
     )
 }

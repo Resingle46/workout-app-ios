@@ -56,17 +56,33 @@ export async function executeChatJob(
   }
 
   const startedAt = new Date(now()).toISOString();
-  const runningJob = await runWorkflowStep(
+  const claimResult = await runWorkflowStep(
     step,
     "mark_chat_job_running",
     async () => {
       const updated = await stateRepository.markChatJobRunning(jobID, startedAt);
-      if (!updated) {
+      if (!updated.job) {
         throw new Error(`Coach chat job ${jobID} was not found.`);
       }
       return updated;
     }
   );
+
+  if (!claimResult.job) {
+    return null;
+  }
+
+  if (!claimResult.claimed) {
+    if (claimResult.job.status === "running") {
+      logChatJobEvent(
+        "coach_chat_job_duplicate_execution_skipped",
+        claimResult.job
+      );
+    }
+    return claimResult.job;
+  }
+
+  const runningJob = claimResult.job;
 
   logChatJobEvent("coach_chat_job_started", runningJob);
   logChatJobEvent("coach_chat_job_running", runningJob);
@@ -117,10 +133,24 @@ export async function executeChatJob(
         })
     );
 
-    await runWorkflowStep(step, "commit_chat_memory", async () => {
-      await stateRepository.commitChatJobMemory(jobID);
-      return { committed: true };
-    });
+    try {
+      await runWorkflowStep(step, "commit_chat_memory", async () => {
+        await stateRepository.commitChatJobMemory(jobID);
+        return { committed: true };
+      });
+    } catch (error) {
+      console.error(
+        JSON.stringify({
+          event: "coach_chat_job_memory_commit_failed",
+          jobID: completedJob.jobID,
+          installID: completedJob.installID,
+          clientRequestID: completedJob.clientRequestID,
+          status: completedJob.status,
+          errorMessage:
+            error instanceof Error ? error.message.slice(0, 300) : "Unknown error",
+        })
+      );
+    }
 
     const finalJob = (await stateRepository.getChatJobByID(jobID)) ?? completedJob;
     logChatJobEvent("coach_chat_job_completed", finalJob);

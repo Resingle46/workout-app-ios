@@ -149,7 +149,6 @@ struct RootTabBarPresentationResolver {
 @MainActor
 struct RootTabView: View {
     @Environment(AppStore.self) private var store
-    @Environment(CoachStore.self) private var coachStore
     @Environment(CloudSyncStore.self) private var cloudSyncStore
     @State private var showBackupSetupPrompt = false
     @State private var launchBackupPickerMode: BackupDocumentPickerMode?
@@ -178,12 +177,9 @@ struct RootTabView: View {
             .onChange(of: store.shouldPromptForBackupSetup, initial: true) { _, newValue in
                 showBackupSetupPrompt = newValue
             }
-            .onChange(of: store.selectedTab, initial: false) { oldValue, newValue in
+            .onChange(of: store.selectedTab, initial: false) { _, newValue in
                 if newValue != .workout {
                     workoutTabsExpanded = false
-                }
-                if oldValue == .coach, newValue != .coach {
-                    coachStore.resetConversation()
                 }
             }
             .onChange(of: store.activeSession?.id) { _, newValue in
