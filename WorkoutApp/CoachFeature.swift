@@ -2286,9 +2286,10 @@ private struct CoachInsightsOverviewCard: View {
                     .buttonStyle(CoachPromptButtonStyle())
                 }
 
-                Text(insights.summary)
-                    .font(AppTypography.heading(size: 23))
+                Text(coachNormalizedReadableText(insights.summary))
+                    .font(AppTypography.body(size: 19, weight: .semibold, relativeTo: .title3))
                     .foregroundStyle(AppTheme.primaryText)
+                    .lineSpacing(2)
                     .fixedSize(horizontal: false, vertical: true)
 
                 VStack(alignment: .leading, spacing: 10) {
@@ -2299,7 +2300,7 @@ private struct CoachInsightsOverviewCard: View {
                                 .frame(width: 7, height: 7)
                                 .padding(.top, 8)
 
-                            Text(recommendation)
+                            Text(coachNormalizedReadableText(recommendation))
                                 .font(AppTypography.body(size: 15, weight: .medium, relativeTo: .subheadline))
                                 .foregroundStyle(AppTheme.secondaryText)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -2467,7 +2468,7 @@ private struct CoachConversationThread: View {
 
     @State private var contentHeight: CGFloat = 0
 
-    private let minConversationHeight: CGFloat = 180
+    private let minConversationHeight: CGFloat = 270
     private let maxConversationHeight: CGFloat = 760
 
     private var resolvedConversationHeight: CGFloat {
@@ -2687,15 +2688,17 @@ private struct CoachMarkdownText: View {
     }
 
     static func normalizedContent(from content: String) -> String {
-        content
-            .replacingOccurrences(of: "\r\n", with: "\n")
-            .replacingOccurrences(of: "\u{2028}", with: "\n")
-            .replacingOccurrences(
-                of: #"<br\s*/?>"#,
-                with: "\n",
-                options: .regularExpression
-            )
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        coachNormalizedReadableText(
+            content
+                .replacingOccurrences(of: "\r\n", with: "\n")
+                .replacingOccurrences(of: "\u{2028}", with: "\n")
+                .replacingOccurrences(
+                    of: #"<br\s*/?>"#,
+                    with: "\n",
+                    options: .regularExpression
+                )
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        )
     }
 
     private var shouldRenderAsMarkdown: Bool {
@@ -2879,6 +2882,14 @@ private struct CoachConversationContentHeightPreferenceKey: PreferenceKey {
 
 private func coachLocalizedString(_ key: String) -> String {
     Bundle.main.localizedString(forKey: key, value: nil, table: nil)
+}
+
+private func coachNormalizedReadableText(_ text: String) -> String {
+    text.replacingOccurrences(
+        of: #"([.!?])([A-ZА-ЯЁ])"#,
+        with: "$1 $2",
+        options: .regularExpression
+    )
 }
 
 private func coachLocalizedSplitTitle(_ split: ProfileTrainingSplitRecommendation) -> String {
