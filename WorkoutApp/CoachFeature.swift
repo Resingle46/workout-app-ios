@@ -813,22 +813,30 @@ struct CoachRecentSessionExerciseContext: Codable, Hashable, Sendable {
 struct CoachAPIHTTPClient: CoachAPIClient {
     private static let standardRequestTimeoutInterval: TimeInterval = 20
     private static let standardResourceTimeoutInterval: TimeInterval = 25
+    private static let profileInsightsRequestTimeoutInterval: TimeInterval = 32
+    private static let profileInsightsResourceTimeoutInterval: TimeInterval = 36
     private static let chatRequestTimeoutInterval: TimeInterval = 30
     private static let chatResourceTimeoutInterval: TimeInterval = 35
 
     private let configuration: CoachRuntimeConfiguration
     private let standardSession: URLSession
+    private let profileInsightsSession: URLSession
     private let chatSession: URLSession
 
     init(
         configuration: CoachRuntimeConfiguration,
         session: URLSession? = nil,
+        profileInsightsSession: URLSession? = nil,
         chatSession: URLSession? = nil
     ) {
         self.configuration = configuration
         self.standardSession = session ?? Self.makeSession(
             requestTimeoutInterval: Self.standardRequestTimeoutInterval,
             resourceTimeoutInterval: Self.standardResourceTimeoutInterval
+        )
+        self.profileInsightsSession = profileInsightsSession ?? Self.makeSession(
+            requestTimeoutInterval: Self.profileInsightsRequestTimeoutInterval,
+            resourceTimeoutInterval: Self.profileInsightsResourceTimeoutInterval
         )
         self.chatSession = chatSession ?? Self.makeSession(
             requestTimeoutInterval: Self.chatRequestTimeoutInterval,
@@ -945,8 +953,8 @@ struct CoachAPIHTTPClient: CoachAPIClient {
                 runtimeContextDelta: runtimeContextDelta,
                 capabilityScope: capabilityScope
             ),
-            session: standardSession,
-            timeoutInterval: Self.standardRequestTimeoutInterval,
+            session: profileInsightsSession,
+            timeoutInterval: Self.profileInsightsRequestTimeoutInterval,
             responseType: CoachProfileInsights.self
         )
     }
@@ -2358,7 +2366,7 @@ private struct CoachContextPreferencesCard: View {
     }
 
     var body: some View {
-        AppCard {
+        AppCard(padding: isExpanded ? 20 : 14) {
             if isExpanded {
                 VStack(alignment: .leading, spacing: 16) {
                     AppSectionTitle(titleKey: "coach.context.title")
@@ -2450,8 +2458,8 @@ private struct CoachContextPreferencesCard: View {
                     .opacity(isSaving || isSaved ? 0.92 : 1)
                 }
             } else {
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack(alignment: .firstTextBaseline, spacing: 12) {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(alignment: .center, spacing: 10) {
                         AppSectionTitle(titleKey: "coach.context.title")
 
                         Spacer(minLength: 12)
@@ -2459,7 +2467,7 @@ private struct CoachContextPreferencesCard: View {
                         Button("coach.context.edit") {
                             onEdit()
                         }
-                        .buttonStyle(CoachPromptButtonStyle())
+                        .buttonStyle(CoachCompactPromptButtonStyle())
                     }
 
                     HStack(spacing: 8) {
@@ -2715,6 +2723,24 @@ private struct CoachPromptButtonStyle: ButtonStyle {
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(AppTheme.border, lineWidth: 1)
+            )
+    }
+}
+
+private struct CoachCompactPromptButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(AppTypography.caption(size: 12, weight: .semibold))
+            .foregroundStyle(AppTheme.primaryText)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(configuration.isPressed ? AppTheme.surfacePressed : AppTheme.surfaceElevated)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .stroke(AppTheme.border, lineWidth: 1)
             )
     }

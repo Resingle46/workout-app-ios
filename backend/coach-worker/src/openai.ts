@@ -25,8 +25,10 @@ const PROFILE_INSIGHTS_STRUCTURED_MAX_TOKENS = 550;
 const PROFILE_INSIGHTS_PLAIN_TEXT_MAX_TOKENS = 260;
 const CHAT_STRUCTURED_MAX_TOKENS = 700;
 const CHAT_FALLBACK_MAX_TOKENS = 450;
-const PROFILE_INSIGHTS_STRUCTURED_TIMEOUT_MS = 12_000;
-const PROFILE_INSIGHTS_PLAIN_TEXT_TIMEOUT_MS = 8_000;
+const PROFILE_INSIGHTS_TOTAL_BUDGET_MS = 30_000;
+const PROFILE_INSIGHTS_STRUCTURED_TIMEOUT_MS = 25_000;
+const PROFILE_INSIGHTS_PLAIN_TEXT_TIMEOUT_MS = 5_000;
+const PROFILE_INSIGHTS_FALLBACK_MIN_TIMEOUT_MS = 3_000;
 const CHAT_TOTAL_BUDGET_MS = 28_000;
 const CHAT_STRUCTURED_TIMEOUT_MS = 12_000;
 const CHAT_FALLBACK_TIMEOUT_MS = 12_000;
@@ -139,7 +141,7 @@ export class WorkersAICoachService implements CoachInferenceService {
         throw error;
       }
 
-      if (!shouldAttemptPlainTextFallback(error)) {
+      if (!shouldAttemptProfilePlainTextFallback(error)) {
         console.warn(
           JSON.stringify({
             event: "coach_profile_local_fallback",
@@ -157,6 +159,8 @@ export class WorkersAICoachService implements CoachInferenceService {
         };
       }
 
+      const remainingBudgetMs = remainingProfileInsightsBudgetMs(startedAt);
+
       console.warn(
         JSON.stringify({
           event: "coach_profile_structured_fallback",
@@ -164,16 +168,44 @@ export class WorkersAICoachService implements CoachInferenceService {
           model: this.modelName,
           reasonCode: error.code,
           reasonDetails: error.details,
+          remainingBudgetMs,
         })
       );
+
+      if (remainingBudgetMs < PROFILE_INSIGHTS_FALLBACK_MIN_TIMEOUT_MS) {
+        console.warn(
+          JSON.stringify({
+            event: "coach_profile_local_fallback",
+            operation,
+            model: this.modelName,
+            reasonCode: error.code,
+            reasonDetails: error.details,
+            degradedReason: "insufficient_fallback_budget",
+            remainingBudgetMs,
+          })
+        );
+
+        return {
+          data: localFallback,
+          model: this.modelName,
+          mode: "local_fallback",
+        };
+      }
 
       try {
         const fallbackInvocation = await this.runPlainText({
           operation,
           messages: buildFallbackProfileInsightsMessages(request),
           maxTokens: PROFILE_INSIGHTS_PLAIN_TEXT_MAX_TOKENS,
-          timeoutMs: PROFILE_INSIGHTS_PLAIN_TEXT_TIMEOUT_MS,
+          timeoutMs: Math.min(
+            PROFILE_INSIGHTS_PLAIN_TEXT_TIMEOUT_MS,
+            remainingBudgetMs
+          ),
           includeFallbackNotice: false,
+          extraDetails: {
+            fallbackTrigger: error.code,
+            remainingBudgetMs,
+          },
         });
 
         return {
@@ -494,6 +526,12 @@ function shouldAttemptPlainTextFallback(
   error: CoachInferenceServiceError
 ): boolean {
   return error.code !== "upstream_timeout";
+}
+
+function shouldAttemptProfilePlainTextFallback(
+  error: CoachInferenceServiceError
+): boolean {
+  return error.code.startsWith("upstream_");
 }
 
 function shouldAttemptChatPlainTextFallback(
@@ -1216,6 +1254,10 @@ function byteLength(value: unknown): number {
 
 function totalTurnCharacters(turns: CoachChatRequest["clientRecentTurns"]): number {
   return turns.reduce((total, turn) => total + turn.content.length, 0);
+}
+
+function remainingProfileInsightsBudgetMs(startedAt: number): number {
+  return Math.max(PROFILE_INSIGHTS_TOTAL_BUDGET_MS - (Date.now() - startedAt), 0);
 }
 
 function remainingChatBudgetMs(startedAt: number): number {

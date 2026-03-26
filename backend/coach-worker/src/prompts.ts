@@ -145,7 +145,11 @@ export function buildProfileInsightsMessages(
       content: [
         `Capability scope: ${request.capabilityScope}`,
         "Return JSON that strictly matches the provided schema.",
-        ...coachAnalysisContextLines(request.snapshot),
+        ...coachAnalysisContextLines(request.snapshot, {
+          includeCoachAnalysisSettings: false,
+          includePreferredProgram: false,
+          includeUserComment: false,
+        }),
       ].join("\n\n"),
     },
   ];
@@ -208,7 +212,11 @@ export function buildFallbackProfileInsightsMessages(
       role: "user",
       content: [
         `Capability scope: ${request.capabilityScope}`,
-        ...coachAnalysisContextLines(request.snapshot),
+        ...coachAnalysisContextLines(request.snapshot, {
+          includeCoachAnalysisSettings: false,
+          includePreferredProgram: false,
+          includeUserComment: false,
+        }),
       ].join("\n\n"),
     },
   ];

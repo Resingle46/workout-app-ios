@@ -37,19 +37,64 @@ export interface ProgramCommentConstraints {
 export interface InferencePromptContext {
   localeIdentifier: string;
   profile: CompactCoachSnapshot["profile"];
-  coachAnalysisSettings: CompactCoachSnapshot["coachAnalysisSettings"];
   userConstraints: ProgramCommentConstraints;
-  preferredProgram?: CompactCoachSnapshot["preferredProgram"];
-  activeWorkout?: CompactCoachSnapshot["activeWorkout"];
+  preferredProgram?: {
+    id: string;
+    title: string;
+    workoutCount: number;
+    workouts: Array<{
+      id: string;
+      title: string;
+      focus: string;
+      exerciseCount: number;
+      exercises: Array<{
+        templateExerciseID: string;
+        exerciseID: string;
+        exerciseName: string;
+        setsCount: number;
+        reps: number;
+        suggestedWeight: number;
+        groupKind: string;
+      }>;
+    }>;
+  };
+  activeWorkout?: {
+    title: string;
+    startedAt: string;
+    exerciseCount: number;
+    completedSetsCount: number;
+    totalSetsCount: number;
+  };
   analytics: {
     progress30Days: CompactCoachSnapshot["analytics"]["progress30Days"];
     consistency: CompactCoachSnapshot["analytics"]["consistency"] & {
       observedAverageWorkoutsPerWeek?: number;
     };
-    recentPersonalRecords: CompactCoachSnapshot["analytics"]["recentPersonalRecords"];
+    recentPersonalRecords: Array<{
+      exerciseName: string;
+      achievedAt: string;
+      weight: number;
+      previousWeight: number;
+      delta: number;
+    }>;
     relativeStrength: CompactCoachSnapshot["analytics"]["relativeStrength"];
   };
-  recentFinishedSessions: CompactCoachSnapshot["recentFinishedSessions"];
+  recentFinishedSessions: Array<{
+    title: string;
+    startedAt: string;
+    endedAt?: string;
+    durationSeconds?: number;
+    completedSetsCount: number;
+    totalVolume: number;
+    exercises: Array<{
+      exerciseName: string;
+      groupKind: string;
+      completedSetsCount: number;
+      bestWeight?: number;
+      totalVolume: number;
+      averageReps?: number;
+    }>;
+  }>;
 }
 
 const ROTATION_PATTERNS = [
@@ -216,10 +261,38 @@ export function buildInferencePromptContext(
   return {
     localeIdentifier: snapshot.localeIdentifier,
     profile: snapshot.profile,
-    coachAnalysisSettings: snapshot.coachAnalysisSettings,
     userConstraints,
-    preferredProgram: snapshot.preferredProgram,
-    activeWorkout: snapshot.activeWorkout,
+    preferredProgram: snapshot.preferredProgram
+      ? {
+          id: snapshot.preferredProgram.id,
+          title: snapshot.preferredProgram.title,
+          workoutCount: snapshot.preferredProgram.workoutCount,
+          workouts: snapshot.preferredProgram.workouts.map((workout) => ({
+            id: workout.id,
+            title: workout.title,
+            focus: workout.focus,
+            exerciseCount: workout.exerciseCount,
+            exercises: workout.exercises.map((exercise) => ({
+              templateExerciseID: exercise.templateExerciseID,
+              exerciseID: exercise.exerciseID,
+              exerciseName: exercise.exerciseName,
+              setsCount: exercise.setsCount,
+              reps: exercise.reps,
+              suggestedWeight: exercise.suggestedWeight,
+              groupKind: exercise.groupKind,
+            })),
+          })),
+        }
+      : undefined,
+    activeWorkout: snapshot.activeWorkout
+      ? {
+          title: snapshot.activeWorkout.title,
+          startedAt: snapshot.activeWorkout.startedAt,
+          exerciseCount: snapshot.activeWorkout.exerciseCount,
+          completedSetsCount: snapshot.activeWorkout.completedSetsCount,
+          totalSetsCount: snapshot.activeWorkout.totalSetsCount,
+        }
+      : undefined,
     analytics: {
       progress30Days: snapshot.analytics.progress30Days,
       consistency: {
@@ -228,10 +301,31 @@ export function buildInferencePromptContext(
           snapshot.analytics.consistency
         ),
       },
-      recentPersonalRecords: snapshot.analytics.recentPersonalRecords,
+      recentPersonalRecords: snapshot.analytics.recentPersonalRecords.map((record) => ({
+        exerciseName: record.exerciseName,
+        achievedAt: record.achievedAt,
+        weight: record.weight,
+        previousWeight: record.previousWeight,
+        delta: record.delta,
+      })),
       relativeStrength: snapshot.analytics.relativeStrength,
     },
-    recentFinishedSessions: snapshot.recentFinishedSessions,
+    recentFinishedSessions: snapshot.recentFinishedSessions.map((session) => ({
+      title: session.title,
+      startedAt: session.startedAt,
+      endedAt: session.endedAt,
+      durationSeconds: session.durationSeconds,
+      completedSetsCount: session.completedSetsCount,
+      totalVolume: session.totalVolume,
+      exercises: session.exercises.map((exercise) => ({
+        exerciseName: exercise.exerciseName,
+        groupKind: exercise.groupKind,
+        completedSetsCount: exercise.completedSetsCount,
+        bestWeight: exercise.bestWeight,
+        totalVolume: exercise.totalVolume,
+        averageReps: exercise.averageReps,
+      })),
+    })),
   };
 }
 

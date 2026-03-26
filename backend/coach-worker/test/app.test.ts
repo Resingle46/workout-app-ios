@@ -644,6 +644,12 @@ describe("WorkersAICoachService", () => {
       "Do not recommend changing weekly training frequency."
     );
     expect(promptText).toContain("Sanitized coach context JSON:");
+    expect(promptText).not.toContain("Coach analysis settings JSON:");
+    expect(promptText).not.toContain("Selected program for analysis JSON:");
+    expect(promptText).not.toContain("\"selectedProgramID\"");
+    expect(promptText).not.toContain(
+      "55555555-5555-4555-8555-555555555555"
+    );
     expect(promptText).not.toContain("\"compatibility\"");
     expect(promptText).not.toContain("\"training\"");
   });
@@ -688,6 +694,10 @@ describe("WorkersAICoachService", () => {
     const fallbackPromptText = JSON.stringify(aiRun.mock.calls[1]?.[1]?.messages ?? []);
     expect(fallbackPromptText).not.toContain("Coach analysis settings JSON:");
     expect(fallbackPromptText).not.toContain("Selected program for analysis JSON:");
+    expect(fallbackPromptText).not.toContain("\"selectedProgramID\"");
+    expect(fallbackPromptText).not.toContain(
+      "55555555-5555-4555-8555-555555555555"
+    );
     expect(result.data.answerMarkdown).toBe(
       "Keep load the same next week and add one rep to the final set."
     );
@@ -874,18 +884,47 @@ describe("WorkersAICoachService", () => {
   });
 
   it("falls back to neutral local profile insights when inference fails", async () => {
-    const aiRun = vi.fn().mockRejectedValue(new Error("Request timed out"));
+    const aiRun = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Request timed out"))
+      .mockRejectedValueOnce(new Error("Request timed out"));
 
     const service = new WorkersAICoachService(makeEnv({ AI: { run: aiRun } }));
     const result = await service.generateProfileInsights(
       makeProfileInsightsRequestFixture()
     );
 
-    expect(aiRun).toHaveBeenCalledTimes(1);
+    expect(aiRun).toHaveBeenCalledTimes(2);
     expect(result.data.summary.length).toBeGreaterThan(0);
     expect(result.data.recommendations.length).toBeGreaterThan(0);
     expect(result.data.suggestedChanges).toEqual([]);
     expect(result.data.summary.toLowerCase()).not.toContain("adjustments");
+  });
+
+  it("falls back to plain-text profile insights when structured output times out and budget remains", async () => {
+    const aiRun = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Request timed out"))
+      .mockResolvedValueOnce({
+        response: [
+          "Summary: Recovery is under control.",
+          "",
+          "- Keep weekly load stable for one more week.",
+        ].join("\n"),
+      });
+
+    const service = new WorkersAICoachService(makeEnv({ AI: { run: aiRun } }));
+    const result = await service.generateProfileInsights(
+      makeProfileInsightsRequestFixture()
+    );
+
+    expect(aiRun).toHaveBeenCalledTimes(2);
+    expect(result.mode).toBe("plain_text_fallback");
+    expect(result.data.summary).toBe("Recovery is under control.");
+    expect(result.data.recommendations).toEqual([
+      "Keep weekly load stable for one more week.",
+    ]);
+    expect(result.data.generationStatus).toBe("model");
   });
 
   it("cuts off long-running profile insight requests before the client disconnects", async () => {
@@ -910,7 +949,7 @@ describe("WorkersAICoachService", () => {
         },
       });
 
-      await vi.advanceTimersByTimeAsync(12_050);
+      await vi.advanceTimersByTimeAsync(30_050);
       await expectation;
     } finally {
       vi.useRealTimers();
