@@ -1,0 +1,75 @@
+---
+description: Workout app repo overview and global working rules
+alwaysApply: true
+---
+
+# Repository Overview
+
+This repository contains two tightly coupled parts:
+
+1. SwiftUI iOS app in `WorkoutApp`
+2. Cloudflare Worker backend in `backend/coach-worker`
+
+The app is a personal workout tracker with:
+- workout programs and workout templates
+- active workout execution with set logging and supersets
+- workout history and exercise analytics
+- profile/statistics screens
+- AI Coach
+- local backup + cloud backup/sync
+- async workout summary generation
+
+## Core Architecture
+
+- `AppStore` is the main source of truth for app data.
+- Persisted app state is represented by `AppSnapshot`.
+- Coach/cloud integration is centered around:
+  - `CoachFeature.swift`
+  - `CloudSyncStore`
+  - `CoachStore`
+  - `WorkoutSummaryFeature.swift`
+- Cloud backend contract changes must always be reviewed on both sides:
+  - iOS request/response code
+  - worker schemas/routes/state logic
+
+## Global Rules
+
+- Prefer minimal, scoped changes over broad refactors.
+- Preserve existing API contracts unless the task explicitly requires a contract change.
+- Do not silently “fix” schema mismatches by dropping user data.
+- Do not commit real tokens, real backend URLs, or private secrets.
+- Keep changes compatible with existing persisted snapshots and backup flows.
+- When touching backup, coach, or summary logic, inspect both app code and worker code before editing.
+- Keep English/Russian localization intact. Reuse existing localization keys when possible.
+
+## Before Editing
+
+Always identify which side of the system you are changing:
+- iOS-only UI/state issue
+- worker/backend issue
+- cross-contract issue between iOS and worker
+
+For cross-contract issues, inspect both:
+- `WorkoutApp/CoachFeature.swift`
+- `WorkoutApp/Store/AppStore.swift`
+- `backend/coach-worker/src/app.ts`
+- `backend/coach-worker/src/schemas.ts`
+
+## Validation Expectations
+
+For iOS-side work:
+- check compile impact
+- watch Codable / snapshot compatibility
+- watch `AppStore` normalization paths
+- watch backup and summary flows
+
+For worker-side work:
+- run `npm run typecheck`
+- run `npm test`
+- keep logs useful and structured
+
+@README.md
+@WorkoutApp/Store/AppStore.swift
+@WorkoutApp/CoachFeature.swift
+@WorkoutApp/WorkoutSummaryFeature.swift
+@backend/coach-worker/src/app.ts

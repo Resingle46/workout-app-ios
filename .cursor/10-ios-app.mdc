@@ -1,0 +1,66 @@
+---
+description: Rules for the SwiftUI iOS app
+globs:
+  - WorkoutApp/**/*.swift
+  - WorkoutAppTests/**/*.swift
+alwaysApply: false
+---
+
+# iOS App Rules
+
+## State and Data Flow
+
+- Treat `AppStore` as the primary source of truth for persisted app state.
+- Prefer mutations through store methods over ad-hoc view-local persistence.
+- If a new persisted field is introduced, review:
+  - `AppSnapshot`
+  - normalization logic in `AppStore`
+  - backup implications
+  - cloud sync implications
+
+## UI and View Rules
+
+- Keep the existing dark visual language and reuse:
+  - `AppTheme`
+  - `AppTypography`
+  - shared card/button styles
+- Do not introduce a parallel styling system.
+- Keep screens compact and consistent with the current product style.
+
+## Workout / Programs / Statistics
+
+- Preserve the current relationship:
+  - `WorkoutProgram` -> `WorkoutTemplate` -> `WorkoutExerciseTemplate`
+  - active session uses `WorkoutSession` + `WorkoutExerciseLog` + `WorkoutSetLog`
+- For active workout changes, inspect:
+  - current-set progression
+  - superset grouping
+  - derived-state helpers
+  - finish flow and summary trigger behavior
+
+## Backup / Cloud / Coach
+
+- For backup issues, inspect snapshot shape before changing UI.
+- For cloud sync issues, inspect `CloudSyncStore` and worker schema together.
+- For coach issues, inspect both request-building and backend contract handling.
+- Never log tokens, full snapshot payloads, or raw user question/answer text into debug tooling.
+
+## Localization
+
+- Preserve bilingual behavior (`en` / `ru`).
+- Reuse existing keys before adding new ones.
+- If new user-facing text is required, update both localizations.
+
+## Change Discipline
+
+- Avoid renaming core models or store APIs without strong reason.
+- Avoid changing route names, request field names, or Codable keys casually.
+- Prefer compatibility-preserving fixes over data-breaking rewrites.
+
+@WorkoutApp/Models/Models.swift
+@WorkoutApp/Store/AppStore.swift
+@WorkoutApp/Views/RootTabView.swift
+@WorkoutApp/Views/ActiveWorkoutView.swift
+@WorkoutApp/Views/StatisticsView.swift
+@WorkoutApp/Views/ProfileView.swift
+@WorkoutApp/WorkoutSummaryFeature.swift

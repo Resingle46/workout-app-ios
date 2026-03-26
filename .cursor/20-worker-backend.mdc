@@ -1,0 +1,68 @@
+---
+description: Rules for the Cloudflare Worker backend
+globs:
+  - backend/coach-worker/**
+alwaysApply: false
+---
+
+# Cloudflare Worker Backend Rules
+
+## Backend Scope
+
+This backend handles:
+- health checks
+- backup reconcile / upload / download
+- coach snapshot sync
+- coach preferences
+- profile insights
+- sync chat
+- async chat jobs
+- async workout summary jobs
+
+## Platform Rules
+
+- This worker is built for Cloudflare Workers.
+- Prefer declarative bindings in `wrangler.jsonc` over undocumented manual dashboard-only setup.
+- Keep D1 / KV / R2 / Workflow bindings aligned with code and README.
+
+## Contract Rules
+
+- Worker request/response schema changes must be checked against iOS client code.
+- If you change a schema, inspect:
+  - `src/app.ts`
+  - `src/schemas.ts`
+  - iOS request models in `WorkoutApp/CoachFeature.swift` / `WorkoutApp/WorkoutSummaryFeature.swift`
+- Do not broaden schema acceptance casually unless it is an intentional compatibility fix.
+
+## Error Handling
+
+- Keep structured logging.
+- Preserve useful request diagnostics for validation failures.
+- Prefer explicit typed request errors over generic failures.
+- Do not hide upstream/model failures behind fake success paths.
+
+## Workflows and Jobs
+
+- Async chat and summary flows must preserve terminal job states.
+- Inspect executor/workflow/state code together before changing job behavior.
+- Wall time alone is not evidence of CPU bottleneck in workflows; inspect D1/KV/model/polling behavior separately.
+
+## Validation
+
+When editing backend code:
+- run `npm run typecheck`
+- run `npm test`
+- if bindings/migrations/scripts change, update README and `wrangler.jsonc` consistently
+
+## Safety
+
+- Never log secrets or auth tokens.
+- Avoid dumping full request payloads when they contain user state.
+- Use route-specific safe diagnostics instead of raw body logs.
+
+@backend/coach-worker/README.md
+@backend/coach-worker/package.json
+@backend/coach-worker/wrangler.jsonc
+@backend/coach-worker/src/app.ts
+@backend/coach-worker/src/chat-job-workflow.ts
+@backend/coach-worker/src/chat-job-executor.ts
