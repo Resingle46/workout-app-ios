@@ -2068,6 +2068,12 @@ struct CoachView: View {
                     VStack(alignment: .leading, spacing: 16) {
                         AppSectionTitle(titleKey: "coach.ask.title")
 
+                        if !coachStore.messages.isEmpty {
+                            CoachConversationThread(messages: coachStore.messages) { followUp in
+                                sendQuestion(followUp)
+                            }
+                        }
+
                         TextField("coach.ask.placeholder", text: $draftQuestion, axis: .vertical)
                             .textFieldStyle(.plain)
                             .font(AppTypography.body(size: 16))
@@ -2115,12 +2121,19 @@ struct CoachView: View {
                                     .font(AppTypography.caption(size: 13, weight: .semibold))
                                     .foregroundStyle(AppTheme.secondaryText)
 
-                                FlowLayout(spacing: 10) {
+                                VStack(alignment: .leading, spacing: 10) {
                                     ForEach(coachStore.visibleQuickPromptKeys, id: \.self) { promptKey in
                                         let prompt = coachLocalizedString(promptKey)
-                                        Button(prompt) {
+                                        Button {
                                             focusedField = nil
                                             sendQuestion(prompt)
+                                        } label: {
+                                            Text(prompt)
+                                                .font(AppTypography.body(size: 15, weight: .semibold, relativeTo: .subheadline))
+                                                .foregroundStyle(AppTheme.primaryText)
+                                                .multilineTextAlignment(.leading)
+                                                .lineLimit(2)
+                                                .frame(maxWidth: .infinity, alignment: .leading)
                                         }
                                         .buttonStyle(CoachPromptButtonStyle())
                                         .disabled(!coachStore.canUseRemoteCoach || coachStore.isSendingMessage)
@@ -2131,12 +2144,6 @@ struct CoachView: View {
                                         )
                                     }
                                 }
-                            }
-                        }
-
-                        if !coachStore.messages.isEmpty {
-                            CoachConversationThread(messages: coachStore.messages) { followUp in
-                                sendQuestion(followUp)
                             }
                         }
 
@@ -2460,11 +2467,12 @@ private struct CoachConversationThread: View {
 
     @State private var contentHeight: CGFloat = 0
 
+    private let minConversationHeight: CGFloat = 180
     private let maxConversationHeight: CGFloat = 760
 
     private var resolvedConversationHeight: CGFloat {
         let measuredHeight = contentHeight + 12
-        return min(measuredHeight, maxConversationHeight)
+        return min(max(measuredHeight, minConversationHeight), maxConversationHeight)
     }
 
     var body: some View {
@@ -2478,6 +2486,7 @@ private struct CoachConversationThread: View {
                         .id(message.id)
                     }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .background(
                     GeometryReader { proxy in
                         Color.clear
@@ -2488,6 +2497,7 @@ private struct CoachConversationThread: View {
                     }
                 )
             }
+            .frame(maxWidth: .infinity)
             .frame(height: resolvedConversationHeight)
             .animation(.spring(response: 0.28, dampingFraction: 0.84), value: resolvedConversationHeight)
             .onPreferenceChange(CoachConversationContentHeightPreferenceKey.self) { newHeight in
