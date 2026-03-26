@@ -30,8 +30,9 @@ import type {
 const LEGACY_SNAPSHOT_TTL_SECONDS = 30 * 24 * 60 * 60;
 const CHAT_MEMORY_TTL_SECONDS = 7 * 24 * 60 * 60;
 const INSIGHTS_CACHE_TTL_SECONDS = 6 * 60 * 60;
-const CHAT_MEMORY_MAX_TURNS = 6;
-const CHAT_MEMORY_MAX_CONTENT_LENGTH = 500;
+const CHAT_MEMORY_MAX_TURNS = 4;
+const CHAT_MEMORY_MAX_CONTENT_LENGTH = 220;
+const CHAT_MEMORY_MAX_TOTAL_CHARACTERS = 600;
 const BACKUP_SCHEMA_VERSION = 2;
 
 export interface CoachKVNamespace {
@@ -1103,13 +1104,28 @@ export class StaleRemoteStateError extends Error {
 export function normalizeChatTurns(
   turns: CoachConversationTurn[]
 ): CoachConversationTurn[] {
-  return turns
+  const normalized = turns
     .map((turn) => ({
       role: turn.role,
       content: turn.content.trim().slice(0, CHAT_MEMORY_MAX_CONTENT_LENGTH),
     }))
     .filter((turn) => turn.content.length > 0)
     .slice(-CHAT_MEMORY_MAX_TURNS);
+
+  const result: CoachConversationTurn[] = [];
+  let totalCharacters = 0;
+
+  for (const turn of normalized.toReversed()) {
+    const nextTotal = totalCharacters + turn.content.length;
+    if (result.length > 0 && nextTotal > CHAT_MEMORY_MAX_TOTAL_CHARACTERS) {
+      break;
+    }
+
+    result.push(turn);
+    totalCharacters = nextTotal;
+  }
+
+  return result.reverse();
 }
 
 function insightsCacheKey(

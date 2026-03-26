@@ -17,6 +17,13 @@ import type {
 const RECENT_FINISHED_SESSIONS_LIMIT = 8;
 const RECENT_PR_LIMIT = 3;
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+const PROMPT_PROGRAM_WORKOUT_LIMIT = 4;
+const PROMPT_PROGRAM_EXERCISE_LIMIT = 4;
+const PROMPT_RECENT_SESSION_LIMIT = 3;
+const PROMPT_RECENT_SESSION_EXERCISE_LIMIT = 3;
+const PROMPT_RECENT_PR_LIMIT = 2;
+const PROMPT_RELATIVE_STRENGTH_LIMIT = 3;
+const PROMPT_RECENT_WEEKLY_ACTIVITY_LIMIT = 2;
 const CANONICAL_LIFT_NAMES: Record<string, string> = {
   benchPress: "Barbell Bench Press",
   backSquat: "Back Squat",
@@ -56,15 +63,18 @@ export interface InferencePromptContext {
   };
   activeWorkout?: {
     title: string;
-    startedAt: string;
     exerciseCount: number;
     completedSetsCount: number;
     totalSetsCount: number;
   };
   analytics: {
     progress30Days: CompactCoachSnapshot["analytics"]["progress30Days"];
-    consistency: CompactCoachSnapshot["analytics"]["consistency"] & {
+    consistency: {
+      workoutsThisWeek: number;
+      weeklyTarget: number;
+      streakWeeks: number;
       observedAverageWorkoutsPerWeek?: number;
+      recentWeeklyActivity: CompactCoachSnapshot["analytics"]["consistency"]["recentWeeklyActivity"];
     };
     recentPersonalRecords: Array<{
       exerciseName: string;
@@ -78,16 +88,12 @@ export interface InferencePromptContext {
   recentFinishedSessions: Array<{
     title: string;
     startedAt: string;
-    endedAt?: string;
-    durationSeconds?: number;
     completedSetsCount: number;
     totalVolume: number;
     exercises: Array<{
       exerciseName: string;
-      groupKind: string;
       completedSetsCount: number;
       bestWeight?: number;
-      totalVolume: number;
       averageReps?: number;
     }>;
   }>;
@@ -262,24 +268,27 @@ export function buildInferencePromptContext(
       ? {
           title: snapshot.preferredProgram.title,
           workoutCount: snapshot.preferredProgram.workoutCount,
-          workouts: snapshot.preferredProgram.workouts.map((workout) => ({
-            title: workout.title,
-            focus: workout.focus,
-            exerciseCount: workout.exerciseCount,
-            exercises: workout.exercises.map((exercise) => ({
-              exerciseName: exercise.exerciseName,
-              setsCount: exercise.setsCount,
-              reps: exercise.reps,
-              suggestedWeight: exercise.suggestedWeight,
-              groupKind: exercise.groupKind,
+          workouts: snapshot.preferredProgram.workouts
+            .slice(0, PROMPT_PROGRAM_WORKOUT_LIMIT)
+            .map((workout) => ({
+              title: workout.title,
+              focus: workout.focus,
+              exerciseCount: workout.exerciseCount,
+              exercises: workout.exercises
+                .slice(0, PROMPT_PROGRAM_EXERCISE_LIMIT)
+                .map((exercise) => ({
+                  exerciseName: exercise.exerciseName,
+                  setsCount: exercise.setsCount,
+                  reps: exercise.reps,
+                  suggestedWeight: exercise.suggestedWeight,
+                  groupKind: exercise.groupKind,
+                })),
             })),
-          })),
         }
       : undefined,
     activeWorkout: snapshot.activeWorkout
       ? {
           title: snapshot.activeWorkout.title,
-          startedAt: snapshot.activeWorkout.startedAt,
           exerciseCount: snapshot.activeWorkout.exerciseCount,
           completedSetsCount: snapshot.activeWorkout.completedSetsCount,
           totalSetsCount: snapshot.activeWorkout.totalSetsCount,
@@ -288,36 +297,47 @@ export function buildInferencePromptContext(
     analytics: {
       progress30Days: snapshot.analytics.progress30Days,
       consistency: {
-        ...snapshot.analytics.consistency,
+        workoutsThisWeek: snapshot.analytics.consistency.workoutsThisWeek,
+        weeklyTarget: snapshot.analytics.consistency.weeklyTarget,
+        streakWeeks: snapshot.analytics.consistency.streakWeeks,
         observedAverageWorkoutsPerWeek: observedAverageWorkoutsPerWeek(
           snapshot.analytics.consistency
         ),
+        recentWeeklyActivity:
+          snapshot.analytics.consistency.recentWeeklyActivity.slice(
+            -PROMPT_RECENT_WEEKLY_ACTIVITY_LIMIT
+          ),
       },
-      recentPersonalRecords: snapshot.analytics.recentPersonalRecords.map((record) => ({
-        exerciseName: record.exerciseName,
-        achievedAt: record.achievedAt,
-        weight: record.weight,
-        previousWeight: record.previousWeight,
-        delta: record.delta,
-      })),
-      relativeStrength: snapshot.analytics.relativeStrength,
+      recentPersonalRecords: snapshot.analytics.recentPersonalRecords
+        .slice(0, PROMPT_RECENT_PR_LIMIT)
+        .map((record) => ({
+          exerciseName: record.exerciseName,
+          achievedAt: record.achievedAt,
+          weight: record.weight,
+          previousWeight: record.previousWeight,
+          delta: record.delta,
+        })),
+      relativeStrength: snapshot.analytics.relativeStrength.slice(
+        0,
+        PROMPT_RELATIVE_STRENGTH_LIMIT
+      ),
     },
-    recentFinishedSessions: snapshot.recentFinishedSessions.map((session) => ({
-      title: session.title,
-      startedAt: session.startedAt,
-      endedAt: session.endedAt,
-      durationSeconds: session.durationSeconds,
-      completedSetsCount: session.completedSetsCount,
-      totalVolume: session.totalVolume,
-      exercises: session.exercises.map((exercise) => ({
-        exerciseName: exercise.exerciseName,
-        groupKind: exercise.groupKind,
-        completedSetsCount: exercise.completedSetsCount,
-        bestWeight: exercise.bestWeight,
-        totalVolume: exercise.totalVolume,
-        averageReps: exercise.averageReps,
+    recentFinishedSessions: snapshot.recentFinishedSessions
+      .slice(0, PROMPT_RECENT_SESSION_LIMIT)
+      .map((session) => ({
+        title: session.title,
+        startedAt: session.startedAt,
+        completedSetsCount: session.completedSetsCount,
+        totalVolume: session.totalVolume,
+        exercises: session.exercises
+          .slice(0, PROMPT_RECENT_SESSION_EXERCISE_LIMIT)
+          .map((exercise) => ({
+            exerciseName: exercise.exerciseName,
+            completedSetsCount: exercise.completedSetsCount,
+            bestWeight: exercise.bestWeight,
+            averageReps: exercise.averageReps,
+          })),
       })),
-    })),
   };
 }
 

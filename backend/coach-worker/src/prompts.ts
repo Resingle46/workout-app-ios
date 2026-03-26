@@ -129,7 +129,7 @@ export function buildProfileInsightsMessages(
       role: "system",
       content: [
         sharedRules(request.locale),
-        "Task: analyze the user's current training state and return a compact coach summary, concrete recommendations, and optional draft changes.",
+        "Task: analyze the user's current training state and return a compact coach summary with concrete recommendations.",
         "Prefer high-signal observations over generic motivation.",
         "Do not mention missing data unless it materially limits the advice.",
       ].join("\n\n"),
