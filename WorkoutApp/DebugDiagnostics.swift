@@ -651,7 +651,15 @@ final class DebugDiagnosticsReportBuilder {
             return nil
         }
 
-        return "\(pending.mode.rawValue)@v\(pending.response.remote.backupVersion)"
+        let modeDescription: String
+        switch pending.mode {
+        case .restore:
+            modeDescription = "restore"
+        case .conflict:
+            modeDescription = "conflict"
+        }
+
+        return "\(modeDescription)@v\(pending.response.remote.backupVersion)"
     }
 }
 
