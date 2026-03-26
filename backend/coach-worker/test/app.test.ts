@@ -337,6 +337,71 @@ describe("coach worker app", () => {
     );
   });
 
+  it("skips cached fallback insights and refreshes them from the model", async () => {
+    const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
+    const upload = makeBackupUploadRequestFixture();
+    let inferenceCalls = 0;
+    const app = createApp({
+      createInferenceService: () => ({
+        async generateProfileInsights() {
+          inferenceCalls += 1;
+          return {
+            data: {
+              summary: "Fresh remote summary",
+              recommendations: ["Fresh remote recommendation"],
+              suggestedChanges: [],
+              generationStatus: "model",
+            },
+            model: DEFAULT_AI_MODEL,
+          };
+        },
+        async generateChat() {
+          throw new Error("not used");
+        },
+      }),
+      createStateRepository: () => repository,
+    });
+
+    await app.fetch(
+      authedRequest("https://coach.example.workers.dev/v1/backup", {
+        method: "PUT",
+        body: JSON.stringify(upload),
+      }),
+      makeEnv()
+    );
+
+    const context = await repository.resolveCoachContext({
+      locale: "en",
+      installID: upload.installID,
+      capabilityScope: "draft_changes",
+    });
+    await repository.storeInsightsCache(upload.installID, context.contextHash, {
+      summary: "Cached fallback summary",
+      recommendations: ["Cached fallback recommendation"],
+      suggestedChanges: [],
+      generationStatus: "fallback",
+    });
+
+    const response = await app.fetch(
+      authedRequest("https://coach.example.workers.dev/v1/coach/profile-insights", {
+        method: "POST",
+        body: JSON.stringify({
+          locale: "en",
+          installID: upload.installID,
+          capabilityScope: "draft_changes",
+        }),
+      }),
+      makeEnv()
+    );
+
+    expect(response.status).toBe(200);
+    expect(inferenceCalls).toBe(1);
+    await expect(response.json()).resolves.toMatchObject({
+      summary: "Fresh remote summary",
+      generationStatus: "model",
+    });
+  });
+
   it("uses server-side context for slim chat requests", async () => {
     const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
     let capturedRequest: CoachChatRequest | undefined;
@@ -834,7 +899,7 @@ describe("WorkersAICoachService", () => {
         },
       });
 
-      await vi.advanceTimersByTimeAsync(24_050);
+      await vi.advanceTimersByTimeAsync(28_050);
       await expectation;
       expect(aiRun).toHaveBeenCalledTimes(2);
     } finally {

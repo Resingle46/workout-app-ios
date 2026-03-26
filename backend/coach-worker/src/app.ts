@@ -202,10 +202,11 @@ export function createApp(
                 context.contextHash
               )
             : null;
+          const reusableCachedResponse = isReusableProfileInsightsCacheEntry(
+            cachedResponse
+          );
 
-          if (cachedResponse) {
-            const normalizedCachedResponse =
-              normalizeProfileInsightsGenerationStatus(cachedResponse);
+          if (reusableCachedResponse) {
             logRequest({
               requestID,
               route: pathname,
@@ -216,7 +217,7 @@ export function createApp(
               contextSource: context.source,
               insightsCacheHit: true,
             });
-            return json(normalizedCachedResponse, 200);
+            return json(reusableCachedResponse, 200);
           }
 
           const inferenceStartedAt = deps.now();
@@ -229,7 +230,10 @@ export function createApp(
           });
           const modelDurationMs = deps.now() - inferenceStartedAt;
 
-          if (context.cacheAllowed) {
+          if (
+            context.cacheAllowed &&
+            result.data.generationStatus === "model"
+          ) {
             await stateRepository.storeInsightsCache(
               body.installID,
               context.contextHash,
@@ -654,12 +658,12 @@ function totalChatTurnChars(
   return turns.reduce((total, turn) => total + turn.content.length, 0);
 }
 
-function normalizeProfileInsightsGenerationStatus(
-  response: CoachProfileInsightsResponse
-): CoachProfileInsightsResponse {
-  return {
-    ...response,
-    generationStatus:
-      response.generationStatus === "model" ? "model" : "fallback",
-  };
+function isReusableProfileInsightsCacheEntry(
+  response: CoachProfileInsightsResponse | null
+): CoachProfileInsightsResponse | null {
+  if (!response) {
+    return null;
+  }
+
+  return response.generationStatus === "model" ? response : null;
 }
