@@ -208,6 +208,7 @@ export function createApp(
           routeDiagnostics = {
             installID: body.installID,
             contextSource: context.source,
+            profileContextVariant: "compact_profile_v1",
             snapshotBytes,
             programCommentChars,
             recentPrCount,
@@ -233,6 +234,7 @@ export function createApp(
               durationMs: deps.now() - startedAt,
               installID: body.installID,
               contextSource: context.source,
+              profileContextVariant: "compact_profile_v1",
               insightsCacheHit: true,
               snapshotBytes,
               programCommentChars,

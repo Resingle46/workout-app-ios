@@ -2621,17 +2621,61 @@ private struct CoachMarkdownText: View {
     let isStatus: Bool
 
     var body: some View {
-        if let attributedString = try? AttributedString(markdown: content) {
+        if shouldRenderAsMarkdown,
+           let attributedString = try? AttributedString(
+                markdown: normalizedContent,
+                options: AttributedString.MarkdownParsingOptions(
+                    interpretedSyntax: .full,
+                    failurePolicy: .returnPartiallyParsedIfPossible
+                )
+           ) {
             Text(attributedString)
                 .font(AppTypography.body(size: 15, weight: .medium, relativeTo: .subheadline))
                 .foregroundStyle(foregroundColor)
                 .fixedSize(horizontal: false, vertical: true)
         } else {
-            Text(content)
+            Text(verbatim: normalizedContent)
                 .font(AppTypography.body(size: 15, weight: .medium, relativeTo: .subheadline))
                 .foregroundStyle(foregroundColor)
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+
+    private var normalizedContent: String {
+        content
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(
+                of: #"<br\s*/?>"#,
+                with: "\n",
+                options: .regularExpression
+            )
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var shouldRenderAsMarkdown: Bool {
+        normalizedContent
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .contains { rawLine in
+                let line = String(rawLine).trimmingCharacters(in: .whitespaces)
+                guard !line.isEmpty else {
+                    return false
+                }
+
+                if line.hasPrefix("#") ||
+                    line.hasPrefix("- ") ||
+                    line.hasPrefix("* ") ||
+                    line.hasPrefix("> ") ||
+                    line.contains("**") ||
+                    line.contains("`") ||
+                    line.contains("[") {
+                    return true
+                }
+
+                return line.range(
+                    of: #"^\d+[.)]\s"#,
+                    options: .regularExpression
+                ) != nil
+            }
     }
 
     private var foregroundColor: Color {
