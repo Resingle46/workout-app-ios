@@ -418,10 +418,22 @@ enum DebugDiagnosticsSanitizer {
     }
 
     private static func isSensitiveKey(_ value: String) -> Bool {
-        containsSensitiveValue(
-            value.replacingOccurrences(of: "-", with: "")
+        let normalized = value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .replacingOccurrences(of: "-", with: "")
+            .replacingOccurrences(of: "_", with: "")
+        guard !normalized.isEmpty else {
+            return false
+        }
+
+        return sensitiveKeyFragments.contains { fragment in
+            normalized ==
+                fragment
+                .lowercased()
+                .replacingOccurrences(of: "-", with: "")
                 .replacingOccurrences(of: "_", with: "")
-        )
+        }
     }
 }
 

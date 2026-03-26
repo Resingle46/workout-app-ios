@@ -57,8 +57,14 @@ final class DebugDiagnosticsTests: XCTestCase {
             message: "chat_job_failed",
             metadata: [
                 "hasQuestion": "true",
+                "recentTurnsCount": "4",
+                "includedInlineSnapshot": "false",
+                "hasProgramComment": "true",
                 "question": "How should I train today?",
+                "answer": "Lift heavy today.",
                 "token": "secret-token",
+                "snapshot": "{\"profile\":\"secret\"}",
+                "programComment": "Sensitive coach note",
                 "url": "https://example.com/v1/coach/chat?token=secret"
             ]
         )
@@ -78,8 +84,14 @@ final class DebugDiagnosticsTests: XCTestCase {
         let trace = try XCTUnwrap(snapshot.networkTraces.first)
 
         XCTAssertEqual(log.metadata["hasQuestion"], "true")
+        XCTAssertEqual(log.metadata["recentTurnsCount"], "4")
+        XCTAssertEqual(log.metadata["includedInlineSnapshot"], "false")
+        XCTAssertEqual(log.metadata["hasProgramComment"], "true")
         XCTAssertNil(log.metadata["question"])
+        XCTAssertNil(log.metadata["answer"])
         XCTAssertNil(log.metadata["token"])
+        XCTAssertNil(log.metadata["snapshot"])
+        XCTAssertNil(log.metadata["programComment"])
         XCTAssertEqual(log.metadata["url"], "/v1/coach/chat")
         XCTAssertEqual(trace.method, "POST")
         XCTAssertEqual(trace.path, "/v1/coach/chat")
