@@ -1118,6 +1118,68 @@ describe("coach worker app", () => {
     expect(workflowCreate).toHaveBeenCalledTimes(1);
   });
 
+  it("creates a new workout summary job after a failed fingerprint match", async () => {
+    const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
+    const workflowCreate = vi.fn().mockResolvedValue(makeWorkflowInstanceStub());
+    const app = createApp({
+      createInferenceService: () => stubInferenceService(),
+      createStateRepository: () => repository,
+    });
+    const env = makeEnv({
+      WORKOUT_SUMMARY_WORKFLOW: makeWorkflowBinding(workflowCreate),
+    });
+    const request = makeWorkoutSummaryJobCreateRequestFixture();
+
+    const firstResponse = await app.fetch(
+      authedRequest("https://coach.example.workers.dev/v2/coach/workout-summary-jobs", {
+        method: "POST",
+        body: JSON.stringify(request),
+      }),
+      env
+    );
+    const firstBody = (await firstResponse.json()) as {
+      jobID: string;
+    };
+
+    await repository.failWorkoutSummaryJob(firstBody.jobID, {
+      completedAt: new Date().toISOString(),
+      error: {
+        code: "upstream_timeout",
+        message: "Workout summary inference timed out.",
+        retryable: true,
+      },
+      totalJobDurationMs: 500,
+    });
+
+    const retryRequest = {
+      ...makeWorkoutSummaryJobCreateRequestFixture(),
+      sessionID: request.sessionID,
+      fingerprint: request.fingerprint,
+      currentWorkout: request.currentWorkout,
+      recentExerciseHistory: request.recentExerciseHistory,
+      requestMode: "final" as const,
+      trigger: "final_after_finish" as const,
+      inputMode: "finished_session" as const,
+    };
+
+    const retryResponse = await app.fetch(
+      authedRequest("https://coach.example.workers.dev/v2/coach/workout-summary-jobs", {
+        method: "POST",
+        body: JSON.stringify(retryRequest),
+      }),
+      env
+    );
+    const retryBody = (await retryResponse.json()) as {
+      jobID: string;
+      reusedExistingJob: boolean;
+    };
+
+    expect(retryResponse.status).toBe(202);
+    expect(retryBody.jobID).not.toBe(firstBody.jobID);
+    expect(retryBody.reusedExistingJob).toBe(false);
+    expect(workflowCreate).toHaveBeenCalledTimes(2);
+  });
+
   it("completes a workout summary job and serves the result", async () => {
     const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
     const workflowCreate = vi.fn().mockResolvedValue(makeWorkflowInstanceStub());

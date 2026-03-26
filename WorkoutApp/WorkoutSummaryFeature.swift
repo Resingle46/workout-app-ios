@@ -141,6 +141,7 @@ struct WorkoutSummaryJobStatusResponse: Codable, Hashable, Sendable {
 enum WorkoutSummaryCardState: Hashable, Sendable {
     case hidden
     case loading
+    case unavailable
     case ready(WorkoutSummaryJobResult)
 }
 
@@ -504,10 +505,15 @@ final class WorkoutSummaryStore {
            let result = state.resultByFingerprint[latestFingerprint] {
             return .ready(result)
         }
+        if state.requestMode == .final,
+           state.error != nil {
+            return .unavailable
+        }
         if state.activeJobID != nil || isPending(state.status) {
             return .loading
         }
-        if state.requestMode == .final && state.error == nil {
+        if state.requestMode == .final,
+           state.error == nil {
             return .loading
         }
         return .hidden
@@ -663,6 +669,47 @@ final class WorkoutSummaryStore {
         } catch {
             logger.error(
                 "final_request_build_failed session=\(session.id.uuidString, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+            )
+        }
+    }
+
+    func retryFinalSummary(
+        for session: WorkoutSession,
+        using appStore: AppStore
+    ) async {
+        cancelPrewarmTask(for: session.id)
+        cancelPollTask(for: session.id)
+
+        guard configuration.canUseRemoteCoach else {
+            return
+        }
+
+        do {
+            let preparedRequest = try WorkoutSummaryRequestBuilder.finalRequest(
+                for: session,
+                using: appStore,
+                installID: installID
+            )
+            var state = sessionState(for: session.id)
+            state.latestFingerprint = preparedRequest.fingerprint
+            state.lastTrigger = .finalAfterFinish
+            state.requestMode = .final
+            state.status = .queued
+            state.activeJobID = nil
+            state.activeJobFingerprint = preparedRequest.fingerprint
+            state.error = nil
+            state.finalRequestedAt = .now
+            state.lastTouchedAt = .now
+            sessionStates[session.id] = state
+
+            logger.notice(
+                "summary_retry_requested session=\(session.id.uuidString, privacy: .public) fingerprint=\(preparedRequest.fingerprint, privacy: .public)"
+            )
+
+            await createOrReuseJob(preparedRequest)
+        } catch {
+            logger.error(
+                "summary_retry_build_failed session=\(session.id.uuidString, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
             )
         }
     }
@@ -879,6 +926,11 @@ final class WorkoutSummaryStore {
             nextDelayMs = max(pollIntervalProvider(pollAttempt), 0)
         }
 
+        handlePollingTimeout(
+            sessionID: sessionID,
+            jobID: jobID,
+            fingerprint: fingerprint
+        )
         clearPollTaskIfNeeded(sessionID: sessionID, jobID: jobID)
     }
 
@@ -973,6 +1025,36 @@ final class WorkoutSummaryStore {
 
         logger.error(
             "summary_failed session=\(sessionID.uuidString, privacy: .public) fingerprint=\(fingerprint, privacy: .public) error=\(state.error?.message ?? error.localizedDescription, privacy: .public)"
+        )
+        purgeSessionStates()
+    }
+
+    private func handlePollingTimeout(
+        sessionID: UUID,
+        jobID: String,
+        fingerprint: String
+    ) {
+        guard var state = sessionStates[sessionID],
+              state.activeJobID == jobID,
+              state.activeJobFingerprint == fingerprint,
+              isPending(state.status) else {
+            return
+        }
+
+        state.status = nil
+        state.activeJobID = nil
+        state.activeJobFingerprint = nil
+        state.error = CoachChatJobError(
+            code: "workout_summary_polling_timed_out",
+            message: workoutSummaryLocalizedString("workout_summary.unavailable_message"),
+            retryable: true
+        )
+        state.finalRequestedAt = nil
+        state.lastTouchedAt = .now
+        sessionStates[sessionID] = state
+
+        logger.error(
+            "summary_polling_timed_out session=\(sessionID.uuidString, privacy: .public) fingerprint=\(fingerprint, privacy: .public) jobID=\(jobID, privacy: .public)"
         )
         purgeSessionStates()
     }

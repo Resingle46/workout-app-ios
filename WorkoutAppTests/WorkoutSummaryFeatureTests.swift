@@ -283,21 +283,294 @@ final class WorkoutSummaryFeatureTests: XCTestCase {
         XCTAssertEqual(await client.statusCallCount, 1)
         XCTAssertEqual(summaryStore.cardState(for: activeSession.id), .ready(expectedResult))
     }
+
+    @MainActor
+    func testPollingTimeoutShowsUnavailableStateInsteadOfInfiniteLoading() async throws {
+        let bench = makeExercise(id: UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-000000000080")!, name: "Bench Press")
+        let session = makeSession(
+            sessionID: UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-000000000081")!,
+            workoutTemplateID: UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-000000000082")!,
+            title: "Push",
+            exercise: bench,
+            weight: 80,
+            reps: 8,
+            startedAt: Date(timeIntervalSince1970: 1_700_400_000),
+            completed: true
+        )
+        let store = makeAppStore(exercises: [bench], history: [])
+        let client = WorkoutSummaryTestClient(
+            createResponses: [
+                .success(
+                    makeCreateResponse(
+                        jobID: "job-timeout",
+                        sessionID: session.id,
+                        fingerprint: try WorkoutSummaryRequestBuilder.finalRequest(
+                            for: session,
+                            using: store,
+                            installID: "install-test"
+                        ).fingerprint,
+                        status: .queued
+                    )
+                )
+            ],
+            statusResponses: [
+                .success(
+                    makeStatusResponse(
+                        jobID: "job-timeout",
+                        sessionID: session.id,
+                        fingerprint: try WorkoutSummaryRequestBuilder.finalRequest(
+                            for: session,
+                            using: store,
+                            installID: "install-test"
+                        ).fingerprint,
+                        status: .running
+                    )
+                )
+            ]
+        )
+        let summaryStore = WorkoutSummaryStore(
+            client: client,
+            configuration: CoachRuntimeConfiguration(
+                isFeatureEnabled: true,
+                backendBaseURL: URL(string: "https://example.com"),
+                internalBearerToken: "token"
+            ),
+            localStateStore: CoachLocalStateStore(
+                defaults: UserDefaults(suiteName: "WorkoutSummaryFeatureTests.timeout.\(UUID().uuidString)")!,
+                generatedInstallID: "install-test"
+            ),
+            prewarmDebounceDuration: .zero,
+            maxPollingDuration: 0.01,
+            pollIntervalProvider: { _ in 0 }
+        )
+
+        await summaryStore.finalizeOrResumeSummary(for: session, using: store)
+        try? await Task.sleep(for: .milliseconds(30))
+
+        XCTAssertEqual(summaryStore.cardState(for: session.id), .unavailable)
+        XCTAssertEqual(await client.createCallCount, 1)
+        XCTAssertGreaterThan(await client.statusCallCount, 0)
+    }
+
+    @MainActor
+    func testErrorCardStateIsCompletionOnly() async throws {
+        let bench = makeExercise(id: UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-000000000090")!, name: "Bench Press")
+        let session = makeSession(
+            sessionID: UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-000000000091")!,
+            workoutTemplateID: UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-000000000092")!,
+            title: "Push",
+            exercise: bench,
+            weight: 80,
+            reps: 8,
+            startedAt: Date(timeIntervalSince1970: 1_700_500_000),
+            completed: true
+        )
+        let store = makeAppStore(exercises: [bench], history: [])
+        let finalRequest = try WorkoutSummaryRequestBuilder.finalRequest(
+            for: session,
+            using: store,
+            installID: "install-test"
+        )
+        let client = WorkoutSummaryTestClient(
+            createResponses: [
+                .success(
+                    makeCreateResponse(
+                        jobID: "job-failed",
+                        sessionID: session.id,
+                        fingerprint: finalRequest.fingerprint,
+                        status: .queued
+                    )
+                )
+            ],
+            statusResponses: [
+                .success(
+                    makeStatusResponse(
+                        jobID: "job-failed",
+                        sessionID: session.id,
+                        fingerprint: finalRequest.fingerprint,
+                        status: .failed,
+                        error: CoachChatJobError(
+                            code: "workout_summary_failed",
+                            message: "Workout summary failed.",
+                            retryable: true
+                        )
+                    )
+                )
+            ]
+        )
+        let summaryStore = WorkoutSummaryStore(
+            client: client,
+            configuration: CoachRuntimeConfiguration(
+                isFeatureEnabled: true,
+                backendBaseURL: URL(string: "https://example.com"),
+                internalBearerToken: "token"
+            ),
+            localStateStore: CoachLocalStateStore(
+                defaults: UserDefaults(suiteName: "WorkoutSummaryFeatureTests.visibility.\(UUID().uuidString)")!,
+                generatedInstallID: "install-test"
+            ),
+            prewarmDebounceDuration: .zero,
+            maxPollingDuration: 5,
+            pollIntervalProvider: { _ in 0 }
+        )
+
+        await summaryStore.finalizeOrResumeSummary(for: session, using: store)
+        try? await Task.sleep(for: .milliseconds(20))
+
+        XCTAssertEqual(
+            workoutSummaryCardState(
+                mode: .completion,
+                sessionID: session.id,
+                store: summaryStore
+            ),
+            .unavailable
+        )
+        XCTAssertEqual(
+            workoutSummaryCardState(
+                mode: .history,
+                sessionID: session.id,
+                store: summaryStore
+            ),
+            .hidden
+        )
+        XCTAssertEqual(
+            workoutSummaryCardState(
+                mode: .previousWorkout,
+                sessionID: session.id,
+                store: summaryStore
+            ),
+            .hidden
+        )
+    }
+
+    @MainActor
+    func testRetryStartsNewFinalRequestAgain() async throws {
+        let bench = makeExercise(id: UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-000000000100")!, name: "Bench Press")
+        let session = makeSession(
+            sessionID: UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-000000000101")!,
+            workoutTemplateID: UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-000000000102")!,
+            title: "Push",
+            exercise: bench,
+            weight: 82.5,
+            reps: 8,
+            startedAt: Date(timeIntervalSince1970: 1_700_600_000),
+            completed: true
+        )
+        let store = makeAppStore(exercises: [bench], history: [])
+        let finalRequest = try WorkoutSummaryRequestBuilder.finalRequest(
+            for: session,
+            using: store,
+            installID: "install-test"
+        )
+        let expectedResult = WorkoutSummaryJobResult(
+            headline: "Bench stayed stable",
+            summary: "You finished the work with steady performance after the retry.",
+            highlights: ["The final attempt produced a fresh result."],
+            nextWorkoutFocus: ["Keep the same load if the last rep stays clean."],
+            generationStatus: .model,
+            inferenceMode: .structured,
+            modelDurationMs: 900,
+            totalJobDurationMs: 1200
+        )
+        let client = WorkoutSummaryTestClient(
+            createResponses: [
+                .success(
+                    makeCreateResponse(
+                        jobID: "job-retry-1",
+                        sessionID: session.id,
+                        fingerprint: finalRequest.fingerprint,
+                        status: .queued
+                    )
+                ),
+                .success(
+                    makeCreateResponse(
+                        jobID: "job-retry-2",
+                        sessionID: session.id,
+                        fingerprint: finalRequest.fingerprint,
+                        status: .queued
+                    )
+                )
+            ],
+            statusResponses: [
+                .success(
+                    makeStatusResponse(
+                        jobID: "job-retry-1",
+                        sessionID: session.id,
+                        fingerprint: finalRequest.fingerprint,
+                        status: .failed,
+                        error: CoachChatJobError(
+                            code: "workout_summary_failed",
+                            message: "Workout summary failed.",
+                            retryable: true
+                        )
+                    )
+                ),
+                .success(
+                    makeStatusResponse(
+                        jobID: "job-retry-2",
+                        sessionID: session.id,
+                        fingerprint: finalRequest.fingerprint,
+                        status: .completed,
+                        result: expectedResult
+                    )
+                )
+            ]
+        )
+        let summaryStore = WorkoutSummaryStore(
+            client: client,
+            configuration: CoachRuntimeConfiguration(
+                isFeatureEnabled: true,
+                backendBaseURL: URL(string: "https://example.com"),
+                internalBearerToken: "token"
+            ),
+            localStateStore: CoachLocalStateStore(
+                defaults: UserDefaults(suiteName: "WorkoutSummaryFeatureTests.retry.\(UUID().uuidString)")!,
+                generatedInstallID: "install-test"
+            ),
+            prewarmDebounceDuration: .zero,
+            maxPollingDuration: 5,
+            pollIntervalProvider: { _ in 0 }
+        )
+
+        await summaryStore.finalizeOrResumeSummary(for: session, using: store)
+        try? await Task.sleep(for: .milliseconds(20))
+        XCTAssertEqual(summaryStore.cardState(for: session.id), .unavailable)
+
+        await summaryStore.retryFinalSummary(for: session, using: store)
+        try? await Task.sleep(for: .milliseconds(20))
+
+        XCTAssertEqual(await client.createCallCount, 2)
+        XCTAssertEqual(await client.statusCallCount, 2)
+        let createdRequests = await client.createdRequests
+        XCTAssertEqual(
+            createdRequests.map(\.requestMode),
+            [.final, .final]
+        )
+        XCTAssertEqual(summaryStore.cardState(for: session.id), .ready(expectedResult))
+    }
 }
 
 private actor WorkoutSummaryTestClient: CoachAPIClient {
-    let createResponse: WorkoutSummaryJobCreateResponse
-    let statusResponse: WorkoutSummaryJobStatusResponse
-
+    private var createResponses: [Result<WorkoutSummaryJobCreateResponse, CoachClientError>]
+    private var statusResponses: [Result<WorkoutSummaryJobStatusResponse, CoachClientError>]
     private(set) var createCallCount = 0
     private(set) var statusCallCount = 0
+    private(set) var createdRequests: [WorkoutSummaryJobCreateRequest] = []
 
     init(
         createResponse: WorkoutSummaryJobCreateResponse,
         statusResponse: WorkoutSummaryJobStatusResponse
     ) {
-        self.createResponse = createResponse
-        self.statusResponse = statusResponse
+        self.createResponses = [.success(createResponse)]
+        self.statusResponses = [.success(statusResponse)]
+    }
+
+    init(
+        createResponses: [Result<WorkoutSummaryJobCreateResponse, CoachClientError>],
+        statusResponses: [Result<WorkoutSummaryJobStatusResponse, CoachClientError>]
+    ) {
+        self.createResponses = createResponses
+        self.statusResponses = statusResponses
     }
 
     func syncSnapshot(_ request: CoachSnapshotSyncRequest) async throws -> CoachSnapshotSyncResponse {
@@ -353,7 +626,8 @@ private actor WorkoutSummaryTestClient: CoachAPIClient {
         _ request: WorkoutSummaryJobCreateRequest
     ) async throws -> WorkoutSummaryJobCreateResponse {
         createCallCount += 1
-        return createResponse
+        createdRequests.append(request)
+        return try nextCreateResponse()
     }
 
     func getWorkoutSummaryJob(
@@ -361,7 +635,7 @@ private actor WorkoutSummaryTestClient: CoachAPIClient {
         installID: String
     ) async throws -> WorkoutSummaryJobStatusResponse {
         statusCallCount += 1
-        return statusResponse
+        return try nextStatusResponse()
     }
 
     func sendChat(
@@ -377,6 +651,28 @@ private actor WorkoutSummaryTestClient: CoachAPIClient {
 
     func deleteRemoteState(installID: String) async throws {
         throw CoachClientError.invalidResponse
+    }
+
+    private func nextCreateResponse() throws -> WorkoutSummaryJobCreateResponse {
+        let result = createResponses.isEmpty
+            ? nil
+            : (createResponses.count > 1 ? createResponses.removeFirst() : createResponses[0])
+        guard let result else {
+            throw CoachClientError.invalidResponse
+        }
+
+        return try result.get()
+    }
+
+    private func nextStatusResponse() throws -> WorkoutSummaryJobStatusResponse {
+        let result = statusResponses.isEmpty
+            ? nil
+            : (statusResponses.count > 1 ? statusResponses.removeFirst() : statusResponses[0])
+        guard let result else {
+            throw CoachClientError.invalidResponse
+        }
+
+        return try result.get()
     }
 }
 
@@ -440,5 +736,43 @@ private func makeSession(
                 ]
             )
         ]
+    )
+}
+
+private func makeCreateResponse(
+    jobID: String,
+    sessionID: UUID,
+    fingerprint: String,
+    status: CoachChatJobStatus
+) -> WorkoutSummaryJobCreateResponse {
+    WorkoutSummaryJobCreateResponse(
+        jobID: jobID,
+        sessionID: sessionID,
+        fingerprint: fingerprint,
+        status: status,
+        createdAt: .now,
+        pollAfterMs: 0,
+        reusedExistingJob: false
+    )
+}
+
+private func makeStatusResponse(
+    jobID: String,
+    sessionID: UUID,
+    fingerprint: String,
+    status: CoachChatJobStatus,
+    result: WorkoutSummaryJobResult? = nil,
+    error: CoachChatJobError? = nil
+) -> WorkoutSummaryJobStatusResponse {
+    WorkoutSummaryJobStatusResponse(
+        jobID: jobID,
+        sessionID: sessionID,
+        fingerprint: fingerprint,
+        status: status,
+        createdAt: .now,
+        startedAt: .now,
+        completedAt: status == .queued || status == .running ? nil : .now,
+        result: result,
+        error: error
     )
 }

@@ -462,6 +462,9 @@
 "workout_summary.loading" = "Готовим краткую сводку по этой тренировке...";
 "workout_summary.highlights_title" = "Ключевые моменты";
 "workout_summary.next_focus_title" = "Фокус следующей тренировки";
+"workout_summary.unavailable_title" = "Сводка недоступна";
+"workout_summary.unavailable_message" = "AI-сводка сейчас недоступна. Экран тренировки остаётся рабочим, и можно попробовать ещё раз.";
+"workout_summary.retry" = "Повторить";
 "workout.target_weight" = "Цель";
 "workout.previous_weight" = "Прошлый";
 "stats.last_workout" = "Последняя тренировка";

@@ -496,6 +496,9 @@
 "workout_summary.loading" = "Preparing a quick summary for this workout...";
 "workout_summary.highlights_title" = "Highlights";
 "workout_summary.next_focus_title" = "Next workout focus";
+"workout_summary.unavailable_title" = "Summary unavailable";
+"workout_summary.unavailable_message" = "The AI summary is not available right now. You can keep using this screen and try again.";
+"workout_summary.retry" = "Retry";
 "workout.target_weight" = "Target";
 "workout.previous_weight" = "Last";
 "stats.last_workout" = "Last workout";

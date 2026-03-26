@@ -1565,7 +1565,10 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
       .prepare(
         `
           SELECT * FROM coach_workout_summary_jobs
-          WHERE install_id = ? AND session_id = ? AND fingerprint = ?
+          WHERE install_id = ?
+            AND session_id = ?
+            AND fingerprint = ?
+            AND status IN ('queued', 'running', 'completed')
           ORDER BY created_at DESC
           LIMIT 1
         `
@@ -1885,12 +1888,15 @@ export class InMemoryCoachStateRepository implements CoachStateStore {
       return existingByClientRequestID;
     }
 
-    const existingByFingerprint = [...this.workoutSummaryJobs.values()].find(
-      (job) =>
-        job.installID === input.installID &&
-        job.sessionID === input.sessionID &&
-        job.fingerprint === input.fingerprint
-    );
+    const existingByFingerprint = [...this.workoutSummaryJobs.values()]
+      .filter(
+        (job) =>
+          job.installID === input.installID &&
+          job.sessionID === input.sessionID &&
+          job.fingerprint === input.fingerprint &&
+          isReusableWorkoutSummaryJobStatus(job.status)
+      )
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
     if (existingByFingerprint) {
       return existingByFingerprint;
     }
@@ -2372,6 +2378,12 @@ function isRetryableJobErrorCode(code: string): boolean {
     code === "workflow_start_failed" ||
     code === "internal_error"
   );
+}
+
+function isReusableWorkoutSummaryJobStatus(
+  status: CoachChatJobStatus
+): boolean {
+  return status === "queued" || status === "running" || status === "completed";
 }
 
 function insightsCacheKey(

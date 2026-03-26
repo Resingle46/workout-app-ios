@@ -437,11 +437,24 @@ struct WorkoutSummaryView: View {
 
     @ViewBuilder
     private var workoutSummaryAICard: some View {
-        switch workoutSummaryStore.cardState(for: session.id) {
+        switch workoutSummaryCardState(
+            mode: mode,
+            sessionID: session.id,
+            store: workoutSummaryStore
+        ) {
         case .hidden:
             EmptyView()
         case .loading:
             WorkoutSummaryAILoadingCard()
+        case .unavailable:
+            WorkoutSummaryAIUnavailableCard {
+                Task {
+                    await workoutSummaryStore.retryFinalSummary(
+                        for: session,
+                        using: store
+                    )
+                }
+            }
         case .ready(let result):
             WorkoutSummaryAIResultCard(result: result)
         }
@@ -522,6 +535,19 @@ struct WorkoutSummaryView: View {
                 .foregroundStyle(AppTheme.secondaryText)
         }
     }
+}
+
+@MainActor
+func workoutSummaryCardState(
+    mode: WorkoutSummaryMode,
+    sessionID: UUID,
+    store: WorkoutSummaryStore
+) -> WorkoutSummaryCardState {
+    guard mode == .completion else {
+        return .hidden
+    }
+
+    return store.cardState(for: sessionID)
 }
 
 private struct WorkoutSummaryMetricCard: View {
@@ -632,6 +658,32 @@ private struct WorkoutSummaryAIResultCard: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
+            }
+        }
+    }
+}
+
+private struct WorkoutSummaryAIUnavailableCard: View {
+    let retryAction: () -> Void
+
+    var body: some View {
+        AppCard {
+            VStack(alignment: .leading, spacing: 14) {
+                Label("workout_summary.ai_title", systemImage: "sparkles")
+                    .font(AppTypography.caption(size: 13, weight: .semibold))
+                    .foregroundStyle(AppTheme.secondaryText)
+
+                Text("workout_summary.unavailable_title")
+                    .font(AppTypography.heading(size: 23))
+                    .foregroundStyle(AppTheme.primaryText)
+
+                Text("workout_summary.unavailable_message")
+                    .font(AppTypography.body(size: 16, weight: .medium, relativeTo: .subheadline))
+                    .foregroundStyle(AppTheme.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Button("workout_summary.retry", action: retryAction)
+                    .buttonStyle(AppSecondaryButtonStyle())
             }
         }
     }
