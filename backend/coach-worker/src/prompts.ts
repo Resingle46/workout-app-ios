@@ -2,7 +2,10 @@ import type {
   CoachChatRequest,
   CoachProfileInsightsRequest,
 } from "./schemas";
-import { buildInferencePromptContext } from "./context";
+import {
+  buildInferencePromptContext,
+  buildProfileInsightsPromptContext,
+} from "./context";
 
 type PromptMessage = {
   role: "system" | "user" | "assistant";
@@ -121,6 +124,52 @@ function coachAnalysisContextLines(
   return lines;
 }
 
+function profileInsightsContextLines(
+  snapshot: CoachProfileInsightsRequest["snapshot"]
+): string[] {
+  if (!snapshot) {
+    return [];
+  }
+
+  const promptContext = buildProfileInsightsPromptContext(snapshot);
+  const comment = snapshot.coachAnalysisSettings.programComment.trim();
+  const lines: string[] = [];
+
+  if (comment) {
+    lines.push(`Saved user note: ${comment.slice(0, 220)}`);
+  }
+
+  const constraintLines = highPriorityConstraintLines(snapshot);
+  if (constraintLines.length > 0) {
+    lines.push("High-priority user constraints:");
+    lines.push(...constraintLines);
+  }
+
+  lines.push("Goal summary JSON:");
+  lines.push(JSON.stringify(promptContext.goal));
+  lines.push("Consistency summary JSON:");
+  lines.push(JSON.stringify(promptContext.consistency));
+  lines.push("30-day progress JSON:");
+  lines.push(JSON.stringify(promptContext.progress30Days));
+
+  if (promptContext.recentPersonalRecords.length > 0) {
+    lines.push("Recent personal records JSON:");
+    lines.push(JSON.stringify(promptContext.recentPersonalRecords));
+  }
+
+  if (promptContext.relativeStrength.length > 0) {
+    lines.push("Relative strength JSON:");
+    lines.push(JSON.stringify(promptContext.relativeStrength));
+  }
+
+  if (promptContext.preferredProgram) {
+    lines.push("Preferred program summary JSON:");
+    lines.push(JSON.stringify(promptContext.preferredProgram));
+  }
+
+  return lines;
+}
+
 export function buildProfileInsightsMessages(
   request: CoachProfileInsightsRequest
 ): PromptMessage[] {
@@ -138,12 +187,8 @@ export function buildProfileInsightsMessages(
       role: "user",
       content: [
         "Return JSON that strictly matches the provided schema.",
-        ...coachAnalysisContextLines(request.snapshot, {
-          includeCoachAnalysisSettings: false,
-          includePreferredProgram: false,
-          includeUserComment: false,
-        }),
-      ].join("\n\n"),
+        ...profileInsightsContextLines(request.snapshot),
+      ].join("\n"),
     },
   ];
 }
@@ -203,12 +248,8 @@ export function buildFallbackProfileInsightsMessages(
     {
       role: "user",
       content: [
-        ...coachAnalysisContextLines(request.snapshot, {
-          includeCoachAnalysisSettings: false,
-          includePreferredProgram: false,
-          includeUserComment: false,
-        }),
-      ].join("\n\n"),
+        ...profileInsightsContextLines(request.snapshot),
+      ].join("\n"),
     },
   ];
 }

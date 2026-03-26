@@ -24,6 +24,11 @@ const PROMPT_RECENT_SESSION_EXERCISE_LIMIT = 3;
 const PROMPT_RECENT_PR_LIMIT = 2;
 const PROMPT_RELATIVE_STRENGTH_LIMIT = 3;
 const PROMPT_RECENT_WEEKLY_ACTIVITY_LIMIT = 2;
+const PROFILE_INSIGHTS_PROGRAM_WORKOUT_LIMIT = 3;
+const PROFILE_INSIGHTS_PROGRAM_EXERCISE_LIMIT = 3;
+const PROFILE_INSIGHTS_RECENT_PR_LIMIT = 2;
+const PROFILE_INSIGHTS_RELATIVE_STRENGTH_LIMIT = 2;
+const PROFILE_INSIGHTS_RECENT_WEEKLY_ACTIVITY_LIMIT = 2;
 const CANONICAL_LIFT_NAMES: Record<string, string> = {
   benchPress: "Barbell Bench Press",
   backSquat: "Back Squat",
@@ -97,6 +102,38 @@ export interface InferencePromptContext {
       averageReps?: number;
     }>;
   }>;
+}
+
+export interface ProfileInsightsPromptContext {
+  goal: CompactCoachSnapshot["analytics"]["goal"];
+  consistency: {
+    workoutsThisWeek: number;
+    weeklyTarget: number;
+    streakWeeks: number;
+    observedAverageWorkoutsPerWeek?: number;
+    recentWeeklyActivity: CompactCoachSnapshot["analytics"]["consistency"]["recentWeeklyActivity"];
+  };
+  progress30Days: CompactCoachSnapshot["analytics"]["progress30Days"];
+  recentPersonalRecords: Array<{
+    exerciseName: string;
+    achievedAt: string;
+    delta: number;
+  }>;
+  relativeStrength: Array<{
+    lift: string;
+    bestLoad?: number;
+    relativeToBodyWeight?: number;
+  }>;
+  preferredProgram?: {
+    title: string;
+    workoutCount: number;
+    workouts: Array<{
+      title: string;
+      focus: string;
+      exerciseCount: number;
+      exerciseNames: string[];
+    }>;
+  };
 }
 
 const ROTATION_PATTERNS = [
@@ -338,6 +375,54 @@ export function buildInferencePromptContext(
             averageReps: exercise.averageReps,
           })),
       })),
+  };
+}
+
+export function buildProfileInsightsPromptContext(
+  snapshot: CompactCoachSnapshot
+): ProfileInsightsPromptContext {
+  return {
+    goal: snapshot.analytics.goal,
+    consistency: {
+      workoutsThisWeek: snapshot.analytics.consistency.workoutsThisWeek,
+      weeklyTarget: snapshot.analytics.consistency.weeklyTarget,
+      streakWeeks: snapshot.analytics.consistency.streakWeeks,
+      observedAverageWorkoutsPerWeek: observedAverageWorkoutsPerWeek(
+        snapshot.analytics.consistency
+      ),
+      recentWeeklyActivity:
+        snapshot.analytics.consistency.recentWeeklyActivity.slice(
+          -PROFILE_INSIGHTS_RECENT_WEEKLY_ACTIVITY_LIMIT
+        ),
+    },
+    progress30Days: snapshot.analytics.progress30Days,
+    recentPersonalRecords: snapshot.analytics.recentPersonalRecords
+      .slice(0, PROFILE_INSIGHTS_RECENT_PR_LIMIT)
+      .map((record) => ({
+        exerciseName: record.exerciseName,
+        achievedAt: record.achievedAt,
+        delta: record.delta,
+      })),
+    relativeStrength: snapshot.analytics.relativeStrength.slice(
+      0,
+      PROFILE_INSIGHTS_RELATIVE_STRENGTH_LIMIT
+    ),
+    preferredProgram: snapshot.preferredProgram
+      ? {
+          title: snapshot.preferredProgram.title,
+          workoutCount: snapshot.preferredProgram.workoutCount,
+          workouts: snapshot.preferredProgram.workouts
+            .slice(0, PROFILE_INSIGHTS_PROGRAM_WORKOUT_LIMIT)
+            .map((workout) => ({
+              title: workout.title,
+              focus: workout.focus,
+              exerciseCount: workout.exerciseCount,
+              exerciseNames: workout.exercises
+                .slice(0, PROFILE_INSIGHTS_PROGRAM_EXERCISE_LIMIT)
+                .map((exercise) => exercise.exerciseName),
+            })),
+        }
+      : undefined,
   };
 }
 

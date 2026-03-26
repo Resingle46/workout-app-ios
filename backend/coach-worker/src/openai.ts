@@ -24,10 +24,10 @@ const PROFILE_INSIGHTS_STRUCTURED_MAX_TOKENS = 550;
 const PROFILE_INSIGHTS_PLAIN_TEXT_MAX_TOKENS = 260;
 const CHAT_STRUCTURED_MAX_TOKENS = 700;
 const CHAT_FALLBACK_MAX_TOKENS = 450;
-const PROFILE_INSIGHTS_TOTAL_BUDGET_MS = 30_000;
-const PROFILE_INSIGHTS_STRUCTURED_TIMEOUT_MS = 25_000;
-const PROFILE_INSIGHTS_PLAIN_TEXT_TIMEOUT_MS = 5_000;
-const PROFILE_INSIGHTS_FALLBACK_MIN_TIMEOUT_MS = 3_000;
+const PROFILE_INSIGHTS_TOTAL_BUDGET_MS = 28_000;
+const PROFILE_INSIGHTS_STRUCTURED_TIMEOUT_MS = 16_000;
+const PROFILE_INSIGHTS_PLAIN_TEXT_TIMEOUT_MS = 10_000;
+const PROFILE_INSIGHTS_FALLBACK_MIN_TIMEOUT_MS = 4_000;
 const CHAT_TOTAL_BUDGET_MS = 28_000;
 const CHAT_STRUCTURED_TIMEOUT_MS = 12_000;
 const CHAT_FALLBACK_TIMEOUT_MS = 12_000;
@@ -99,6 +99,15 @@ export class WorkersAICoachService implements CoachInferenceService {
     const operation = "profile_insights";
     const localFallback = buildNeutralProfileInsights(request);
     const startedAt = Date.now();
+    const sharedDetails = {
+      promptVariant: "profile_compact_context_v1",
+      programCommentChars:
+        request.snapshot?.coachAnalysisSettings.programComment.trim().length ?? 0,
+      recentPrCount: request.snapshot?.analytics.recentPersonalRecords.length ?? 0,
+      relativeStrengthCount: request.snapshot?.analytics.relativeStrength.length ?? 0,
+      preferredProgramWorkoutCount:
+        request.snapshot?.preferredProgram?.workouts.length ?? 0,
+    };
 
     try {
       const invocation = await this.runStructured({
@@ -107,6 +116,7 @@ export class WorkersAICoachService implements CoachInferenceService {
         schema: profileInsightsResponseJsonSchema,
         maxTokens: PROFILE_INSIGHTS_STRUCTURED_MAX_TOKENS,
         timeoutMs: PROFILE_INSIGHTS_STRUCTURED_TIMEOUT_MS,
+        extraDetails: sharedDetails,
       });
       const parsed = normalizeProfileInsightsResponse(
         parseStructuredOutput(
@@ -146,6 +156,7 @@ export class WorkersAICoachService implements CoachInferenceService {
             event: "coach_profile_local_fallback",
             operation,
             model: this.modelName,
+            promptVariant: sharedDetails.promptVariant,
             reasonCode: error.code,
             reasonDetails: error.details,
           })
@@ -165,6 +176,7 @@ export class WorkersAICoachService implements CoachInferenceService {
           event: "coach_profile_structured_fallback",
           operation,
           model: this.modelName,
+          promptVariant: sharedDetails.promptVariant,
           reasonCode: error.code,
           reasonDetails: error.details,
           remainingBudgetMs,
@@ -177,6 +189,7 @@ export class WorkersAICoachService implements CoachInferenceService {
             event: "coach_profile_local_fallback",
             operation,
             model: this.modelName,
+            promptVariant: sharedDetails.promptVariant,
             reasonCode: error.code,
             reasonDetails: error.details,
             degradedReason: "insufficient_fallback_budget",
@@ -202,6 +215,7 @@ export class WorkersAICoachService implements CoachInferenceService {
           ),
           includeFallbackNotice: false,
           extraDetails: {
+            ...sharedDetails,
             fallbackTrigger: error.code,
             remainingBudgetMs,
           },
@@ -234,17 +248,21 @@ export class WorkersAICoachService implements CoachInferenceService {
             event: "coach_profile_local_fallback",
             operation,
             model: this.modelName,
+            promptVariant: sharedDetails.promptVariant,
+            remainingBudgetMs,
+            structuredReasonCode: error.code,
+            structuredReasonDetails: error.details,
             reasonCode: fallbackError.code,
             reasonDetails: fallbackError.details,
           })
         );
       }
 
-      return {
-        data: localFallback,
-        model: this.modelName,
-        mode: "local_fallback",
-      };
+        return {
+          data: localFallback,
+          model: this.modelName,
+          mode: "local_fallback",
+        };
     }
   }
 

@@ -632,7 +632,11 @@ describe("WorkersAICoachService", () => {
     expect(promptText).toContain(
       "Do not recommend changing weekly training frequency."
     );
-    expect(promptText).toContain("Sanitized coach context JSON:");
+    expect(promptText).toContain("Goal summary JSON:");
+    expect(promptText).toContain("Consistency summary JSON:");
+    expect(promptText).toContain("30-day progress JSON:");
+    expect(promptText).toContain("Preferred program summary JSON:");
+    expect(promptText).not.toContain("Sanitized coach context JSON:");
     expect(promptText).not.toContain("Coach analysis settings JSON:");
     expect(promptText).not.toContain("Selected program for analysis JSON:");
     expect(promptText).not.toContain("\"selectedProgramID\"");
@@ -856,7 +860,7 @@ describe("WorkersAICoachService", () => {
         },
       });
 
-      await vi.advanceTimersByTimeAsync(30_050);
+      await vi.advanceTimersByTimeAsync(28_050);
       await expectation;
     } finally {
       vi.useRealTimers();

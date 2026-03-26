@@ -196,6 +196,24 @@ export function createApp(
         if (pathname === "/v1/coach/profile-insights" && request.method === "POST") {
           const body = profileInsightsRequestSchema.parse(await readJSON(request));
           const context = await stateRepository.resolveCoachContext(body);
+          const snapshotBytes = jsonByteLength(context.snapshot);
+          const programCommentChars =
+            context.snapshot.coachAnalysisSettings.programComment.trim().length;
+          const recentPrCount =
+            context.snapshot.analytics.recentPersonalRecords.length;
+          const relativeStrengthCount =
+            context.snapshot.analytics.relativeStrength.length;
+          const preferredProgramWorkoutCount =
+            context.snapshot.preferredProgram?.workouts.length ?? 0;
+          routeDiagnostics = {
+            installID: body.installID,
+            contextSource: context.source,
+            snapshotBytes,
+            programCommentChars,
+            recentPrCount,
+            relativeStrengthCount,
+            preferredProgramWorkoutCount,
+          };
           const cachedResponse = context.cacheAllowed
             ? await stateRepository.getInsightsCache(
                 body.installID,
@@ -216,6 +234,11 @@ export function createApp(
               installID: body.installID,
               contextSource: context.source,
               insightsCacheHit: true,
+              snapshotBytes,
+              programCommentChars,
+              recentPrCount,
+              relativeStrengthCount,
+              preferredProgramWorkoutCount,
             });
             return json(reusableCachedResponse, 200);
           }
@@ -254,7 +277,11 @@ export function createApp(
             inferenceMode: result.mode,
             contextSource: context.source,
             insightsCacheHit: false,
-            snapshotBytes: jsonByteLength(context.snapshot),
+            snapshotBytes,
+            programCommentChars,
+            recentPrCount,
+            relativeStrengthCount,
+            preferredProgramWorkoutCount,
             promptBytes: result.promptBytes,
             modelDurationMs,
           });
