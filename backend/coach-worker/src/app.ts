@@ -5,6 +5,9 @@ import {
   backupReconcileResponseSchema,
   backupUploadRequestSchema,
   backupUploadResponseSchema,
+  chatJobCreateRequestSchema,
+  chatJobCreateResponseSchema,
+  chatJobStatusResponseSchema,
   chatRequestSchema,
   coachPreferencesUpdateRequestSchema,
   coachPreferencesUpdateResponseSchema,
@@ -17,11 +20,13 @@ import {
 import {
   CoachInferenceServiceError,
   DEFAULT_AI_MODEL,
+  buildOpaqueResponseID,
   createWorkersAICoachService,
   type CoachInferenceService,
   type Env,
 } from "./openai";
 import {
+  ActiveCoachChatJobError,
   CloudflareCoachStateRepository,
   MissingCoachContextError,
   MissingRemoteBackupError,
@@ -39,6 +44,8 @@ interface AppDependencies {
   now: () => number;
   requestId: () => string;
 }
+
+const CHAT_JOB_INITIAL_POLL_AFTER_MS = 1_500;
 
 export function createApp(
   overrides: Partial<AppDependencies> = {}
@@ -290,6 +297,140 @@ export function createApp(
           return json(result.data, 200);
         }
 
+        if (pathname === "/v2/coach/chat-jobs" && request.method === "POST") {
+          const body = chatJobCreateRequestSchema.parse(await readJSON(request));
+          const context = await stateRepository.resolveCoachContext(body);
+          const storedMemory = context.cacheAllowed
+            ? await stateRepository.getChatMemory(body.installID, context.contextHash)
+            : null;
+          const recentTurns = normalizeChatTurns(
+            storedMemory?.recentTurns?.length
+              ? storedMemory.recentTurns
+              : body.clientRecentTurns
+          );
+          const chatMemoryHit = Boolean(storedMemory?.recentTurns?.length);
+          const snapshotBytes = jsonByteLength(context.snapshot);
+          const recentTurnCount = recentTurns.length;
+          const recentTurnChars = totalChatTurnChars(recentTurns);
+          const questionChars = body.question.trim().length;
+          const createdAt = new Date(deps.now()).toISOString();
+          const jobID = buildChatJobID();
+          const responseID = buildOpaqueResponseID();
+
+          routeDiagnostics = {
+            installID: body.installID,
+            contextSource: context.source,
+            chatMemoryHit,
+            snapshotBytes,
+            recentTurnCount,
+            recentTurnChars,
+            questionChars,
+            clientRequestID: body.clientRequestID,
+          };
+
+          const job = await stateRepository.createChatJob({
+            jobID,
+            installID: body.installID,
+            clientRequestID: body.clientRequestID,
+            createdAt,
+            preparedRequest: {
+              ...body,
+              snapshotHash: context.contextHash,
+              snapshot: context.snapshot,
+              snapshotUpdatedAt:
+                context.backupHead?.uploadedAt ?? body.snapshotUpdatedAt,
+              clientRecentTurns: recentTurns,
+              responseID,
+            },
+            contextHash: context.contextHash,
+            contextSource: context.source,
+            chatMemoryHit,
+            snapshotBytes,
+            recentTurnCount,
+            recentTurnChars,
+            questionChars,
+          });
+
+          if (job.jobID === jobID) {
+            try {
+              const chatWorkflow = mustGetChatWorkflow(env);
+              await chatWorkflow.create({
+                id: job.jobID,
+                params: { jobID: job.jobID },
+              });
+            } catch (error) {
+              const failedAt = new Date(deps.now()).toISOString();
+              await stateRepository.failChatJob(job.jobID, {
+                completedAt: failedAt,
+                error: {
+                  code: "workflow_start_failed",
+                  message: "Chat workflow failed to start.",
+                  retryable: true,
+                },
+                totalJobDurationMs: Math.max(
+                  deps.now() - Date.parse(job.createdAt),
+                  0
+                ),
+              });
+              throw new RequestError(
+                500,
+                "workflow_start_failed",
+                "Coach backend is not configured.",
+                {
+                  ...routeDiagnostics,
+                  providerMessage:
+                    error instanceof Error
+                      ? error.message.slice(0, 200)
+                      : "Unknown workflow start error",
+                }
+              );
+            }
+          }
+
+          const response = chatJobCreateResponseSchema.parse({
+            jobID: job.jobID,
+            status: job.status,
+            createdAt: job.createdAt,
+            pollAfterMs: CHAT_JOB_INITIAL_POLL_AFTER_MS,
+          });
+
+          console.log(
+            JSON.stringify({
+              event: "coach_chat_job_created",
+              requestID,
+              jobID: job.jobID,
+              installID: job.installID,
+              clientRequestID: job.clientRequestID,
+              contextHash: job.contextHash,
+              contextSource: job.contextSource,
+              chatMemoryHit: job.chatMemoryHit,
+              snapshotBytes: job.snapshotBytes,
+              recentTurnCount: job.recentTurnCount,
+              recentTurnChars: job.recentTurnChars,
+              questionChars: job.questionChars,
+              promptVersion: job.promptVersion,
+              model: job.model,
+            })
+          );
+
+          logRequest({
+            requestID,
+            route: pathname,
+            method: request.method,
+            status: 202,
+            durationMs: deps.now() - startedAt,
+            jobID: job.jobID,
+            installID: body.installID,
+            contextSource: context.source,
+            chatMemoryHit,
+            snapshotBytes,
+            recentTurnCount,
+            recentTurnChars,
+            questionChars,
+          });
+          return json(response, 202);
+        }
+
         if (pathname === "/v1/coach/chat" && request.method === "POST") {
           const body = chatRequestSchema.parse(await readJSON(request));
           const context = await stateRepository.resolveCoachContext(body);
@@ -360,6 +501,46 @@ export function createApp(
           return json(result.data, 200);
         }
 
+        const chatJobPath = parseChatJobPath(pathname);
+        if (chatJobPath && request.method === "GET") {
+          const installID = parseInstallIDQuery(request);
+          const job = await stateRepository.getChatJob(chatJobPath.jobID, installID);
+          if (!job) {
+            throw new RequestError(404, "chat_job_not_found", "Chat job not found.");
+          }
+
+          const response = chatJobStatusResponseSchema.parse({
+            jobID: job.jobID,
+            status: job.status,
+            createdAt: job.createdAt,
+            startedAt: job.startedAt,
+            completedAt: job.completedAt,
+            result: job.result,
+            error: job.error,
+          });
+
+          logRequest({
+            requestID,
+            route: pathname,
+            method: request.method,
+            status: 200,
+            durationMs: deps.now() - startedAt,
+            jobID: job.jobID,
+            installID: job.installID,
+            contextSource: job.contextSource,
+            chatMemoryHit: job.chatMemoryHit,
+            snapshotBytes: job.snapshotBytes,
+            recentTurnCount: job.recentTurnCount,
+            recentTurnChars: job.recentTurnChars,
+            questionChars: job.questionChars,
+            inferenceMode: job.inferenceMode,
+            promptBytes: job.promptBytes,
+            modelDurationMs: job.modelDurationMs,
+            totalJobDurationMs: job.totalJobDurationMs,
+          });
+          return json(response, 200);
+        }
+
         throw new RequestError(404, "not_found", "Route not found");
       } catch (error) {
         const mapped = mapError(error, requestID);
@@ -379,7 +560,7 @@ export function createApp(
           method: request.method,
           status: mapped.status,
           durationMs: deps.now() - startedAt,
-          errorCode: mapped.body.error.code,
+          errorCode: extractMappedErrorCode(mapped.body),
           errorDetails,
         });
         return json(mapped.body, mapped.status);
@@ -440,6 +621,9 @@ function missingSecrets(env: Env): string[] {
   if (!env.APP_META_DB) {
     missing.push("APP_META_DB");
   }
+  if (!env.COACH_CHAT_WORKFLOW) {
+    missing.push("COACH_CHAT_WORKFLOW");
+  }
   if (!env.COACH_INTERNAL_TOKEN?.trim()) {
     missing.push("COACH_INTERNAL_TOKEN");
   }
@@ -486,6 +670,20 @@ function mustGetMetaDB(env: Env): CoachD1Database {
   }
 
   return db;
+}
+
+function mustGetChatWorkflow(env: Env): NonNullable<Env["COACH_CHAT_WORKFLOW"]> {
+  const workflow = env.COACH_CHAT_WORKFLOW;
+  if (!workflow) {
+    throw new RequestError(
+      500,
+      "server_misconfigured",
+      "Coach backend is not configured.",
+      { missing: ["COACH_CHAT_WORKFLOW"] }
+    );
+  }
+
+  return workflow;
 }
 
 function assertAuthorization(request: Request, env: Env): void {
@@ -542,7 +740,7 @@ function mapError(
   requestID: string
 ): {
   status: number;
-  body: { error: { code: string; message: string; requestID: string } };
+  body: Record<string, unknown>;
 } {
   if (error instanceof RequestError) {
     return {
@@ -579,6 +777,20 @@ function mapError(
           message: "Remote backup not found.",
           requestID,
         },
+      },
+    };
+  }
+
+  if (error instanceof ActiveCoachChatJobError) {
+    return {
+      status: 409,
+      body: {
+        error: {
+          code: "chat_job_in_progress",
+          message: "Coach chat job already in progress.",
+          requestID,
+        },
+        jobID: error.jobID,
       },
     };
   }
@@ -679,6 +891,49 @@ function mergeErrorDetails(
     ...(routeDiagnostics ?? {}),
     ...(errorDetails ?? {}),
   };
+}
+
+function extractMappedErrorCode(body: Record<string, unknown>): string | undefined {
+  const error = body.error;
+  if (typeof error !== "object" || error === null) {
+    return undefined;
+  }
+
+  const code = (error as { code?: unknown }).code;
+  return typeof code === "string" ? code : undefined;
+}
+
+function buildChatJobID(): string {
+  return `coach-job_${crypto.randomUUID()}`;
+}
+
+function parseChatJobPath(
+  pathname: string
+): {
+  jobID: string;
+} | null {
+  const match = pathname.match(/^\/v2\/coach\/chat-jobs\/([^/]+)$/);
+  if (!match?.[1]) {
+    return null;
+  }
+
+  return {
+    jobID: decodeURIComponent(match[1]),
+  };
+}
+
+function parseInstallIDQuery(request: Request): string {
+  const installID = new URL(request.url).searchParams.get("installID")?.trim();
+  if (!installID) {
+    throw new RequestError(
+      400,
+      "invalid_request",
+      "Request body does not match the coach contract.",
+      { field: "installID" }
+    );
+  }
+
+  return installID;
 }
 
 function totalChatTurnChars(

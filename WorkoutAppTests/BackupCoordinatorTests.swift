@@ -1395,6 +1395,7 @@ final class BackupCoordinatorTests: XCTestCase {
         XCTAssertEqual(coachStore.messages.count, 2)
         XCTAssertEqual(coachStore.messages.first?.role, .user)
         XCTAssertEqual(coachStore.messages.last?.role, .assistant)
+        XCTAssertNil(coachStore.activeChatJobID)
 
         let snapshotData = try JSONEncoder().encode(store.currentSnapshot())
         let snapshotJSON = String(data: snapshotData, encoding: .utf8) ?? ""
@@ -1404,6 +1405,34 @@ final class BackupCoordinatorTests: XCTestCase {
         coachStore.resetConversation()
 
         XCTAssertTrue(coachStore.messages.isEmpty)
+    }
+
+    @MainActor
+    func testCoachStoreShowsTerminalJobFailure() async {
+        let store = AppStore()
+        store.apply(snapshot: makeSnapshot())
+
+        let coachStore = CoachStore(
+            client: StubCoachAPIClient(
+                shouldFailInsights: false,
+                shouldFailChat: true
+            ),
+            configuration: CoachRuntimeConfiguration(
+                isFeatureEnabled: true,
+                backendBaseURL: URL(string: "https://example.com"),
+                internalBearerToken: "internal-token"
+            )
+        )
+
+        await coachStore.sendMessage("How should I progress?", using: store)
+
+        XCTAssertEqual(coachStore.messages.count, 2)
+        XCTAssertEqual(coachStore.messages.first?.role, .user)
+        XCTAssertEqual(coachStore.messages.last?.role, .assistant)
+        XCTAssertTrue(coachStore.messages.last?.isStatus ?? false)
+        XCTAssertEqual(coachStore.messages.last?.content, "Chat failed")
+        XCTAssertEqual(coachStore.lastChatErrorDescription, "Chat failed")
+        XCTAssertNil(coachStore.activeChatJobID)
     }
 
     @MainActor
@@ -1432,6 +1461,7 @@ final class BackupCoordinatorTests: XCTestCase {
         XCTAssertEqual(lastRequest.clientRecentTurns.count, 6)
         XCTAssertEqual(lastRequest.clientRecentTurns.first?.content, "Question 3")
         XCTAssertEqual(lastRequest.clientRecentTurns.last?.content, "Coach answer")
+        XCTAssertNil(coachStore.activeChatJobID)
     }
 
     @MainActor
@@ -1551,7 +1581,6 @@ final class BackupCoordinatorTests: XCTestCase {
         let insights = CoachFallbackInsightsFactory.make(from: store)
         let combinedRecommendations = insights.recommendations.joined(separator: " ").lowercased()
 
-        XCTAssertTrue(insights.suggestedChanges.isEmpty)
         XCTAssertFalse(combinedRecommendations.contains("saved program has"))
         XCTAssertFalse(combinedRecommendations.contains("weekly target is"))
         XCTAssertFalse(combinedRecommendations.contains("add a workout day"))
@@ -2151,7 +2180,29 @@ private struct CloudSyncRecordingCoachAPIClient: CoachAPIClient {
         capabilityScope: CoachCapabilityScope,
         runtimeContextDelta: CoachRuntimeContextDelta?
     ) async throws -> CoachProfileInsights {
-        CoachProfileInsights(summary: "Remote summary", recommendations: ["Remote recommendation"], suggestedChanges: [])
+        CoachProfileInsights(
+            summary: "Remote summary",
+            recommendations: ["Remote recommendation"]
+        )
+    }
+
+    func createChatJob(
+        locale: String,
+        question: String,
+        clientRequestID: String,
+        clientRecentTurns: [CoachConversationMessage],
+        snapshotEnvelope: CoachSnapshotEnvelope,
+        capabilityScope: CoachCapabilityScope,
+        runtimeContextDelta: CoachRuntimeContextDelta?
+    ) async throws -> CoachChatJobCreateResponse {
+        makeQueuedChatJobCreateResponse()
+    }
+
+    func getChatJob(
+        jobID: String,
+        installID: String
+    ) async throws -> CoachChatJobStatusResponse {
+        makeCompletedChatJobStatusResponse(jobID: jobID)
     }
 
     func sendChat(
@@ -2162,7 +2213,12 @@ private struct CloudSyncRecordingCoachAPIClient: CoachAPIClient {
         capabilityScope: CoachCapabilityScope,
         runtimeContextDelta: CoachRuntimeContextDelta?
     ) async throws -> CoachChatResponse {
-        CoachChatResponse(answerMarkdown: "Coach answer", responseID: "response-1", followUps: [], suggestedChanges: [])
+        CoachChatResponse(
+            answerMarkdown: "Coach answer",
+            responseID: "response-1",
+            followUps: [],
+            generationStatus: .model
+        )
     }
 
     func deleteRemoteState(installID: String) async throws {}
@@ -2270,9 +2326,31 @@ private struct StubCoachAPIClient: CoachAPIClient {
 
         return CoachProfileInsights(
             summary: "Remote summary",
-            recommendations: ["Remote recommendation"],
-            suggestedChanges: []
+            recommendations: ["Remote recommendation"]
         )
+    }
+
+    func createChatJob(
+        locale: String,
+        question: String,
+        clientRequestID: String,
+        clientRecentTurns: [CoachConversationMessage],
+        snapshotEnvelope: CoachSnapshotEnvelope,
+        capabilityScope: CoachCapabilityScope,
+        runtimeContextDelta: CoachRuntimeContextDelta?
+    ) async throws -> CoachChatJobCreateResponse {
+        makeQueuedChatJobCreateResponse()
+    }
+
+    func getChatJob(
+        jobID: String,
+        installID: String
+    ) async throws -> CoachChatJobStatusResponse {
+        if shouldFailChat {
+            return makeFailedChatJobStatusResponse(jobID: jobID)
+        }
+
+        return makeCompletedChatJobStatusResponse(jobID: jobID)
     }
 
     func sendChat(
@@ -2291,7 +2369,7 @@ private struct StubCoachAPIClient: CoachAPIClient {
             answerMarkdown: "Coach answer",
             responseID: "response-1",
             followUps: ["Next question"],
-            suggestedChanges: []
+            generationStatus: .model
         )
     }
 
@@ -2321,6 +2399,56 @@ private actor SnapshotRequestRecorder {
     func record(_ request: RecordedCoachSnapshotRequest) {
         requests.append(request)
     }
+}
+
+private func makeQueuedChatJobCreateResponse(jobID: String = "job-1") -> CoachChatJobCreateResponse {
+    CoachChatJobCreateResponse(
+        jobID: jobID,
+        status: .queued,
+        createdAt: .now,
+        pollAfterMs: 0
+    )
+}
+
+private func makeCompletedChatJobStatusResponse(jobID: String = "job-1") -> CoachChatJobStatusResponse {
+    let completedAt = Date()
+    return CoachChatJobStatusResponse(
+        jobID: jobID,
+        status: .completed,
+        createdAt: completedAt,
+        startedAt: completedAt,
+        completedAt: completedAt,
+        result: CoachChatJobResult(
+            answerMarkdown: "Coach answer",
+            responseID: "response-1",
+            followUps: ["Next question"],
+            generationStatus: .model,
+            inferenceMode: .structured,
+            modelDurationMs: 1200,
+            totalJobDurationMs: 1500
+        ),
+        error: nil
+    )
+}
+
+private func makeFailedChatJobStatusResponse(
+    jobID: String = "job-1",
+    message: String = "Chat failed"
+) -> CoachChatJobStatusResponse {
+    let completedAt = Date()
+    return CoachChatJobStatusResponse(
+        jobID: jobID,
+        status: .failed,
+        createdAt: completedAt,
+        startedAt: completedAt,
+        completedAt: completedAt,
+        result: nil,
+        error: CoachChatJobError(
+            code: "failed_chat",
+            message: message,
+            retryable: true
+        )
+    )
 }
 
 private struct RecordingCoachAPIClient: CoachAPIClient {
@@ -2401,9 +2529,34 @@ private struct RecordingCoachAPIClient: CoachAPIClient {
     ) async throws -> CoachProfileInsights {
         CoachProfileInsights(
             summary: "Remote summary",
-            recommendations: ["Remote recommendation"],
-            suggestedChanges: []
+            recommendations: ["Remote recommendation"]
         )
+    }
+
+    func createChatJob(
+        locale: String,
+        question: String,
+        clientRequestID: String,
+        clientRecentTurns: [CoachConversationMessage],
+        snapshotEnvelope: CoachSnapshotEnvelope,
+        capabilityScope: CoachCapabilityScope,
+        runtimeContextDelta: CoachRuntimeContextDelta?
+    ) async throws -> CoachChatJobCreateResponse {
+        await recorder.record(
+            RecordedCoachChatRequest(
+                question: question,
+                clientRecentTurns: clientRecentTurns
+            )
+        )
+
+        return makeQueuedChatJobCreateResponse()
+    }
+
+    func getChatJob(
+        jobID: String,
+        installID: String
+    ) async throws -> CoachChatJobStatusResponse {
+        makeCompletedChatJobStatusResponse(jobID: jobID)
     }
 
     func sendChat(
@@ -2425,7 +2578,7 @@ private struct RecordingCoachAPIClient: CoachAPIClient {
             answerMarkdown: "Coach answer",
             responseID: "response-1",
             followUps: ["Next question"],
-            suggestedChanges: []
+            generationStatus: .model
         )
     }
 
@@ -2514,9 +2667,27 @@ private struct RecordingSnapshotCoachAPIClient: CoachAPIClient {
 
         return CoachProfileInsights(
             summary: "Remote summary",
-            recommendations: ["Remote recommendation"],
-            suggestedChanges: []
+            recommendations: ["Remote recommendation"]
         )
+    }
+
+    func createChatJob(
+        locale: String,
+        question: String,
+        clientRequestID: String,
+        clientRecentTurns: [CoachConversationMessage],
+        snapshotEnvelope: CoachSnapshotEnvelope,
+        capabilityScope: CoachCapabilityScope,
+        runtimeContextDelta: CoachRuntimeContextDelta?
+    ) async throws -> CoachChatJobCreateResponse {
+        makeQueuedChatJobCreateResponse()
+    }
+
+    func getChatJob(
+        jobID: String,
+        installID: String
+    ) async throws -> CoachChatJobStatusResponse {
+        makeCompletedChatJobStatusResponse(jobID: jobID)
     }
 
     func sendChat(
@@ -2531,7 +2702,7 @@ private struct RecordingSnapshotCoachAPIClient: CoachAPIClient {
             answerMarkdown: "Coach answer",
             responseID: "response-1",
             followUps: ["Next question"],
-            suggestedChanges: []
+            generationStatus: .model
         )
     }
 
@@ -2576,9 +2747,27 @@ private struct RecordingLegacySnapshotFallbackCoachAPIClient: CoachAPIClient {
 
         return CoachProfileInsights(
             summary: "Remote summary",
-            recommendations: ["Remote recommendation"],
-            suggestedChanges: []
+            recommendations: ["Remote recommendation"]
         )
+    }
+
+    func createChatJob(
+        locale: String,
+        question: String,
+        clientRequestID: String,
+        clientRecentTurns: [CoachConversationMessage],
+        snapshotEnvelope: CoachSnapshotEnvelope,
+        capabilityScope: CoachCapabilityScope,
+        runtimeContextDelta: CoachRuntimeContextDelta?
+    ) async throws -> CoachChatJobCreateResponse {
+        makeQueuedChatJobCreateResponse()
+    }
+
+    func getChatJob(
+        jobID: String,
+        installID: String
+    ) async throws -> CoachChatJobStatusResponse {
+        makeCompletedChatJobStatusResponse(jobID: jobID)
     }
 
     func sendChat(
@@ -2593,7 +2782,7 @@ private struct RecordingLegacySnapshotFallbackCoachAPIClient: CoachAPIClient {
             answerMarkdown: "Coach answer",
             responseID: "response-1",
             followUps: ["Next question"],
-            suggestedChanges: []
+            generationStatus: .model
         )
     }
 

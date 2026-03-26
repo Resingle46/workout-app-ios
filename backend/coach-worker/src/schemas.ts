@@ -268,6 +268,12 @@ export const chatRequestSchema = z
   })
   .strict();
 
+export const chatJobCreateRequestSchema = chatRequestSchema
+  .extend({
+    clientRequestID: z.uuid(),
+  })
+  .strict();
+
 export const snapshotSyncRequestSchema = z
   .object({
     installID: installIDSchema,
@@ -496,6 +502,61 @@ export const chatResponseSchema = z
   })
   .strict();
 
+export const chatJobStatusSchema = z.enum([
+  "queued",
+  "running",
+  "completed",
+  "failed",
+  "canceled",
+]);
+
+export const chatInferenceModeSchema = z.enum([
+  "structured",
+  "plain_text_fallback",
+  "degraded_fallback",
+]);
+
+export const chatJobResultSchema = z
+  .object({
+    answerMarkdown: nonEmptyStringSchema.max(6000),
+    responseID: nonEmptyStringSchema.max(200),
+    followUps: z.array(nonEmptyStringSchema.max(160)).max(4),
+    generationStatus: coachResponseGenerationStatusSchema.default("fallback"),
+    inferenceMode: chatInferenceModeSchema,
+    modelDurationMs: z.int().min(0).optional(),
+    totalJobDurationMs: z.int().min(0).optional(),
+  })
+  .strict();
+
+export const chatJobErrorSchema = z
+  .object({
+    code: nonEmptyStringSchema.max(200),
+    message: nonEmptyStringSchema.max(500),
+    retryable: z.boolean(),
+  })
+  .strict();
+
+export const chatJobCreateResponseSchema = z
+  .object({
+    jobID: nonEmptyStringSchema.max(200),
+    status: chatJobStatusSchema,
+    createdAt: isoDateTimeSchema,
+    pollAfterMs: z.int().min(0),
+  })
+  .strict();
+
+export const chatJobStatusResponseSchema = z
+  .object({
+    jobID: nonEmptyStringSchema.max(200),
+    status: chatJobStatusSchema,
+    createdAt: isoDateTimeSchema,
+    startedAt: isoDateTimeSchema.optional(),
+    completedAt: isoDateTimeSchema.optional(),
+    result: chatJobResultSchema.optional(),
+    error: chatJobErrorSchema.optional(),
+  })
+  .strict();
+
 export const chatResponseModelOutputSchema = z
   .object({
     answerMarkdown: nonEmptyStringSchema.max(6000),
@@ -509,6 +570,7 @@ export type CoachProfileInsightsRequest = z.infer<
   typeof profileInsightsRequestSchema
 >;
 export type CoachChatRequest = z.infer<typeof chatRequestSchema>;
+export type CoachChatJobCreateRequest = z.infer<typeof chatJobCreateRequestSchema>;
 export type CoachSnapshotSyncRequest = z.infer<typeof snapshotSyncRequestSchema>;
 export type CoachSnapshotSyncResponse = z.infer<
   typeof snapshotSyncResponseSchema
@@ -537,6 +599,16 @@ export type CoachProfileInsightsResponse = z.infer<
   typeof profileInsightsResponseSchema
 >;
 export type CoachChatResponse = z.infer<typeof chatResponseSchema>;
+export type CoachChatJobStatus = z.infer<typeof chatJobStatusSchema>;
+export type CoachChatInferenceMode = z.infer<typeof chatInferenceModeSchema>;
+export type CoachChatJobResult = z.infer<typeof chatJobResultSchema>;
+export type CoachChatJobError = z.infer<typeof chatJobErrorSchema>;
+export type CoachChatJobCreateResponse = z.infer<
+  typeof chatJobCreateResponseSchema
+>;
+export type CoachChatJobStatusResponse = z.infer<
+  typeof chatJobStatusResponseSchema
+>;
 export type CompactCoachSnapshot = z.infer<typeof coachContextPayloadSchema>;
 export type CoachConversationTurn = z.infer<typeof coachConversationTurnSchema>;
 export type CoachRuntimeContextDelta = z.infer<typeof runtimeContextDeltaSchema>;

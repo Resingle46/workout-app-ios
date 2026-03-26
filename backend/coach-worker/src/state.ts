@@ -16,6 +16,11 @@ import type {
   BackupReconcileResponse,
   BackupUploadRequest,
   BackupUploadResponse,
+  CoachChatInferenceMode,
+  CoachChatJobCreateRequest,
+  CoachChatJobError,
+  CoachChatJobResult,
+  CoachChatJobStatus,
   CoachChatRequest,
   CoachConversationTurn,
   CoachPreferencesUpdateRequest,
@@ -97,6 +102,79 @@ export interface ResolvedCoachContext {
   backupHead?: BackupHead;
 }
 
+export interface PreparedCoachChatJobRequest extends CoachChatRequest {
+  clientRequestID: string;
+  responseID: string;
+}
+
+export interface CreateCoachChatJobInput {
+  jobID: string;
+  installID: string;
+  clientRequestID: string;
+  createdAt: string;
+  preparedRequest: PreparedCoachChatJobRequest;
+  contextHash: string;
+  contextSource: ResolvedCoachContext["source"];
+  chatMemoryHit: boolean;
+  snapshotBytes: number;
+  recentTurnCount: number;
+  recentTurnChars: number;
+  questionChars: number;
+}
+
+export interface CompleteCoachChatJobInput {
+  completedAt: string;
+  result: CoachChatJobResult;
+  promptBytes?: number;
+  fallbackPromptBytes?: number;
+  modelDurationMs?: number;
+  fallbackModelDurationMs?: number;
+  totalJobDurationMs?: number;
+  inferenceMode?: CoachChatInferenceMode;
+  generationStatus?: CoachChatJobResult["generationStatus"];
+}
+
+export interface FailCoachChatJobInput {
+  completedAt: string;
+  error: CoachChatJobError;
+  promptBytes?: number;
+  fallbackPromptBytes?: number;
+  modelDurationMs?: number;
+  fallbackModelDurationMs?: number;
+  totalJobDurationMs?: number;
+  inferenceMode?: CoachChatInferenceMode;
+}
+
+export interface CoachChatJobRecord {
+  jobID: string;
+  installID: string;
+  clientRequestID: string;
+  status: CoachChatJobStatus;
+  preparedRequest: PreparedCoachChatJobRequest;
+  result?: CoachChatJobResult;
+  error?: CoachChatJobError;
+  createdAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  contextHash: string;
+  contextSource: ResolvedCoachContext["source"];
+  chatMemoryHit: boolean;
+  snapshotBytes: number;
+  recentTurnCount: number;
+  recentTurnChars: number;
+  questionChars: number;
+  promptVersion: string;
+  model: string;
+  promptBytes?: number;
+  fallbackPromptBytes?: number;
+  modelDurationMs?: number;
+  fallbackModelDurationMs?: number;
+  totalJobDurationMs?: number;
+  inferenceMode?: CoachChatInferenceMode;
+  generationStatus?: CoachChatJobResult["generationStatus"];
+  memoryCommittedAt?: string;
+}
+
 export interface CoachStateStore {
   storeLegacySnapshot(
     request: CoachSnapshotSyncRequest
@@ -132,6 +210,23 @@ export interface CoachStateStore {
     question: string,
     answerMarkdown: string
   ): Promise<StoredChatMemory>;
+  createChatJob(input: CreateCoachChatJobInput): Promise<CoachChatJobRecord>;
+  getChatJob(jobID: string, installID: string): Promise<CoachChatJobRecord | null>;
+  getChatJobByID(jobID: string): Promise<CoachChatJobRecord | null>;
+  findActiveChatJob(installID: string): Promise<CoachChatJobRecord | null>;
+  markChatJobRunning(
+    jobID: string,
+    startedAt: string
+  ): Promise<CoachChatJobRecord | null>;
+  completeChatJob(
+    jobID: string,
+    input: CompleteCoachChatJobInput
+  ): Promise<CoachChatJobRecord>;
+  failChatJob(
+    jobID: string,
+    input: FailCoachChatJobInput
+  ): Promise<CoachChatJobRecord>;
+  commitChatJobMemory(jobID: string): Promise<void>;
   reconcileBackup(
     request: BackupReconcileRequest
   ): Promise<BackupReconcileResponse>;
@@ -175,6 +270,37 @@ interface BackupVersionRow {
   client_source_modified_at: string | null;
   app_version: string;
   build_number: string;
+}
+
+interface CoachChatJobRow {
+  job_id: string;
+  install_id: string;
+  client_request_id: string;
+  status: CoachChatJobStatus;
+  prepared_request_json: string;
+  response_json: string | null;
+  error_code: string | null;
+  error_message: string | null;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  context_hash: string;
+  context_source: ResolvedCoachContext["source"];
+  chat_memory_hit: number;
+  snapshot_bytes: number;
+  recent_turn_count: number;
+  recent_turn_chars: number;
+  question_chars: number;
+  prompt_version: string;
+  model: string;
+  prompt_bytes: number | null;
+  fallback_prompt_bytes: number | null;
+  model_duration_ms: number | null;
+  fallback_model_duration_ms: number | null;
+  total_job_duration_ms: number | null;
+  inference_mode: CoachChatInferenceMode | null;
+  generation_status: CoachChatJobResult["generationStatus"] | null;
+  memory_committed_at: string | null;
 }
 
 interface InternalBackupRecord {
@@ -347,6 +473,259 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
     );
 
     return memory;
+  }
+
+  async createChatJob(input: CreateCoachChatJobInput): Promise<CoachChatJobRecord> {
+    const existing = await this.getChatJobByClientRequestID(
+      input.installID,
+      input.clientRequestID
+    );
+    if (existing) {
+      return existing;
+    }
+
+    try {
+      await this.db
+        .prepare(
+          `
+            INSERT INTO coach_chat_jobs (
+              job_id,
+              install_id,
+              client_request_id,
+              status,
+              prepared_request_json,
+              created_at,
+              context_hash,
+              context_source,
+              chat_memory_hit,
+              snapshot_bytes,
+              recent_turn_count,
+              recent_turn_chars,
+              question_chars,
+              prompt_version,
+              model
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `
+        )
+        .bind(
+          input.jobID,
+          input.installID,
+          input.clientRequestID,
+          "queued",
+          stableJSONStringify(input.preparedRequest),
+          input.createdAt,
+          input.contextHash,
+          input.contextSource,
+          input.chatMemoryHit ? 1 : 0,
+          input.snapshotBytes,
+          input.recentTurnCount,
+          input.recentTurnChars,
+          input.questionChars,
+          this.promptVersion,
+          this.model
+        )
+        .run();
+    } catch (error) {
+      const duplicated = await this.getChatJobByClientRequestID(
+        input.installID,
+        input.clientRequestID
+      );
+      if (duplicated) {
+        return duplicated;
+      }
+
+      const active = await this.findActiveChatJob(input.installID);
+      if (active) {
+        throw new ActiveCoachChatJobError(active.jobID);
+      }
+
+      throw error;
+    }
+
+    const created = await this.getChatJob(input.jobID, input.installID);
+    if (!created) {
+      throw new Error("Failed to read created coach chat job.");
+    }
+
+    return created;
+  }
+
+  async getChatJob(
+    jobID: string,
+    installID: string
+  ): Promise<CoachChatJobRecord | null> {
+    const row = await this.db
+      .prepare(
+        `SELECT * FROM coach_chat_jobs WHERE job_id = ? AND install_id = ? LIMIT 1`
+      )
+      .bind(jobID, installID)
+      .first<CoachChatJobRow>();
+    return row ? parseCoachChatJobRow(row) : null;
+  }
+
+  async getChatJobByID(jobID: string): Promise<CoachChatJobRecord | null> {
+    const row = await this.db
+      .prepare(`SELECT * FROM coach_chat_jobs WHERE job_id = ? LIMIT 1`)
+      .bind(jobID)
+      .first<CoachChatJobRow>();
+    return row ? parseCoachChatJobRow(row) : null;
+  }
+
+  async findActiveChatJob(installID: string): Promise<CoachChatJobRecord | null> {
+    const row = await this.db
+      .prepare(
+        `
+          SELECT * FROM coach_chat_jobs
+          WHERE install_id = ? AND status IN ('queued', 'running')
+          ORDER BY created_at DESC
+          LIMIT 1
+        `
+      )
+      .bind(installID)
+      .first<CoachChatJobRow>();
+    return row ? parseCoachChatJobRow(row) : null;
+  }
+
+  async markChatJobRunning(
+    jobID: string,
+    startedAt: string
+  ): Promise<CoachChatJobRecord | null> {
+    await this.db
+      .prepare(
+        `
+          UPDATE coach_chat_jobs
+          SET
+            status = CASE WHEN status = 'queued' THEN 'running' ELSE status END,
+            started_at = COALESCE(started_at, ?)
+          WHERE job_id = ?
+        `
+      )
+      .bind(startedAt, jobID)
+      .run();
+    return this.getChatJobByID(jobID);
+  }
+
+  async completeChatJob(
+    jobID: string,
+    input: CompleteCoachChatJobInput
+  ): Promise<CoachChatJobRecord> {
+    await this.db
+      .prepare(
+        `
+          UPDATE coach_chat_jobs
+          SET
+            status = 'completed',
+            response_json = ?,
+            error_code = NULL,
+            error_message = NULL,
+            completed_at = ?,
+            prompt_bytes = ?,
+            fallback_prompt_bytes = ?,
+            model_duration_ms = ?,
+            fallback_model_duration_ms = ?,
+            total_job_duration_ms = ?,
+            inference_mode = ?,
+            generation_status = ?
+          WHERE job_id = ?
+        `
+      )
+      .bind(
+        stableJSONStringify(input.result),
+        input.completedAt,
+        input.promptBytes ?? null,
+        input.fallbackPromptBytes ?? null,
+        input.modelDurationMs ?? null,
+        input.fallbackModelDurationMs ?? null,
+        input.totalJobDurationMs ?? null,
+        input.inferenceMode ?? null,
+        input.generationStatus ?? null,
+        jobID
+      )
+      .run();
+
+    const job = await this.getChatJobByID(jobID);
+    if (!job) {
+      throw new Error("Completed coach chat job was not found.");
+    }
+
+    return job;
+  }
+
+  async failChatJob(
+    jobID: string,
+    input: FailCoachChatJobInput
+  ): Promise<CoachChatJobRecord> {
+    await this.db
+      .prepare(
+        `
+          UPDATE coach_chat_jobs
+          SET
+            status = 'failed',
+            response_json = NULL,
+            error_code = ?,
+            error_message = ?,
+            completed_at = ?,
+            prompt_bytes = ?,
+            fallback_prompt_bytes = ?,
+            model_duration_ms = ?,
+            fallback_model_duration_ms = ?,
+            total_job_duration_ms = ?,
+            inference_mode = ?,
+            generation_status = NULL
+          WHERE job_id = ?
+        `
+      )
+      .bind(
+        input.error.code,
+        input.error.message,
+        input.completedAt,
+        input.promptBytes ?? null,
+        input.fallbackPromptBytes ?? null,
+        input.modelDurationMs ?? null,
+        input.fallbackModelDurationMs ?? null,
+        input.totalJobDurationMs ?? null,
+        input.inferenceMode ?? null,
+        jobID
+      )
+      .run();
+
+    const job = await this.getChatJobByID(jobID);
+    if (!job) {
+      throw new Error("Failed coach chat job was not found.");
+    }
+
+    return job;
+  }
+
+  async commitChatJobMemory(jobID: string): Promise<void> {
+    const job = await this.getChatJobByID(jobID);
+    if (!job || job.memoryCommittedAt) {
+      return;
+    }
+
+    const committedAt = this.now().toISOString();
+    const cacheAllowed = !job.preparedRequest.runtimeContextDelta?.activeWorkout;
+
+    if (cacheAllowed && job.status === "completed" && job.result) {
+      await this.appendChatMemory(
+        job.installID,
+        job.contextHash,
+        job.preparedRequest.clientRecentTurns,
+        job.preparedRequest.question,
+        job.result.answerMarkdown
+      );
+    }
+
+    await this.db
+      .prepare(
+        `
+          UPDATE coach_chat_jobs
+          SET memory_committed_at = COALESCE(memory_committed_at, ?)
+          WHERE job_id = ?
+        `
+      )
+      .bind(committedAt, jobID)
+      .run();
   }
 
   async reconcileBackup(
@@ -680,6 +1059,10 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
       .prepare(`DELETE FROM legacy_compact_snapshots WHERE install_id = ?`)
       .bind(installID)
       .run();
+    await this.db
+      .prepare(`DELETE FROM coach_chat_jobs WHERE install_id = ?`)
+      .bind(installID)
+      .run();
   }
 
   private async getCurrentInstallState(
@@ -761,6 +1144,23 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
       snapshot: JSON.parse(row.snapshot_json) as CompactCoachSnapshot,
     };
   }
+
+  private async getChatJobByClientRequestID(
+    installID: string,
+    clientRequestID: string
+  ): Promise<CoachChatJobRecord | null> {
+    const row = await this.db
+      .prepare(
+        `
+          SELECT * FROM coach_chat_jobs
+          WHERE install_id = ? AND client_request_id = ?
+          LIMIT 1
+        `
+      )
+      .bind(installID, clientRequestID)
+      .first<CoachChatJobRow>();
+    return row ? parseCoachChatJobRow(row) : null;
+  }
 }
 
 export class InMemoryCoachStateRepository implements CoachStateStore {
@@ -769,6 +1169,7 @@ export class InMemoryCoachStateRepository implements CoachStateStore {
   private readonly backups = new Map<string, Map<number, BackupEnvelopeV2>>();
   private readonly insightsCache = new Map<string, CoachProfileInsightsResponse>();
   private readonly chatMemory = new Map<string, StoredChatMemory>();
+  private readonly chatJobs = new Map<string, CoachChatJobRecord>();
   private readonly coachStateVersions = new Map<string, number>();
 
   constructor(
@@ -893,6 +1294,158 @@ export class InMemoryCoachStateRepository implements CoachStateStore {
     };
     this.chatMemory.set(chatMemoryKey(installID, contextHash), memory);
     return memory;
+  }
+
+  async createChatJob(input: CreateCoachChatJobInput): Promise<CoachChatJobRecord> {
+    const existing = [...this.chatJobs.values()].find(
+      (job) =>
+        job.installID === input.installID &&
+        job.clientRequestID === input.clientRequestID
+    );
+    if (existing) {
+      return existing;
+    }
+
+    const active = [...this.chatJobs.values()].find(
+      (job) =>
+        job.installID === input.installID &&
+        (job.status === "queued" || job.status === "running")
+    );
+    if (active) {
+      throw new ActiveCoachChatJobError(active.jobID);
+    }
+
+    const created: CoachChatJobRecord = {
+      jobID: input.jobID,
+      installID: input.installID,
+      clientRequestID: input.clientRequestID,
+      status: "queued",
+      preparedRequest: input.preparedRequest,
+      createdAt: input.createdAt,
+      contextHash: input.contextHash,
+      contextSource: input.contextSource,
+      chatMemoryHit: input.chatMemoryHit,
+      snapshotBytes: input.snapshotBytes,
+      recentTurnCount: input.recentTurnCount,
+      recentTurnChars: input.recentTurnChars,
+      questionChars: input.questionChars,
+      promptVersion: this.promptVersion,
+      model: this.model,
+    };
+    this.chatJobs.set(created.jobID, created);
+    return created;
+  }
+
+  async getChatJob(
+    jobID: string,
+    installID: string
+  ): Promise<CoachChatJobRecord | null> {
+    const job = this.chatJobs.get(jobID);
+    if (!job || job.installID !== installID) {
+      return null;
+    }
+
+    return job;
+  }
+
+  async getChatJobByID(jobID: string): Promise<CoachChatJobRecord | null> {
+    return this.chatJobs.get(jobID) ?? null;
+  }
+
+  async findActiveChatJob(installID: string): Promise<CoachChatJobRecord | null> {
+    const jobs = [...this.chatJobs.values()]
+      .filter(
+        (job) =>
+          job.installID === installID &&
+          (job.status === "queued" || job.status === "running")
+      )
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+    return jobs[0] ?? null;
+  }
+
+  async markChatJobRunning(
+    jobID: string,
+    startedAt: string
+  ): Promise<CoachChatJobRecord | null> {
+    const job = this.chatJobs.get(jobID);
+    if (!job) {
+      return null;
+    }
+
+    if (job.status === "queued") {
+      job.status = "running";
+    }
+    job.startedAt ??= startedAt;
+    return job;
+  }
+
+  async completeChatJob(
+    jobID: string,
+    input: CompleteCoachChatJobInput
+  ): Promise<CoachChatJobRecord> {
+    const job = this.chatJobs.get(jobID);
+    if (!job) {
+      throw new Error("Completed coach chat job was not found.");
+    }
+
+    job.status = "completed";
+    job.result = input.result;
+    job.error = undefined;
+    job.completedAt = input.completedAt;
+    job.promptBytes = input.promptBytes;
+    job.fallbackPromptBytes = input.fallbackPromptBytes;
+    job.modelDurationMs = input.modelDurationMs;
+    job.fallbackModelDurationMs = input.fallbackModelDurationMs;
+    job.totalJobDurationMs = input.totalJobDurationMs;
+    job.inferenceMode = input.inferenceMode;
+    job.generationStatus = input.generationStatus;
+    return job;
+  }
+
+  async failChatJob(
+    jobID: string,
+    input: FailCoachChatJobInput
+  ): Promise<CoachChatJobRecord> {
+    const job = this.chatJobs.get(jobID);
+    if (!job) {
+      throw new Error("Failed coach chat job was not found.");
+    }
+
+    job.status = "failed";
+    job.result = undefined;
+    job.error = input.error;
+    job.completedAt = input.completedAt;
+    job.promptBytes = input.promptBytes;
+    job.fallbackPromptBytes = input.fallbackPromptBytes;
+    job.modelDurationMs = input.modelDurationMs;
+    job.fallbackModelDurationMs = input.fallbackModelDurationMs;
+    job.totalJobDurationMs = input.totalJobDurationMs;
+    job.inferenceMode = input.inferenceMode;
+    job.generationStatus = undefined;
+    return job;
+  }
+
+  async commitChatJobMemory(jobID: string): Promise<void> {
+    const job = this.chatJobs.get(jobID);
+    if (!job || job.memoryCommittedAt) {
+      return;
+    }
+
+    if (
+      !job.preparedRequest.runtimeContextDelta?.activeWorkout &&
+      job.status === "completed" &&
+      job.result
+    ) {
+      await this.appendChatMemory(
+        job.installID,
+        job.contextHash,
+        job.preparedRequest.clientRecentTurns,
+        job.preparedRequest.question,
+        job.result.answerMarkdown
+      );
+    }
+
+    job.memoryCommittedAt = this.now().toISOString();
   }
 
   async reconcileBackup(
@@ -1067,6 +1620,11 @@ export class InMemoryCoachStateRepository implements CoachStateStore {
     this.backupHeads.delete(installID);
     this.backups.delete(installID);
     this.coachStateVersions.delete(installID);
+    for (const [jobID, job] of this.chatJobs.entries()) {
+      if (job.installID === installID) {
+        this.chatJobs.delete(jobID);
+      }
+    }
     for (const key of [...this.insightsCache.keys()]) {
       if (key.startsWith(`${installID}:`)) {
         this.insightsCache.delete(key);
@@ -1101,6 +1659,13 @@ export class StaleRemoteStateError extends Error {
   }
 }
 
+export class ActiveCoachChatJobError extends Error {
+  constructor(readonly jobID: string) {
+    super("Coach chat job already in progress.");
+    this.name = "ActiveCoachChatJobError";
+  }
+}
+
 export function normalizeChatTurns(
   turns: CoachConversationTurn[]
 ): CoachConversationTurn[] {
@@ -1126,6 +1691,61 @@ export function normalizeChatTurns(
   }
 
   return result.reverse();
+}
+
+function parseCoachChatJobRow(row: CoachChatJobRow): CoachChatJobRecord {
+  return {
+    jobID: row.job_id,
+    installID: row.install_id,
+    clientRequestID: row.client_request_id,
+    status: row.status,
+    preparedRequest: JSON.parse(
+      row.prepared_request_json
+    ) as PreparedCoachChatJobRequest,
+    result: row.response_json
+      ? (JSON.parse(row.response_json) as CoachChatJobResult)
+      : undefined,
+    error:
+      row.error_code && row.error_message
+        ? {
+            code: row.error_code,
+            message: row.error_message,
+            retryable: isRetryableJobErrorCode(row.error_code),
+          }
+        : undefined,
+    createdAt: row.created_at,
+    startedAt: row.started_at ?? undefined,
+    completedAt: row.completed_at ?? undefined,
+    contextHash: row.context_hash,
+    contextSource: row.context_source,
+    chatMemoryHit: row.chat_memory_hit === 1,
+    snapshotBytes: row.snapshot_bytes,
+    recentTurnCount: row.recent_turn_count,
+    recentTurnChars: row.recent_turn_chars,
+    questionChars: row.question_chars,
+    promptVersion: row.prompt_version,
+    model: row.model,
+    promptBytes: nullableNumber(row.prompt_bytes),
+    fallbackPromptBytes: nullableNumber(row.fallback_prompt_bytes),
+    modelDurationMs: nullableNumber(row.model_duration_ms),
+    fallbackModelDurationMs: nullableNumber(row.fallback_model_duration_ms),
+    totalJobDurationMs: nullableNumber(row.total_job_duration_ms),
+    inferenceMode: row.inference_mode ?? undefined,
+    generationStatus: row.generation_status ?? undefined,
+    memoryCommittedAt: row.memory_committed_at ?? undefined,
+  };
+}
+
+function nullableNumber(value: number | null): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function isRetryableJobErrorCode(code: string): boolean {
+  return (
+    code.startsWith("upstream_") ||
+    code === "workflow_start_failed" ||
+    code === "internal_error"
+  );
 }
 
 function insightsCacheKey(

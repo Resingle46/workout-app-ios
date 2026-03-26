@@ -28,13 +28,31 @@ const PROFILE_INSIGHTS_TOTAL_BUDGET_MS = 28_000;
 const PROFILE_INSIGHTS_STRUCTURED_TIMEOUT_MS = 16_000;
 const PROFILE_INSIGHTS_PLAIN_TEXT_TIMEOUT_MS = 10_000;
 const PROFILE_INSIGHTS_FALLBACK_MIN_TIMEOUT_MS = 4_000;
-const CHAT_TOTAL_BUDGET_MS = 28_000;
-const CHAT_STRUCTURED_TIMEOUT_MS = 12_000;
-const CHAT_FALLBACK_TIMEOUT_MS = 12_000;
-const CHAT_FALLBACK_MIN_TIMEOUT_MS = 4_000;
+const SYNC_CHAT_TIMEOUTS = {
+  totalBudgetMs: 28_000,
+  structuredTimeoutMs: 12_000,
+  fallbackTimeoutMs: 12_000,
+  fallbackMinTimeoutMs: 4_000,
+} as const;
+const ASYNC_CHAT_TIMEOUTS = {
+  totalBudgetMs: 120_000,
+  structuredTimeoutMs: 75_000,
+  fallbackTimeoutMs: 40_000,
+  fallbackMinTimeoutMs: 4_000,
+} as const;
 
 interface WorkersAI {
   run(model: string, inputs: Record<string, unknown>): Promise<unknown>;
+}
+
+interface WorkflowInstanceBinding {
+  id: string;
+  status(): Promise<unknown>;
+}
+
+interface WorkflowBinding<TParams = unknown> {
+  create(options?: { id?: string; params?: TParams }): Promise<WorkflowInstanceBinding>;
+  get(id: string): Promise<WorkflowInstanceBinding>;
 }
 
 export interface Env {
@@ -42,6 +60,7 @@ export interface Env {
   COACH_STATE_KV?: CoachKVNamespace;
   BACKUPS_R2?: CoachR2Bucket;
   APP_META_DB?: CoachD1Database;
+  COACH_CHAT_WORKFLOW?: WorkflowBinding<{ jobID: string }>;
   COACH_INTERNAL_TOKEN: string;
   AI_MODEL?: string;
   COACH_PROMPT_VERSION?: string;
@@ -54,7 +73,9 @@ export interface InferenceResult<T> {
   mode?: string;
   usage?: unknown;
   promptBytes?: number;
+  fallbackPromptBytes?: number;
   modelDurationMs?: number;
+  fallbackModelDurationMs?: number;
 }
 
 type CoachProfileInsightsContent = Omit<
@@ -71,8 +92,14 @@ export interface CoachInferenceService {
     request: CoachProfileInsightsRequest
   ): Promise<InferenceResult<CoachProfileInsightsResponse>>;
   generateChat(
-    request: CoachChatRequest
+    request: CoachChatRequest,
+    options?: GenerateChatOptions
   ): Promise<InferenceResult<CoachChatResponse>>;
+}
+
+export interface GenerateChatOptions {
+  responseId?: string;
+  timeoutProfile?: "sync" | "async_job";
 }
 
 export class CoachInferenceServiceError extends Error {
@@ -267,13 +294,18 @@ export class WorkersAICoachService implements CoachInferenceService {
   }
 
   async generateChat(
-    request: CoachChatRequest
+    request: CoachChatRequest,
+    options: GenerateChatOptions = {}
   ): Promise<InferenceResult<CoachChatResponse>> {
     const operation = "chat";
-    const turnID = buildOpaqueResponseID();
+    const turnID = options.responseId ?? buildOpaqueResponseID();
     const messages = buildChatMessages(request);
     const localFallback = buildNeutralChatResponse(request);
     const startedAt = Date.now();
+    const timeouts =
+      options.timeoutProfile === "async_job"
+        ? ASYNC_CHAT_TIMEOUTS
+        : SYNC_CHAT_TIMEOUTS;
     const sharedDetails = {
       turnID,
       recentTurnCount: request.clientRecentTurns.length,
@@ -287,7 +319,7 @@ export class WorkersAICoachService implements CoachInferenceService {
         messages,
         schema: chatResponseJsonSchema,
         maxTokens: CHAT_STRUCTURED_MAX_TOKENS,
-        timeoutMs: CHAT_STRUCTURED_TIMEOUT_MS,
+        timeoutMs: timeouts.structuredTimeoutMs,
         extraDetails: sharedDetails,
       });
       const parsed = normalizeChatResponse(
@@ -326,7 +358,10 @@ export class WorkersAICoachService implements CoachInferenceService {
         throw error;
       }
 
-      const remainingBudgetMs = remainingChatBudgetMs(startedAt);
+      const remainingBudgetMs = remainingChatBudgetMs(
+        startedAt,
+        timeouts.totalBudgetMs
+      );
 
       console.warn(
         JSON.stringify({
@@ -340,7 +375,7 @@ export class WorkersAICoachService implements CoachInferenceService {
         })
       );
 
-      if (remainingBudgetMs < CHAT_FALLBACK_MIN_TIMEOUT_MS) {
+      if (remainingBudgetMs < timeouts.fallbackMinTimeoutMs) {
         console.warn(
           JSON.stringify({
             event: "coach_chat_degraded_response",
@@ -370,7 +405,7 @@ export class WorkersAICoachService implements CoachInferenceService {
           operation,
           messages: buildFallbackChatMessages(request),
           maxTokens: CHAT_FALLBACK_MAX_TOKENS,
-          timeoutMs: Math.min(CHAT_FALLBACK_TIMEOUT_MS, remainingBudgetMs),
+          timeoutMs: Math.min(timeouts.fallbackTimeoutMs, remainingBudgetMs),
           extraDetails: {
             ...sharedDetails,
             fallbackTrigger: error.code,
@@ -395,8 +430,10 @@ export class WorkersAICoachService implements CoachInferenceService {
           model: this.modelName,
           mode: "plain_text_fallback",
           usage: extractUsage(fallbackResponse.rawResponse),
-          promptBytes: fallbackResponse.promptBytes,
-          modelDurationMs: Date.now() - startedAt,
+          promptBytes: resolvePromptBytes(error.details),
+          fallbackPromptBytes: fallbackResponse.promptBytes,
+          modelDurationMs: resolveModelDurationMs(error.details),
+          fallbackModelDurationMs: fallbackResponse.modelDurationMs,
         };
       } catch (fallbackError) {
         if (!(fallbackError instanceof CoachInferenceServiceError)) {
@@ -509,10 +546,11 @@ export class WorkersAICoachService implements CoachInferenceService {
       );
     }
 
+    const timeoutMs = parseTimeoutMs(details.timeoutMs);
+    const startedAt = Date.now();
+    const promptBytes = byteLength(payload.messages);
+
     try {
-      const timeoutMs = parseTimeoutMs(details.timeoutMs);
-      const startedAt = Date.now();
-      const promptBytes = byteLength(payload.messages);
       const rawResponse = await withTimeout(
         this.env.AI.run(this.modelName, payload),
         timeoutMs
@@ -526,7 +564,8 @@ export class WorkersAICoachService implements CoachInferenceService {
       throw normalizeWorkersAIError(error, {
         ...details,
         model: this.modelName,
-        promptBytes: byteLength(payload.messages),
+        promptBytes,
+        modelDurationMs: Date.now() - startedAt,
       });
     }
   }
@@ -1206,8 +1245,8 @@ function remainingProfileInsightsBudgetMs(startedAt: number): number {
   return Math.max(PROFILE_INSIGHTS_TOTAL_BUDGET_MS - (Date.now() - startedAt), 0);
 }
 
-function remainingChatBudgetMs(startedAt: number): number {
-  return Math.max(CHAT_TOTAL_BUDGET_MS - (Date.now() - startedAt), 0);
+function remainingChatBudgetMs(startedAt: number, totalBudgetMs: number): number {
+  return Math.max(totalBudgetMs - (Date.now() - startedAt), 0);
 }
 
 function buildDegradedChatResult(input: {
@@ -1240,6 +1279,13 @@ function resolvePromptBytes(
   details?: Record<string, unknown>
 ): number | undefined {
   const value = details?.promptBytes;
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function resolveModelDurationMs(
+  details?: Record<string, unknown>
+): number | undefined {
+  const value = details?.modelDurationMs;
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
@@ -1412,7 +1458,7 @@ function clamp(value: number, lower: number, upper: number): number {
   return Math.min(Math.max(value, lower), upper);
 }
 
-function buildOpaqueResponseID(): string {
+export function buildOpaqueResponseID(): string {
   return `coach-turn_${crypto.randomUUID()}`;
 }
 

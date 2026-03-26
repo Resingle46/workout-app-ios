@@ -406,6 +406,21 @@ protocol CoachAPIClient: Sendable {
         runtimeContextDelta: CoachRuntimeContextDelta?
     ) async throws -> CoachProfileInsights
 
+    func createChatJob(
+        locale: String,
+        question: String,
+        clientRequestID: String,
+        clientRecentTurns: [CoachConversationMessage],
+        snapshotEnvelope: CoachSnapshotEnvelope,
+        capabilityScope: CoachCapabilityScope,
+        runtimeContextDelta: CoachRuntimeContextDelta?
+    ) async throws -> CoachChatJobCreateResponse
+
+    func getChatJob(
+        jobID: String,
+        installID: String
+    ) async throws -> CoachChatJobStatusResponse
+
     func sendChat(
         locale: String,
         question: String,
@@ -459,6 +474,33 @@ struct CoachChatRequest: Codable, Sendable {
     var runtimeContextDelta: CoachRuntimeContextDelta?
     var clientRecentTurns: [CoachConversationMessage]
     var capabilityScope: CoachCapabilityScope
+}
+
+struct CoachChatJobCreateRequest: Codable, Sendable {
+    var locale: String
+    var question: String
+    var installID: String
+    var snapshotHash: String?
+    var snapshot: CompactCoachSnapshot?
+    var snapshotUpdatedAt: Date?
+    var runtimeContextDelta: CoachRuntimeContextDelta?
+    var clientRecentTurns: [CoachConversationMessage]
+    var capabilityScope: CoachCapabilityScope
+    var clientRequestID: String
+}
+
+enum CoachChatJobStatus: String, Codable, Hashable, Sendable {
+    case queued
+    case running
+    case completed
+    case failed
+    case canceled
+}
+
+enum CoachChatInferenceMode: String, Codable, Hashable, Sendable {
+    case structured
+    case plainTextFallback = "plain_text_fallback"
+    case degradedFallback = "degraded_fallback"
 }
 
 enum CloudLocalStateKind: String, Codable, Hashable, Sendable {
@@ -561,6 +603,39 @@ struct CoachChatResponse: Codable, Hashable, Sendable {
     var isModelGenerated: Bool {
         generationStatus == .model
     }
+}
+
+struct CoachChatJobCreateResponse: Codable, Hashable, Sendable {
+    var jobID: String
+    var status: CoachChatJobStatus
+    var createdAt: Date
+    var pollAfterMs: Int
+}
+
+struct CoachChatJobResult: Codable, Hashable, Sendable {
+    var answerMarkdown: String
+    var responseID: String
+    var followUps: [String]
+    var generationStatus: CoachResponseGenerationStatus? = nil
+    var inferenceMode: CoachChatInferenceMode
+    var modelDurationMs: Int?
+    var totalJobDurationMs: Int?
+}
+
+struct CoachChatJobError: Codable, Hashable, Sendable {
+    var code: String
+    var message: String
+    var retryable: Bool
+}
+
+struct CoachChatJobStatusResponse: Codable, Hashable, Sendable {
+    var jobID: String
+    var status: CoachChatJobStatus
+    var createdAt: Date
+    var startedAt: Date?
+    var completedAt: Date?
+    var result: CoachChatJobResult?
+    var error: CoachChatJobError?
 }
 
 struct CoachConversationMessage: Codable, Hashable, Sendable {
@@ -905,6 +980,85 @@ struct CoachAPIHTTPClient: CoachAPIClient {
             timeoutInterval: Self.profileInsightsRequestTimeoutInterval,
             responseType: CoachProfileInsights.self
         )
+    }
+
+    func createChatJob(
+        locale: String,
+        question: String,
+        clientRequestID: String,
+        clientRecentTurns: [CoachConversationMessage],
+        snapshotEnvelope: CoachSnapshotEnvelope,
+        capabilityScope: CoachCapabilityScope,
+        runtimeContextDelta: CoachRuntimeContextDelta?
+    ) async throws -> CoachChatJobCreateResponse {
+        try await send(
+            path: "v2/coach/chat-jobs",
+            method: "POST",
+            body: CoachChatJobCreateRequest(
+                locale: locale,
+                question: question,
+                installID: snapshotEnvelope.installID,
+                snapshotHash: snapshotEnvelope.snapshotHash,
+                snapshot: snapshotEnvelope.snapshot,
+                snapshotUpdatedAt: snapshotEnvelope.snapshotUpdatedAt,
+                runtimeContextDelta: runtimeContextDelta,
+                clientRecentTurns: clientRecentTurns,
+                capabilityScope: capabilityScope,
+                clientRequestID: clientRequestID
+            ),
+            session: standardSession,
+            timeoutInterval: Self.standardRequestTimeoutInterval,
+            responseType: CoachChatJobCreateResponse.self
+        )
+    }
+
+    func getChatJob(
+        jobID: String,
+        installID: String
+    ) async throws -> CoachChatJobStatusResponse {
+        guard configuration.isFeatureEnabled else {
+            throw CoachClientError.featureDisabled
+        }
+        guard let baseURL = configuration.backendBaseURL else {
+            throw CoachClientError.missingBaseURL
+        }
+        guard let internalBearerToken = configuration.internalBearerToken else {
+            throw CoachClientError.missingAuthToken
+        }
+
+        var components = URLComponents(
+            url: baseURL.appending(path: "v2/coach/chat-jobs/\(jobID)"),
+            resolvingAgainstBaseURL: false
+        )
+        components?.queryItems = [
+            URLQueryItem(name: "installID", value: installID)
+        ]
+
+        guard let url = components?.url else {
+            throw CoachClientError.invalidResponse
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = Self.standardRequestTimeoutInterval
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("Bearer \(internalBearerToken)", forHTTPHeaderField: "Authorization")
+
+        let (data, response) = try await standardSession.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw CoachClientError.invalidResponse
+        }
+
+        guard (200...299).contains(httpResponse.statusCode) else {
+            throw CoachClientError.httpStatus(httpResponse.statusCode)
+        }
+
+        do {
+            return try Self.decoder.decode(CoachChatJobStatusResponse.self, from: data)
+        } catch {
+            throw CoachClientError.invalidResponse
+        }
     }
 
     func sendChat(
@@ -1552,6 +1706,7 @@ final class CoachStore {
     var visibleQuickPromptKeys: [String] = []
     var isLoadingProfileInsights = false
     var isSendingMessage = false
+    var activeChatJobID: String?
     var analysisSettingsSaveState: CoachAnalysisSettingsSaveState = .idle
     var lastInsightsErrorDescription: String?
     var lastChatErrorDescription: String?
@@ -1782,8 +1937,12 @@ final class CoachStore {
             )
         )
         isSendingMessage = true
+        activeChatJobID = nil
         lastChatErrorDescription = nil
-        defer { isSendingMessage = false }
+        defer {
+            isSendingMessage = false
+            activeChatJobID = nil
+        }
 
         guard configuration.canUseRemoteCoach else {
             let message = coachLocalizedString("coach.error.chat_unavailable")
@@ -1809,9 +1968,11 @@ final class CoachStore {
                 from: appStore,
                 preferServerSideContext: canUseServerSideContext
             )
-            let response = try await client.sendChat(
+            let clientRequestID = UUID().uuidString.lowercased()
+            let createResponse = try await client.createChatJob(
                 locale: appStore.selectedLanguageCode,
                 question: trimmedQuestion,
+                clientRequestID: clientRequestID,
                 clientRecentTurns: priorConversation,
                 snapshotEnvelope: snapshotPackage.envelope,
                 capabilityScope: capabilityScope,
@@ -1819,6 +1980,28 @@ final class CoachStore {
                     ? contextBuilder.runtimeContextDelta(from: appStore)
                     : nil
             )
+            activeChatJobID = createResponse.jobID
+            markSnapshotAsAcceptedIfNeeded(snapshotPackage)
+            let jobResponse = try await awaitTerminalChatJob(
+                jobID: createResponse.jobID,
+                installID: snapshotPackage.envelope.installID,
+                initialPollAfterMs: createResponse.pollAfterMs,
+                placeholderID: placeholderID
+            )
+            guard let response = completedChatResponse(from: jobResponse) else {
+                let description = chatJobFailureDescription(from: jobResponse)
+                lastChatErrorDescription = description
+                replaceMessage(
+                    id: placeholderID,
+                    with: CoachChatMessage(
+                        id: placeholderID,
+                        role: .assistant,
+                        content: description,
+                        isStatus: true
+                    )
+                )
+                return
+            }
             replaceMessage(
                 id: placeholderID,
                 with:
@@ -1830,7 +2013,6 @@ final class CoachStore {
                     generationStatus: response.generationStatus
                 )
             )
-            markSnapshotAsAcceptedIfNeeded(snapshotPackage)
         } catch {
             let description = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             lastChatErrorDescription = description
@@ -1850,6 +2032,7 @@ final class CoachStore {
         messages = []
         lastChatErrorDescription = nil
         isSendingMessage = false
+        activeChatJobID = nil
     }
 
     func configureQuickPromptsIfNeeded() {
@@ -1871,6 +2054,84 @@ final class CoachStore {
                 content: message.content
             )
         }
+    }
+
+    private func awaitTerminalChatJob(
+        jobID: String,
+        installID: String,
+        initialPollAfterMs: Int,
+        placeholderID: String
+    ) async throws -> CoachChatJobStatusResponse {
+        var nextDelayMs = max(initialPollAfterMs, 0)
+        var pollAttempt = 0
+
+        while true {
+            let response = try await client.getChatJob(
+                jobID: jobID,
+                installID: installID
+            )
+
+            switch response.status {
+            case .completed, .failed, .canceled:
+                return response
+            case .queued, .running:
+                replaceMessage(
+                    id: placeholderID,
+                    with: CoachChatMessage(
+                        id: placeholderID,
+                        role: .assistant,
+                        content: coachLocalizedString("coach.loading.response"),
+                        isLoading: true,
+                        isStatus: true
+                    )
+                )
+            }
+
+            if nextDelayMs > 0 {
+                try await Task.sleep(nanoseconds: UInt64(nextDelayMs) * 1_000_000)
+            }
+
+            pollAttempt += 1
+            nextDelayMs = pollIntervalMs(for: pollAttempt)
+        }
+    }
+
+    private func pollIntervalMs(for attempt: Int) -> Int {
+        switch attempt {
+        case 0:
+            return 1_500
+        case 1:
+            return 3_000
+        default:
+            return 5_000
+        }
+    }
+
+    private func completedChatResponse(
+        from jobResponse: CoachChatJobStatusResponse
+    ) -> CoachChatResponse? {
+        guard jobResponse.status == .completed, let result = jobResponse.result else {
+            return nil
+        }
+
+        return CoachChatResponse(
+            answerMarkdown: result.answerMarkdown,
+            responseID: result.responseID,
+            followUps: result.followUps,
+            generationStatus: result.generationStatus
+        )
+    }
+
+    private func chatJobFailureDescription(
+        from jobResponse: CoachChatJobStatusResponse
+    ) -> String {
+        if let message = jobResponse.error?.message
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !message.isEmpty {
+            return message
+        }
+
+        return coachLocalizedString("coach.error.invalid_response")
     }
 
     private static func makeQuickPromptKeys() -> [String] {

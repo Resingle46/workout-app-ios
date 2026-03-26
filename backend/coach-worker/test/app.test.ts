@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app";
+import { executeChatJob } from "../src/chat-job-executor";
 import {
   buildCoachContextFromSnapshot,
   hashCoachContext,
@@ -15,6 +16,7 @@ import { InMemoryCoachStateRepository } from "../src/state";
 import type {
   AppSnapshotPayload,
   BackupUploadRequest,
+  CoachChatJobCreateRequest,
   CoachChatRequest,
   CoachChatResponse,
   CoachProfileInsightsRequest,
@@ -505,6 +507,266 @@ describe("coach worker app", () => {
     });
   });
 
+  it("creates a queued async chat job and starts the workflow", async () => {
+    const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
+    const workflowCreate = vi.fn().mockResolvedValue(makeWorkflowInstanceStub());
+    const app = createApp({
+      createInferenceService: () => stubInferenceService(),
+      createStateRepository: () => repository,
+    });
+    const env = makeEnv({
+      COACH_CHAT_WORKFLOW: makeWorkflowBinding(workflowCreate),
+    });
+    const request = makeChatJobCreateRequestFixture();
+
+    const response = await app.fetch(
+      authedRequest("https://coach.example.workers.dev/v2/coach/chat-jobs", {
+        method: "POST",
+        body: JSON.stringify(request),
+      }),
+      env
+    );
+
+    expect(response.status).toBe(202);
+    const body = await response.json();
+    expect(body).toMatchObject({
+      status: "queued",
+      pollAfterMs: 1500,
+    });
+    expect(body.jobID).toMatch(/^coach-job_/);
+    expect(workflowCreate).toHaveBeenCalledTimes(1);
+
+    const storedJob = await repository.getChatJob(body.jobID, request.installID);
+    expect(storedJob?.preparedRequest.clientRequestID).toBe(request.clientRequestID);
+    expect(storedJob?.preparedRequest.responseID).toMatch(/^coach-turn_/);
+  });
+
+  it("returns the existing async chat job for duplicate clientRequestID", async () => {
+    const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
+    const workflowCreate = vi.fn().mockResolvedValue(makeWorkflowInstanceStub());
+    const app = createApp({
+      createInferenceService: () => stubInferenceService(),
+      createStateRepository: () => repository,
+    });
+    const env = makeEnv({
+      COACH_CHAT_WORKFLOW: makeWorkflowBinding(workflowCreate),
+    });
+    const request = makeChatJobCreateRequestFixture();
+
+    const firstResponse = await app.fetch(
+      authedRequest("https://coach.example.workers.dev/v2/coach/chat-jobs", {
+        method: "POST",
+        body: JSON.stringify(request),
+      }),
+      env
+    );
+    const secondResponse = await app.fetch(
+      authedRequest("https://coach.example.workers.dev/v2/coach/chat-jobs", {
+        method: "POST",
+        body: JSON.stringify(request),
+      }),
+      env
+    );
+
+    expect(firstResponse.status).toBe(202);
+    expect(secondResponse.status).toBe(202);
+
+    const firstBody = await firstResponse.json();
+    const secondBody = await secondResponse.json();
+    expect(secondBody.jobID).toBe(firstBody.jobID);
+    expect(workflowCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a second async chat job while one is already active", async () => {
+    const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
+    const workflowCreate = vi.fn().mockResolvedValue(makeWorkflowInstanceStub());
+    const app = createApp({
+      createInferenceService: () => stubInferenceService(),
+      createStateRepository: () => repository,
+    });
+    const env = makeEnv({
+      COACH_CHAT_WORKFLOW: makeWorkflowBinding(workflowCreate),
+    });
+    const firstRequest = makeChatJobCreateRequestFixture();
+    const secondRequest = {
+      ...makeChatJobCreateRequestFixture(),
+      clientRequestID: crypto.randomUUID(),
+    };
+
+    const firstResponse = await app.fetch(
+      authedRequest("https://coach.example.workers.dev/v2/coach/chat-jobs", {
+        method: "POST",
+        body: JSON.stringify(firstRequest),
+      }),
+      env
+    );
+    const firstBody = await firstResponse.json();
+
+    const secondResponse = await app.fetch(
+      authedRequest("https://coach.example.workers.dev/v2/coach/chat-jobs", {
+        method: "POST",
+        body: JSON.stringify(secondRequest),
+      }),
+      env
+    );
+
+    expect(secondResponse.status).toBe(409);
+    await expect(secondResponse.json()).resolves.toMatchObject({
+      error: {
+        code: "chat_job_in_progress",
+      },
+      jobID: firstBody.jobID,
+    });
+  });
+
+  it("completes an async chat job and commits chat memory once", async () => {
+    const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
+    const workflowCreate = vi.fn().mockResolvedValue(makeWorkflowInstanceStub());
+    const app = createApp({
+      createStateRepository: () => repository,
+      createInferenceService: () =>
+        stubInferenceService({
+          chat: {
+            answerMarkdown: "Async coach answer",
+            responseID: "unused",
+            followUps: ["Need a deload option?"],
+            generationStatus: "model",
+          },
+        }),
+    });
+    const env = makeEnv({
+      COACH_CHAT_WORKFLOW: makeWorkflowBinding(workflowCreate),
+    });
+    const createRequest = makeChatJobCreateRequestFixture();
+
+    const createResponse = await app.fetch(
+      authedRequest("https://coach.example.workers.dev/v2/coach/chat-jobs", {
+        method: "POST",
+        body: JSON.stringify(createRequest),
+      }),
+      env
+    );
+    const created = await createResponse.json();
+
+    await executeChatJob(created.jobID, env, {
+      createStateRepository: () => repository,
+      createInferenceService: () =>
+        stubInferenceService({
+          chat: {
+            answerMarkdown: "Async coach answer",
+            responseID: "unused",
+            followUps: ["Need a deload option?"],
+            generationStatus: "model",
+          },
+        }),
+    });
+
+    const statusResponse = await app.fetch(
+      authedRequest(
+        `https://coach.example.workers.dev/v2/coach/chat-jobs/${created.jobID}?installID=${createRequest.installID}`,
+        {
+          method: "GET",
+        }
+      ),
+      env
+    );
+
+    expect(statusResponse.status).toBe(200);
+    await expect(statusResponse.json()).resolves.toMatchObject({
+      jobID: created.jobID,
+      status: "completed",
+      result: {
+        answerMarkdown: "Async coach answer",
+        generationStatus: "model",
+        inferenceMode: "structured",
+      },
+    });
+
+    const storedJob = await repository.getChatJob(created.jobID, createRequest.installID);
+    const memory = storedJob
+      ? await repository.getChatMemory(storedJob.installID, storedJob.contextHash)
+      : null;
+
+    expect(memory?.recentTurns.at(-2)).toMatchObject({
+      role: "user",
+      content: createRequest.question,
+    });
+    expect(memory?.recentTurns.at(-1)).toMatchObject({
+      role: "assistant",
+      content: "Async coach answer",
+    });
+
+    await repository.commitChatJobMemory(created.jobID);
+    const committedAgain = storedJob
+      ? await repository.getChatMemory(storedJob.installID, storedJob.contextHash)
+      : null;
+    expect(committedAgain).toEqual(memory);
+  });
+
+  it("marks an async chat job failed and leaves chat memory untouched", async () => {
+    const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
+    const workflowCreate = vi.fn().mockResolvedValue(makeWorkflowInstanceStub());
+    const app = createApp({
+      createInferenceService: () => stubInferenceService(),
+      createStateRepository: () => repository,
+    });
+    const env = makeEnv({
+      COACH_CHAT_WORKFLOW: makeWorkflowBinding(workflowCreate),
+    });
+    const createRequest = makeChatJobCreateRequestFixture();
+
+    const createResponse = await app.fetch(
+      authedRequest("https://coach.example.workers.dev/v2/coach/chat-jobs", {
+        method: "POST",
+        body: JSON.stringify(createRequest),
+      }),
+      env
+    );
+    const created = await createResponse.json();
+
+    await executeChatJob(created.jobID, env, {
+      createStateRepository: () => repository,
+      createInferenceService: () =>
+        stubInferenceService({
+          chatError: new CoachInferenceServiceError(
+            504,
+            "upstream_timeout",
+            "Workers AI request timed out",
+            {
+              promptBytes: 321,
+              mode: "structured",
+              modelDurationMs: 5_000,
+            }
+          ),
+        }),
+    });
+
+    const statusResponse = await app.fetch(
+      authedRequest(
+        `https://coach.example.workers.dev/v2/coach/chat-jobs/${created.jobID}?installID=${createRequest.installID}`,
+        {
+          method: "GET",
+        }
+      ),
+      env
+    );
+
+    expect(statusResponse.status).toBe(200);
+    await expect(statusResponse.json()).resolves.toMatchObject({
+      jobID: created.jobID,
+      status: "failed",
+      error: {
+        code: "upstream_timeout",
+      },
+    });
+
+    const storedJob = await repository.getChatJob(created.jobID, createRequest.installID);
+    const memory = storedJob
+      ? await repository.getChatMemory(storedJob.installID, storedJob.contextHash)
+      : null;
+    expect(memory).toBeNull();
+  });
+
   it("deletes stored state for an install ID", async () => {
     const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
     const app = createApp({
@@ -948,10 +1210,27 @@ function makeEnv(overrides: Partial<Env> = {}): Env {
     COACH_STATE_KV: {} as Env["COACH_STATE_KV"],
     BACKUPS_R2: {} as Env["BACKUPS_R2"],
     APP_META_DB: {} as Env["APP_META_DB"],
+    COACH_CHAT_WORKFLOW: makeWorkflowBinding(vi.fn()),
     COACH_INTERNAL_TOKEN: "internal-token",
     AI_MODEL: DEFAULT_AI_MODEL,
     COACH_PROMPT_VERSION: "test.v1",
     ...overrides,
+  };
+}
+
+function makeWorkflowBinding(create: unknown): NonNullable<Env["COACH_CHAT_WORKFLOW"]> {
+  return {
+    create: create as NonNullable<Env["COACH_CHAT_WORKFLOW"]>["create"],
+    get: vi.fn().mockResolvedValue(
+      makeWorkflowInstanceStub()
+    ) as NonNullable<Env["COACH_CHAT_WORKFLOW"]>["get"],
+  };
+}
+
+function makeWorkflowInstanceStub() {
+  return {
+    id: "workflow-instance",
+    status: vi.fn().mockResolvedValue({ status: "queued" }),
   };
 }
 
@@ -1091,6 +1370,13 @@ function makeChatRequestFixture(): CoachChatRequest {
         content: "Coach: keep one rep in reserve before pushing load.",
       },
     ],
+  };
+}
+
+function makeChatJobCreateRequestFixture(): CoachChatJobCreateRequest {
+  return {
+    ...makeChatRequestFixture(),
+    clientRequestID: crypto.randomUUID(),
   };
 }
 

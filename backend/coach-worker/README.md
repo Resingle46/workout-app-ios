@@ -9,6 +9,8 @@ Cloudflare Worker backend for the in-app AI Coach.
 - `DELETE /v1/coach/state`
 - `POST /v1/coach/profile-insights`
 - `POST /v1/coach/chat`
+- `POST /v2/coach/chat-jobs`
+- `GET /v2/coach/chat-jobs/:jobID?installID=...`
 
 All `POST` routes require:
 
@@ -64,10 +66,30 @@ Set runtime vars and bindings in Cloudflare:
 
 - AI binding: `AI`
 - KV binding: `COACH_STATE_KV`
+- Workflow binding: `COACH_CHAT_WORKFLOW`
 - `AI_MODEL=@cf/mistralai/mistral-small-3.1-24b-instruct`
 - `COACH_PROMPT_VERSION=2026-03-25.v1`
 
 The Worker uses Cloudflare Workers AI directly and does not require an OpenAI API key.
+
+`wrangler.jsonc` now declares the Workflow binding, so Cloudflare does not need a separate manual dashboard binding step as long as deploys run through `wrangler deploy`.
+
+## D1 migrations
+
+Production deploys must apply D1 migrations before publishing the Worker. The `deploy` script now does this automatically:
+
+```bash
+npm run deploy
+```
+
+That runs:
+
+```bash
+wrangler d1 migrations apply APP_META_DB --remote
+wrangler deploy
+```
+
+If you deploy outside this script, make sure `migrations/0002_chat_jobs.sql` is applied remotely first.
 
 ## Cloudflare KV setup
 

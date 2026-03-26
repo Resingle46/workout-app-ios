@@ -1,4 +1,5 @@
 import { createApp } from "./app";
+export { CoachChatJobWorkflow } from "./chat-job-workflow";
 
 const app = createApp();
 
