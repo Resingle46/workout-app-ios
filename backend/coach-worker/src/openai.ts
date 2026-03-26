@@ -1,7 +1,6 @@
 import {
   chatResponseModelOutputSchema,
   profileInsightsModelOutputSchema,
-  suggestedChangeSchema,
   type CoachChatRequest,
   type CoachChatResponse,
   type CoachProfileInsightsRequest,
@@ -370,7 +369,6 @@ export class WorkersAICoachService implements CoachInferenceService {
             ...applyChatGuardrails(request, {
               answerMarkdown,
               followUps: [],
-              suggestedChanges: [],
               generationStatus: "model",
             }),
             responseID: turnID,
@@ -569,13 +567,11 @@ function normalizeChatResponse(
   response: {
     answerMarkdown: string;
     followUps: string[];
-    suggestedChanges: unknown[];
   }
 ): CoachChatContent {
   return {
     answerMarkdown: response.answerMarkdown.trim(),
     followUps: dedupeText(response.followUps).slice(0, 4),
-    suggestedChanges: normalizeSuggestedChanges(response.suggestedChanges),
   };
 }
 
@@ -583,13 +579,11 @@ function normalizeProfileInsightsResponse(
   response: {
     summary: string;
     recommendations: string[];
-    suggestedChanges: unknown[];
   }
 ): CoachProfileInsightsContent {
   return {
     summary: response.summary.trim(),
     recommendations: dedupeText(response.recommendations).slice(0, 8),
-    suggestedChanges: normalizeSuggestedChanges(response.suggestedChanges),
   };
 }
 
@@ -633,7 +627,6 @@ function parsePlainProfileInsights(
       ...bulletRecommendations,
       ...narrativeRecommendations,
     ]).slice(0, 8),
-    suggestedChanges: [],
   };
 }
 
@@ -654,10 +647,6 @@ function applyProfileInsightsGuardrails(
     summary,
     recommendations:
       recommendations.length > 0 ? recommendations : fallback.recommendations,
-    suggestedChanges: filterSuggestedChangesByConstraints(
-      response.suggestedChanges,
-      constraints
-    ),
     generationStatus: response.generationStatus,
   };
 }
@@ -674,10 +663,6 @@ function applyChatGuardrails(
       request.locale
     ),
     followUps: response.followUps,
-    suggestedChanges: filterSuggestedChangesByConstraints(
-      response.suggestedChanges,
-      constraints
-    ),
     generationStatus: response.generationStatus,
   };
 }
@@ -692,7 +677,6 @@ function buildNeutralProfileInsights(
       recommendations: [
         localizedCoachText(request.locale, "fallbackProgressionBaseline"),
       ],
-      suggestedChanges: [],
       generationStatus: "fallback",
     };
   }
@@ -744,7 +728,6 @@ function buildNeutralProfileInsights(
   return {
     summary: localizedCoachText(locale, "fallbackSummary"),
     recommendations: dedupeText(recommendations).slice(0, 5),
-    suggestedChanges: [],
     generationStatus: "fallback",
   };
 }
@@ -764,7 +747,6 @@ function buildNeutralChatResponse(
         bullets
       ),
       followUps: [],
-      suggestedChanges: [],
       generationStatus: "fallback",
     };
   }
@@ -813,7 +795,6 @@ function buildNeutralChatResponse(
       dedupeText(bullets).slice(0, 4)
     ),
     followUps: [],
-    suggestedChanges: [],
     generationStatus: "fallback",
   };
 }
@@ -824,30 +805,6 @@ function extractConstraintsFromSnapshot(
   return extractProgramCommentConstraints(
     snapshot?.coachAnalysisSettings.programComment
   );
-}
-
-function filterSuggestedChangesByConstraints(
-  changes: CoachProfileInsightsResponse["suggestedChanges"],
-  constraints: ProgramCommentConstraints
-): CoachProfileInsightsResponse["suggestedChanges"] {
-  return changes.filter((change) => {
-    if (
-      constraints.preserveWeeklyFrequency &&
-      change.type === "setWeeklyWorkoutTarget"
-    ) {
-      return false;
-    }
-
-    if (
-      (constraints.rollingSplitExecution ||
-        constraints.preserveProgramWorkoutCount) &&
-      (change.type === "addWorkoutDay" || change.type === "deleteWorkoutDay")
-    ) {
-      return false;
-    }
-
-    return true;
-  });
 }
 
 function filterFrequencyStructureText(
@@ -914,10 +871,6 @@ function sanitizeChatAnswerMarkdown(answerMarkdown: string): string {
       continue;
     }
 
-    if (looksLikeSuggestedChangesHeading(trimmed)) {
-      break;
-    }
-
     if (trimmed.toLowerCase() === "markdown") {
       continue;
     }
@@ -935,11 +888,6 @@ function sanitizeChatAnswerMarkdown(answerMarkdown: string): string {
     .trim();
 
   return collapsed || normalized;
-}
-
-function looksLikeSuggestedChangesHeading(line: string): boolean {
-  return /^(?:#{1,6}\s*)?(?:suggested changes?|предлагаемые изменения)\s*:?\s*$/i
-    .test(line);
 }
 
 function looksLikeStructuredChangeLine(line: string): boolean {
@@ -1013,26 +961,6 @@ function shouldBlockFrequencyStructureText(
 
 function formatLoad(value: number): string {
   return Number.isInteger(value) ? String(value) : value.toFixed(1);
-}
-
-function normalizeSuggestedChanges(
-  values: unknown[]
-): CoachProfileInsightsResponse["suggestedChanges"] {
-  const result: CoachProfileInsightsResponse["suggestedChanges"] = [];
-
-  for (const value of values) {
-    const parsed = suggestedChangeSchema.safeParse(value);
-    if (!parsed.success) {
-      continue;
-    }
-
-    result.push(parsed.data);
-    if (result.length >= 5) {
-      break;
-    }
-  }
-
-  return result;
 }
 
 function extractPlainText(rawResponse: unknown, label: string): string {
@@ -1563,27 +1491,6 @@ function dedupeText(values: string[]): string[] {
   return result;
 }
 
-const guidedSuggestedChangeJsonSchema = {
-  type: "object",
-  properties: {
-    id: { type: "string" },
-    type: { type: "string" },
-    title: { type: "string" },
-    summary: { type: "string" },
-    weeklyWorkoutTarget: { type: "integer" },
-    programID: { type: "string" },
-    workoutID: { type: "string" },
-    templateExerciseID: { type: "string" },
-    replacementExerciseID: { type: "string" },
-    workoutTitle: { type: "string" },
-    workoutFocus: { type: "string" },
-    reps: { type: "integer" },
-    setsCount: { type: "integer" },
-    suggestedWeight: { type: "number" },
-  },
-  required: ["id", "type", "title", "summary"],
-} as const;
-
 const profileInsightsResponseJsonSchema = {
   type: "object",
   properties: {
@@ -1596,12 +1503,8 @@ const profileInsightsResponseJsonSchema = {
         type: "string",
       },
     },
-    suggestedChanges: {
-      type: "array",
-      items: guidedSuggestedChangeJsonSchema,
-    },
   },
-  required: ["summary", "recommendations", "suggestedChanges"],
+  required: ["summary", "recommendations"],
 } as const;
 
 const chatResponseJsonSchema = {
@@ -1616,10 +1519,6 @@ const chatResponseJsonSchema = {
         type: "string",
       },
     },
-    suggestedChanges: {
-      type: "array",
-      items: guidedSuggestedChangeJsonSchema,
-    },
   },
-  required: ["answerMarkdown", "followUps", "suggestedChanges"],
+  required: ["answerMarkdown", "followUps"],
 } as const;

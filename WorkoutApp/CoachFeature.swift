@@ -544,7 +544,6 @@ struct CloudCoachPreferencesUpdateResponse: Codable, Hashable, Sendable {
 struct CoachProfileInsights: Codable, Hashable, Sendable {
     var summary: String
     var recommendations: [String]
-    var suggestedChanges: [CoachSuggestedChange]
     var generationStatus: CoachResponseGenerationStatus? = nil
 
     var isModelGenerated: Bool {
@@ -556,7 +555,6 @@ struct CoachChatResponse: Codable, Hashable, Sendable {
     var answerMarkdown: String
     var responseID: String?
     var followUps: [String]
-    var suggestedChanges: [CoachSuggestedChange]
     var generationStatus: CoachResponseGenerationStatus? = nil
 
     var isModelGenerated: Bool {
@@ -579,7 +577,6 @@ struct CoachChatMessage: Identifiable, Hashable, Sendable {
     var role: CoachChatRole
     var content: String
     var followUps: [String]
-    var suggestedChanges: [CoachSuggestedChange]
     var generationStatus: CoachResponseGenerationStatus? = nil
     var isLoading: Bool
     var isStatus: Bool
@@ -589,7 +586,6 @@ struct CoachChatMessage: Identifiable, Hashable, Sendable {
         role: CoachChatRole,
         content: String,
         followUps: [String] = [],
-        suggestedChanges: [CoachSuggestedChange] = [],
         generationStatus: CoachResponseGenerationStatus? = nil,
         isLoading: Bool = false,
         isStatus: Bool = false
@@ -598,58 +594,9 @@ struct CoachChatMessage: Identifiable, Hashable, Sendable {
         self.role = role
         self.content = content
         self.followUps = followUps
-        self.suggestedChanges = suggestedChanges
         self.generationStatus = generationStatus
         self.isLoading = isLoading
         self.isStatus = isStatus
-    }
-}
-
-enum CoachSuggestedChangeType: String, Codable, Hashable, Sendable {
-    case setWeeklyWorkoutTarget
-    case addWorkoutDay
-    case deleteWorkoutDay
-    case swapWorkoutExercise
-    case updateTemplateExercisePrescription
-}
-
-struct CoachSuggestedChange: Identifiable, Codable, Hashable, Sendable {
-    var id: String
-    var type: CoachSuggestedChangeType
-    var title: String
-    var summary: String
-    var weeklyWorkoutTarget: Int?
-    var programID: UUID?
-    var workoutID: UUID?
-    var templateExerciseID: UUID?
-    var replacementExerciseID: UUID?
-    var workoutTitle: String?
-    var workoutFocus: String?
-    var reps: Int?
-    var setsCount: Int?
-    var suggestedWeight: Double?
-
-    var isApplicable: Bool {
-        switch type {
-        case .setWeeklyWorkoutTarget:
-            return weeklyWorkoutTarget != nil
-        case .addWorkoutDay:
-            return programID != nil && workoutTitle != nil
-        case .deleteWorkoutDay:
-            return programID != nil && workoutID != nil
-        case .swapWorkoutExercise:
-            return programID != nil &&
-                workoutID != nil &&
-                templateExerciseID != nil &&
-                replacementExerciseID != nil
-        case .updateTemplateExercisePrescription:
-            return programID != nil &&
-                workoutID != nil &&
-                templateExerciseID != nil &&
-                reps != nil &&
-                setsCount != nil &&
-                suggestedWeight != nil
-        }
     }
 }
 
@@ -1318,7 +1265,6 @@ struct CoachFallbackInsightsFactory {
         return CoachProfileInsights(
             summary: coachLocalizedString("coach.fallback.summary.raw"),
             recommendations: Array(deduplicatedRecommendations.prefix(5)),
-            suggestedChanges: [],
             generationStatus: .fallback
         )
     }
@@ -1876,7 +1822,6 @@ final class CoachStore {
                     role: .assistant,
                     content: response.answerMarkdown,
                     followUps: response.followUps,
-                    suggestedChanges: response.suggestedChanges,
                     generationStatus: response.generationStatus
                 )
             )
@@ -2839,20 +2784,6 @@ private struct CoachConversationContentHeightPreferenceKey: PreferenceKey {
 
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = nextValue()
-    }
-}
-
-private extension Array where Element == CoachSuggestedChange {
-    func deduplicatedCoachChanges() -> [CoachSuggestedChange] {
-        var seenIDs = Set<String>()
-        var result: [CoachSuggestedChange] = []
-
-        for change in self where !seenIDs.contains(change.id) {
-            seenIDs.insert(change.id)
-            result.append(change)
-        }
-
-        return result
     }
 }
 

@@ -39,17 +39,13 @@ export interface InferencePromptContext {
   profile: CompactCoachSnapshot["profile"];
   userConstraints: ProgramCommentConstraints;
   preferredProgram?: {
-    id: string;
     title: string;
     workoutCount: number;
     workouts: Array<{
-      id: string;
       title: string;
       focus: string;
       exerciseCount: number;
       exercises: Array<{
-        templateExerciseID: string;
-        exerciseID: string;
         exerciseName: string;
         setsCount: number;
         reps: number;
@@ -264,17 +260,13 @@ export function buildInferencePromptContext(
     userConstraints,
     preferredProgram: snapshot.preferredProgram
       ? {
-          id: snapshot.preferredProgram.id,
           title: snapshot.preferredProgram.title,
           workoutCount: snapshot.preferredProgram.workoutCount,
           workouts: snapshot.preferredProgram.workouts.map((workout) => ({
-            id: workout.id,
             title: workout.title,
             focus: workout.focus,
             exerciseCount: workout.exerciseCount,
             exercises: workout.exercises.map((exercise) => ({
-              templateExerciseID: exercise.templateExerciseID,
-              exerciseID: exercise.exerciseID,
               exerciseName: exercise.exerciseName,
               setsCount: exercise.setsCount,
               reps: exercise.reps,

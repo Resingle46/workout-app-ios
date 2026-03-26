@@ -80,7 +80,6 @@ describe("coach worker app", () => {
             data: {
               summary: "Remote summary",
               recommendations: ["Remote recommendation"],
-              suggestedChanges: [],
               generationStatus: "model",
             },
             model: DEFAULT_AI_MODEL,
@@ -280,7 +279,6 @@ describe("coach worker app", () => {
             data: {
               summary: "Summary",
               recommendations: ["Recommendation"],
-              suggestedChanges: [],
               generationStatus: "model",
             },
             model: DEFAULT_AI_MODEL,
@@ -349,7 +347,6 @@ describe("coach worker app", () => {
             data: {
               summary: "Fresh remote summary",
               recommendations: ["Fresh remote recommendation"],
-              suggestedChanges: [],
               generationStatus: "model",
             },
             model: DEFAULT_AI_MODEL,
@@ -378,7 +375,6 @@ describe("coach worker app", () => {
     await repository.storeInsightsCache(upload.installID, context.contextHash, {
       summary: "Cached fallback summary",
       recommendations: ["Cached fallback recommendation"],
-      suggestedChanges: [],
       generationStatus: "fallback",
     });
 
@@ -417,7 +413,6 @@ describe("coach worker app", () => {
               answerMarkdown: "Coach answer",
               responseID: "coach-turn_1",
               followUps: ["Need a progression block?"],
-              suggestedChanges: [],
               generationStatus: "model",
             },
             responseId: "coach-turn_1",
@@ -506,7 +501,6 @@ describe("coach worker app", () => {
       answerMarkdown:
         "Keep load the same next week and add one rep where bar speed stays solid.",
       followUps: [],
-      suggestedChanges: [],
       generationStatus: "model",
     });
   });
@@ -582,7 +576,6 @@ describe("WorkersAICoachService", () => {
       response: {
         answerMarkdown: "Use +2.5kg if RPE stayed below 8.",
         followUps: ["Want a double progression version?"],
-        suggestedChanges: [],
       },
       usage: { total_tokens: 321 },
     });
@@ -598,10 +591,7 @@ describe("WorkersAICoachService", () => {
       temperature: 0.2,
       guided_json: expect.any(Object),
     });
-    expect(payload?.guided_json?.properties?.suggestedChanges?.items).toMatchObject({
-      type: "object",
-      required: ["id", "type", "title", "summary"],
-    });
+    expect(payload?.guided_json?.properties).not.toHaveProperty("suggestedChanges");
     expect(payload).not.toHaveProperty("previous_response_id");
     expect(payload?.messages).toEqual(
       expect.arrayContaining([
@@ -627,7 +617,6 @@ describe("WorkersAICoachService", () => {
       response: {
         summary: "Summary",
         recommendations: ["Recommendation"],
-        suggestedChanges: [],
       },
     });
 
@@ -652,28 +641,6 @@ describe("WorkersAICoachService", () => {
     );
     expect(promptText).not.toContain("\"compatibility\"");
     expect(promptText).not.toContain("\"training\"");
-  });
-
-  it("drops invalid suggestedChanges instead of failing the whole chat response", async () => {
-    const aiRun = vi.fn().mockResolvedValue({
-      response: {
-        answerMarkdown: "Keep one rep in reserve on compounds this week.",
-        followUps: ["Want that translated into set targets?"],
-        suggestedChanges: [
-          {
-            id: "bad-change",
-            type: "setWeeklyWorkoutTarget",
-            title: "Broken draft",
-            summary: "Missing weekly target value",
-          },
-        ],
-      },
-    });
-
-    const service = new WorkersAICoachService(makeEnv({ AI: { run: aiRun } }));
-    const result = await service.generateChat(makeChatRequestFixture());
-
-    expect(result.data.suggestedChanges).toEqual([]);
   });
 
   it("falls back to plain-text chat when structured output fails", async () => {
@@ -702,7 +669,6 @@ describe("WorkersAICoachService", () => {
       "Keep load the same next week and add one rep to the final set."
     );
     expect(result.data.followUps).toEqual([]);
-    expect(result.data.suggestedChanges).toEqual([]);
     expect(result.data.responseID).toMatch(/^coach-turn_/);
   });
 
@@ -724,7 +690,6 @@ describe("WorkersAICoachService", () => {
       "Repeat the last successful load and add one rep only where the final set looked repeatable."
     );
     expect(result.data.followUps).toEqual([]);
-    expect(result.data.suggestedChanges).toEqual([]);
     expect(result.data.generationStatus).toBe("model");
   });
 
@@ -743,15 +708,6 @@ describe("WorkersAICoachService", () => {
           "```",
         ].join("\n"),
         followUps: [],
-        suggestedChanges: [
-          {
-            id: "weekly-target-2",
-            type: "setWeeklyWorkoutTarget",
-            title: "Reduce weekly target",
-            summary: "Reduce weekly training target to 2.",
-            weeklyWorkoutTarget: 2,
-          },
-        ],
       },
     });
 
@@ -762,7 +718,6 @@ describe("WorkersAICoachService", () => {
     expect(result.data.answerMarkdown).toContain(
       "Keep training volume stable this week."
     );
-    expect(result.data.answerMarkdown).not.toContain("Suggested Changes");
     expect(result.data.answerMarkdown).not.toContain("setWeeklyWorkoutTarget");
   });
 
@@ -773,36 +728,6 @@ describe("WorkersAICoachService", () => {
         recommendations: [
           "Increase to 4 workouts per week so the split matches the target.",
           "Keep bench progression steady.",
-        ],
-        suggestedChanges: [
-          {
-            id: "weekly-target-4",
-            type: "setWeeklyWorkoutTarget",
-            title: "Adjust weekly target",
-            summary: "Raise the weekly target to 4.",
-            weeklyWorkoutTarget: 4,
-          },
-          {
-            id: "add-day-1",
-            type: "addWorkoutDay",
-            title: "Add a workout day",
-            summary: "Add another workout day to match the split.",
-            programID: "11111111-1111-4111-8111-111111111111",
-            workoutTitle: "Workout 4",
-            workoutFocus: "Upper body",
-          },
-          {
-            id: "prescription-1",
-            type: "updateTemplateExercisePrescription",
-            title: "Tighten the top sets",
-            summary: "Keep the top sets crisp and repeatable.",
-            programID: "11111111-1111-4111-8111-111111111111",
-            workoutID: "22222222-2222-4222-8222-222222222222",
-            templateExerciseID: "33333333-3333-4333-8333-333333333333",
-            reps: 5,
-            setsCount: 3,
-            suggestedWeight: 102.5,
-          },
         ],
       },
     });
@@ -816,11 +741,6 @@ describe("WorkersAICoachService", () => {
 
     expect(result.data.summary).not.toContain("saved program has 4 workouts");
     expect(result.data.recommendations).toEqual(["Keep bench progression steady."]);
-    expect(result.data.suggestedChanges).toEqual([
-      expect.objectContaining({
-        type: "updateTemplateExercisePrescription",
-      }),
-    ]);
   });
 
   it("filters conflicting frequency and structure guidance from chat", async () => {
@@ -831,17 +751,6 @@ describe("WorkersAICoachService", () => {
           "Keep load the same next week and add one rep to the final set.",
         ].join("\n\n"),
         followUps: [],
-        suggestedChanges: [
-          {
-            id: "add-day-1",
-            type: "addWorkoutDay",
-            title: "Add a workout day",
-            summary: "Add another workout day to match the split.",
-            programID: "11111111-1111-4111-8111-111111111111",
-            workoutTitle: "Workout 4",
-            workoutFocus: "Upper body",
-          },
-        ],
       },
     });
 
@@ -854,7 +763,6 @@ describe("WorkersAICoachService", () => {
     expect(result.data.answerMarkdown).toContain(
       "Keep load the same next week and add one rep"
     );
-    expect(result.data.suggestedChanges).toEqual([]);
   });
 
   it("parses plain-text profile insights", async () => {
@@ -897,7 +805,6 @@ describe("WorkersAICoachService", () => {
     expect(aiRun).toHaveBeenCalledTimes(2);
     expect(result.data.summary.length).toBeGreaterThan(0);
     expect(result.data.recommendations.length).toBeGreaterThan(0);
-    expect(result.data.suggestedChanges).toEqual([]);
     expect(result.data.summary.toLowerCase()).not.toContain("adjustments");
   });
 
@@ -970,7 +877,6 @@ describe("WorkersAICoachService", () => {
         data: {
           answerMarkdown: expect.any(String),
           followUps: [],
-          suggestedChanges: [],
           responseID: expect.stringMatching(/^coach-turn_/),
           generationStatus: "fallback",
         },
@@ -996,7 +902,6 @@ function stubInferenceService(overrides?: {
         data: overrides?.profileInsights ?? {
           summary: "Summary",
           recommendations: ["Recommendation"],
-          suggestedChanges: [],
           generationStatus: "model",
         },
         model: DEFAULT_AI_MODEL,
@@ -1011,7 +916,6 @@ function stubInferenceService(overrides?: {
           answerMarkdown: "Answer",
           responseID: "coach-turn_1",
           followUps: [],
-          suggestedChanges: [],
           generationStatus: "model",
         },
         responseId: "coach-turn_1",

@@ -469,78 +469,12 @@ export const stateDeleteRequestSchema = z
   })
   .strict();
 
-const suggestedChangeBaseSchema = {
-  id: nonEmptyStringSchema.max(200),
-  title: nonEmptyStringSchema.max(160),
-  summary: nonEmptyStringSchema.max(600),
-};
-
-const setWeeklyWorkoutTargetChangeSchema = z
-  .object({
-    ...suggestedChangeBaseSchema,
-    type: z.literal("setWeeklyWorkoutTarget"),
-    weeklyWorkoutTarget: z.int().min(1),
-  })
-  .strict();
-
-const addWorkoutDayChangeSchema = z
-  .object({
-    ...suggestedChangeBaseSchema,
-    type: z.literal("addWorkoutDay"),
-    programID: uuidSchema,
-    workoutTitle: nonEmptyStringSchema.max(100),
-    workoutFocus: z.string().max(100).optional(),
-  })
-  .strict();
-
-const deleteWorkoutDayChangeSchema = z
-  .object({
-    ...suggestedChangeBaseSchema,
-    type: z.literal("deleteWorkoutDay"),
-    programID: uuidSchema,
-    workoutID: uuidSchema,
-  })
-  .strict();
-
-const swapWorkoutExerciseChangeSchema = z
-  .object({
-    ...suggestedChangeBaseSchema,
-    type: z.literal("swapWorkoutExercise"),
-    programID: uuidSchema,
-    workoutID: uuidSchema,
-    templateExerciseID: uuidSchema,
-    replacementExerciseID: uuidSchema,
-  })
-  .strict();
-
-const updateTemplateExercisePrescriptionChangeSchema = z
-  .object({
-    ...suggestedChangeBaseSchema,
-    type: z.literal("updateTemplateExercisePrescription"),
-    programID: uuidSchema,
-    workoutID: uuidSchema,
-    templateExerciseID: uuidSchema,
-    reps: z.int().min(1),
-    setsCount: z.int().min(1),
-    suggestedWeight: z.number().finite().min(0),
-  })
-  .strict();
-
-export const suggestedChangeSchema = z.discriminatedUnion("type", [
-  setWeeklyWorkoutTargetChangeSchema,
-  addWorkoutDayChangeSchema,
-  deleteWorkoutDayChangeSchema,
-  swapWorkoutExerciseChangeSchema,
-  updateTemplateExercisePrescriptionChangeSchema,
-]);
-
 export const coachResponseGenerationStatusSchema = z.enum(["model", "fallback"]);
 
 export const profileInsightsResponseSchema = z
   .object({
     summary: nonEmptyStringSchema.max(1200),
     recommendations: z.array(nonEmptyStringSchema.max(280)).max(8),
-    suggestedChanges: z.array(suggestedChangeSchema).max(5),
     generationStatus: coachResponseGenerationStatusSchema.default("fallback"),
   })
   .strict();
@@ -549,7 +483,7 @@ export const profileInsightsModelOutputSchema = z
   .object({
     summary: nonEmptyStringSchema.max(1200),
     recommendations: z.array(nonEmptyStringSchema.max(280)).max(8),
-    suggestedChanges: z.array(z.unknown()).max(5).default([]),
+    suggestedChanges: z.array(z.unknown()).max(5).optional(),
   })
   .strict();
 
@@ -558,7 +492,6 @@ export const chatResponseSchema = z
     answerMarkdown: nonEmptyStringSchema.max(6000),
     responseID: nonEmptyStringSchema.max(200),
     followUps: z.array(nonEmptyStringSchema.max(160)).max(4),
-    suggestedChanges: z.array(suggestedChangeSchema).max(5),
     generationStatus: coachResponseGenerationStatusSchema.default("fallback"),
   })
   .strict();
@@ -568,7 +501,7 @@ export const chatResponseModelOutputSchema = z
     answerMarkdown: nonEmptyStringSchema.max(6000),
     responseID: nonEmptyStringSchema.max(200).optional(),
     followUps: z.array(nonEmptyStringSchema.max(160)).max(4),
-    suggestedChanges: z.array(z.unknown()).max(5).default([]),
+    suggestedChanges: z.array(z.unknown()).max(5).optional(),
   })
   .strict();
 

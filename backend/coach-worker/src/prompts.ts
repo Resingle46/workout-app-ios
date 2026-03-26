@@ -29,17 +29,11 @@ function sharedRules(locale: string): string {
     "Use only the provided app context. Do not invent profile, workout, or progress facts.",
     "Treat explicit user-authored execution notes in programComment as higher priority than heuristic assumptions about split structure or weekly frequency.",
     "If the user says they rotate through more workout templates than they perform each week, do not treat that alone as a mismatch.",
-    "If the saved note explicitly says not to change weekly frequency or workout count, respect that and return no conflicting suggestedChanges.",
+    "If the saved note explicitly says not to change weekly frequency or workout count, respect that in your advice.",
     "Stay within workout programming, progression, recovery, and adherence guidance.",
     "Do not give medical diagnosis, treatment plans, or supplement protocols.",
-    "Only emit suggestedChanges that exactly match one of the supported types:",
-    "- setWeeklyWorkoutTarget",
-    "- addWorkoutDay",
-    "- deleteWorkoutDay",
-    "- swapWorkoutExercise",
-    "- updateTemplateExercisePrescription",
-    "Only emit a suggested change when the required IDs and fields are present in the supplied context.",
-    "If a safe or exact draft change cannot be supported from the supplied data, return an empty suggestedChanges array.",
+    "Write recommendations as plain coaching advice, not as app actions or structured field dumps.",
+    "Do not mention internal IDs, schema fields, or JSON keys.",
     "Be concise and specific.",
   ].join("\n");
 }
@@ -143,7 +137,6 @@ export function buildProfileInsightsMessages(
     {
       role: "user",
       content: [
-        `Capability scope: ${request.capabilityScope}`,
         "Return JSON that strictly matches the provided schema.",
         ...coachAnalysisContextLines(request.snapshot, {
           includeCoachAnalysisSettings: false,
@@ -167,8 +160,8 @@ export function buildChatMessages(
         "Use the supplied recent conversation turns only as short-term context. The current app context in the final user message is authoritative.",
         "Return markdown in answerMarkdown when formatting helps, but keep it compact.",
         "Do not repeat the user's question as a heading.",
-        "Do not include a 'Suggested Changes' section, raw field names, or schema-like dumps inside answerMarkdown.",
-        "If you want to propose changes, put them only in suggestedChanges.",
+        "If you want to propose changes, write them directly in answerMarkdown as normal prose or bullets.",
+        "Do not include raw field names, internal IDs, or schema-like dumps inside answerMarkdown.",
         "Avoid code fences unless the user explicitly asks for code.",
         "Include up to 4 follow-up questions that naturally continue the conversation.",
       ].join("\n\n"),
@@ -180,7 +173,6 @@ export function buildChatMessages(
     {
       role: "user",
       content: [
-        `Capability scope: ${request.capabilityScope}`,
         `Question: ${request.question}`,
         "Return JSON that strictly matches the provided schema.",
         ...coachAnalysisContextLines(request.snapshot, {
@@ -205,13 +197,12 @@ export function buildFallbackProfileInsightsMessages(
         "Do not return JSON.",
         "Write one short summary paragraph first.",
         "Then write up to 4 compact bullet recommendations.",
-        "Do not include suggested changes in the fallback response.",
+        "If you propose changes, write them as plain recommendations only.",
       ].join("\n\n"),
     },
     {
       role: "user",
       content: [
-        `Capability scope: ${request.capabilityScope}`,
         ...coachAnalysisContextLines(request.snapshot, {
           includeCoachAnalysisSettings: false,
           includePreferredProgram: false,
@@ -234,7 +225,8 @@ export function buildFallbackChatMessages(
         "Use the supplied recent conversation turns only as short-term context. The current app context in the final user message is authoritative.",
         "Return a concise markdown answer only. Do not return JSON.",
         "Do not repeat the user's question as a heading.",
-        "Do not include a 'Suggested Changes' section, raw field names, or code fences.",
+        "If you propose changes, write them directly in the answer as normal prose or bullets.",
+        "Do not include raw field names, internal IDs, or code fences.",
       ].join("\n\n"),
     },
     ...request.clientRecentTurns.map((message) => ({
@@ -244,7 +236,6 @@ export function buildFallbackChatMessages(
     {
       role: "user",
       content: [
-        `Capability scope: ${request.capabilityScope}`,
         `Question: ${request.question}`,
         ...coachAnalysisContextLines(request.snapshot, {
           includeCoachAnalysisSettings: false,
