@@ -90,53 +90,6 @@ It uses:
 
 This lets the app offload long-running coach operations from the device while keeping a clean API contract.
 
-## Repository structure
-
-```text
-.
-├── .github/
-│   └── workflows/
-│       └── ios-build.yml
-├── WorkoutApp.xcodeproj/
-├── WorkoutApp/
-│   ├── Models/
-│   │   └── Models.swift
-│   ├── Store/
-│   │   ├── AppStore.swift
-│   │   ├── BackupCoordinator.swift
-│   │   └── SeedData.swift
-│   ├── Views/
-│   │   ├── RootTabView.swift
-│   │   ├── ProgramsView.swift
-│   │   ├── ActiveWorkoutView.swift
-│   │   ├── StatisticsView.swift
-│   │   ├── ProfileView.swift
-│   │   └── WorkoutTemplateDetailView.swift
-│   ├── Resources/
-│   │   ├── Info.plist
-│   │   ├── en.lproj/Localizable.strings
-│   │   ├── ru.lproj/Localizable.strings
-│   │   └── Fonts/
-│   ├── Assets.xcassets/
-│   ├── CoachFeature.swift
-│   ├── WorkoutSummaryFeature.swift
-│   ├── DeveloperMenuFeature.swift
-│   ├── DebugDiagnostics.swift
-│   └── WorkoutAppApp.swift
-├── WorkoutAppTests/
-│   ├── BackupCoordinatorTests.swift
-│   ├── WorkoutSummaryFeatureTests.swift
-│   └── DebugDiagnosticsTests.swift
-└── backend/
-    └── coach-worker/
-        ├── src/
-        ├── migrations/
-        ├── test/
-        ├── package.json
-        ├── wrangler.jsonc
-        └── README.md
-```
-
 ## Tech stack
 
 ### iOS
