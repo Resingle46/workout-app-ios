@@ -2,6 +2,7 @@ import CryptoKit
 import Foundation
 import Observation
 import SwiftUI
+import UIKit
 
 struct CoachRuntimeConfiguration: Hashable, Sendable {
     var isFeatureEnabled: Bool
@@ -1548,6 +1549,7 @@ final class CoachStore {
     var profileInsights: CoachProfileInsights?
     var profileInsightsOrigin: CoachInsightsOrigin = .fallback
     var messages: [CoachChatMessage] = []
+    var visibleQuickPromptKeys: [String] = []
     var isLoadingProfileInsights = false
     var isSendingMessage = false
     var analysisSettingsSaveState: CoachAnalysisSettingsSaveState = .idle
@@ -1560,6 +1562,7 @@ final class CoachStore {
     @ObservationIgnored private let cloudSyncStore: CloudSyncStore
     @ObservationIgnored private let contextBuilder: CoachContextBuilder
     @ObservationIgnored private let localStateStore: CoachLocalStateStore
+    @ObservationIgnored private let allQuickPromptKeys: [String] = Self.makeQuickPromptKeys()
     private var configuration: CoachRuntimeConfiguration
     @ObservationIgnored private let capabilityScope: CoachCapabilityScope
 
@@ -1582,6 +1585,7 @@ final class CoachStore {
         )
         self.contextBuilder = contextBuilder
         self.capabilityScope = capabilityScope
+        configureQuickPromptsIfNeeded()
     }
 
     var canUseRemoteCoach: Bool {
@@ -1847,6 +1851,14 @@ final class CoachStore {
         isSendingMessage = false
     }
 
+    func configureQuickPromptsIfNeeded() {
+        guard visibleQuickPromptKeys.isEmpty else {
+            return
+        }
+
+        visibleQuickPromptKeys = Array(allQuickPromptKeys.shuffled().prefix(3))
+    }
+
     private func recentConversationMessages(limit: Int = 6) -> [CoachConversationMessage] {
         Array(
             messages
@@ -1857,6 +1869,12 @@ final class CoachStore {
                 role: message.role,
                 content: message.content
             )
+        }
+    }
+
+    private static func makeQuickPromptKeys() -> [String] {
+        (1...20).map { index in
+            String(format: "coach.quick_prompt.%02d", index)
         }
     }
 
@@ -1946,17 +1964,12 @@ struct CoachView: View {
     @State private var isEditingAnalysisContext = false
     @FocusState private var focusedField: CoachFocusField?
 
-    private var quickPrompts: [String] {
-        [
-            coachLocalizedString("coach.quick_prompt.analyze"),
-            coachLocalizedString("coach.quick_prompt.volume"),
-            coachLocalizedString("coach.quick_prompt.progression"),
-            coachLocalizedString("coach.quick_prompt.recovery")
-        ]
-    }
-
     private var availablePrograms: [WorkoutProgram] {
         store.programs
+    }
+
+    private var shouldShowQuickPrompts: Bool {
+        coachStore.messages.isEmpty
     }
 
     var body: some View {
@@ -2095,19 +2108,34 @@ struct CoachView: View {
                                 : 1
                         )
 
-                        FlowLayout(spacing: 10) {
-                            ForEach(quickPrompts, id: \.self) { prompt in
-                                Button(prompt) {
-                                    focusedField = nil
-                                    sendQuestion(prompt)
+                        if shouldShowQuickPrompts {
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text("coach.quick_prompt.title")
+                                    .font(AppTypography.caption(size: 13, weight: .semibold))
+                                    .foregroundStyle(AppTheme.secondaryText)
+
+                                FlowLayout(spacing: 10) {
+                                    ForEach(coachStore.visibleQuickPromptKeys, id: \.self) { promptKey in
+                                        let prompt = coachLocalizedString(promptKey)
+                                        Button(prompt) {
+                                            focusedField = nil
+                                            sendQuestion(prompt)
+                                        }
+                                        .buttonStyle(CoachPromptButtonStyle())
+                                        .disabled(!coachStore.canUseRemoteCoach || coachStore.isSendingMessage)
+                                        .opacity(
+                                            coachStore.canUseRemoteCoach && !coachStore.isSendingMessage
+                                            ? 1
+                                            : 0.55
+                                        )
+                                    }
                                 }
-                                .buttonStyle(CoachPromptButtonStyle())
-                                .disabled(!coachStore.canUseRemoteCoach || coachStore.isSendingMessage)
-                                .opacity(
-                                    coachStore.canUseRemoteCoach && !coachStore.isSendingMessage
-                                    ? 1
-                                    : 0.55
-                                )
+                            }
+                        }
+
+                        if !coachStore.messages.isEmpty {
+                            CoachConversationThread(messages: coachStore.messages) { followUp in
+                                sendQuestion(followUp)
                             }
                         }
 
@@ -2118,10 +2146,6 @@ struct CoachView: View {
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                     }
-                }
-
-                CoachConversationCard(messages: coachStore.messages) { followUp in
-                    sendQuestion(followUp)
                 }
             }
             .padding(.horizontal, 20)
@@ -2135,6 +2159,7 @@ struct CoachView: View {
         .scrollDismissesKeyboard(.immediately)
         .task(id: store.selectedTab) {
             if store.selectedTab == .coach {
+                coachStore.configureQuickPromptsIfNeeded()
                 coachStore.syncAnalysisSettingsDrafts(using: store)
                 withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) {
                     isEditingAnalysisContext = false
@@ -2428,77 +2453,60 @@ private struct CoachContextPreferencesCard: View {
     }
 }
 
-private struct CoachConversationCard: View {
+private struct CoachConversationThread: View {
     let messages: [CoachChatMessage]
     let onFollowUpTap: (String) -> Void
 
     @State private var contentHeight: CGFloat = 0
 
-    private let baseCardHeight: CGFloat = 340
+    private let maxConversationHeight: CGFloat = 760
 
-    private var maxCardHeight: CGFloat {
-        baseCardHeight * 2
-    }
-
-    private var resolvedCardHeight: CGFloat {
+    private var resolvedConversationHeight: CGFloat {
         let measuredHeight = contentHeight + 12
-        return min(max(baseCardHeight, measuredHeight), maxCardHeight)
+        return min(measuredHeight, maxConversationHeight)
     }
 
     var body: some View {
-        AppCard {
-            VStack(alignment: .leading, spacing: 16) {
-                AppSectionTitle(titleKey: "coach.chat.title")
-
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 14) {
-                            if messages.isEmpty {
-                                Text("coach.chat.empty")
-                                    .font(AppTypography.body(size: 15, weight: .medium, relativeTo: .subheadline))
-                                    .foregroundStyle(AppTheme.secondaryText)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            } else {
-                                ForEach(messages) { message in
-                                    CoachChatMessageCard(message: message) { followUp in
-                                        onFollowUpTap(followUp)
-                                    }
-                                    .id(message.id)
-                                }
-                            }
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    ForEach(messages) { message in
+                        CoachChatMessageCard(message: message) { followUp in
+                            onFollowUpTap(followUp)
                         }
-                        .background(
-                            GeometryReader { proxy in
-                                Color.clear
-                                    .preference(
-                                        key: CoachConversationContentHeightPreferenceKey.self,
-                                        value: proxy.size.height
-                                    )
-                            }
-                        )
-                    }
-                    .frame(height: resolvedCardHeight)
-                    .animation(.spring(response: 0.28, dampingFraction: 0.84), value: resolvedCardHeight)
-                    .onPreferenceChange(CoachConversationContentHeightPreferenceKey.self) { newHeight in
-                        contentHeight = newHeight
-                    }
-                    .onChange(of: messages.last?.id) { _, lastMessageID in
-                        guard let lastMessageID else {
-                            return
-                        }
-
-                        withAnimation(.easeOut(duration: 0.2)) {
-                            proxy.scrollTo(lastMessageID, anchor: .bottom)
-                        }
-                    }
-                    .task(id: messages.last?.id) {
-                        guard let lastMessageID = messages.last?.id else {
-                            return
-                        }
-
-                        proxy.scrollTo(lastMessageID, anchor: .bottom)
+                        .id(message.id)
                     }
                 }
+                .background(
+                    GeometryReader { proxy in
+                        Color.clear
+                            .preference(
+                                key: CoachConversationContentHeightPreferenceKey.self,
+                                value: proxy.size.height
+                            )
+                    }
+                )
+            }
+            .frame(height: resolvedConversationHeight)
+            .animation(.spring(response: 0.28, dampingFraction: 0.84), value: resolvedConversationHeight)
+            .onPreferenceChange(CoachConversationContentHeightPreferenceKey.self) { newHeight in
+                contentHeight = newHeight
+            }
+            .onChange(of: messages.last?.id) { _, lastMessageID in
+                guard let lastMessageID else {
+                    return
+                }
+
+                withAnimation(.easeOut(duration: 0.2)) {
+                    proxy.scrollTo(lastMessageID, anchor: .bottom)
+                }
+            }
+            .task(id: messages.last?.id) {
+                guard let lastMessageID = messages.last?.id else {
+                    return
+                }
+
+                proxy.scrollTo(lastMessageID, anchor: .bottom)
             }
         }
     }
@@ -2520,7 +2528,27 @@ private struct CoachChatMessageCard: View {
         isAssistant && !message.isLoading && !message.isStatus
     }
 
+    private var allowsCopy: Bool {
+        isAssistant && !message.isLoading && !message.isStatus
+    }
+
+    @ViewBuilder
     var body: some View {
+        if allowsCopy {
+            messageCard
+                .contextMenu {
+                    Button {
+                        UIPasteboard.general.string = CoachMarkdownText.normalizedContent(from: message.content)
+                    } label: {
+                        Label("action.copy", systemImage: "doc.on.doc")
+                    }
+                }
+        } else {
+            messageCard
+        }
+    }
+
+    private var messageCard: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 10) {
                 Image(systemName: leadingSystemImage)
@@ -2632,18 +2660,25 @@ private struct CoachMarkdownText: View {
             Text(attributedString)
                 .font(AppTypography.body(size: 15, weight: .medium, relativeTo: .subheadline))
                 .foregroundStyle(foregroundColor)
+                .lineSpacing(4)
                 .fixedSize(horizontal: false, vertical: true)
         } else {
             Text(verbatim: normalizedContent)
                 .font(AppTypography.body(size: 15, weight: .medium, relativeTo: .subheadline))
                 .foregroundStyle(foregroundColor)
+                .lineSpacing(4)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
 
     private var normalizedContent: String {
+        Self.normalizedContent(from: content)
+    }
+
+    static func normalizedContent(from content: String) -> String {
         content
             .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\u{2028}", with: "\n")
             .replacingOccurrences(
                 of: #"<br\s*/?>"#,
                 with: "\n",
