@@ -304,6 +304,8 @@
 "coach.context.ready_title" = "Контекст уже задан";
 "coach.context.ready_description" = "Coach будет использовать сохранённую программу и комментарий в следующем анализе.";
 "coach.context.edit" = "Изменить";
+"coach.context.status.ready" = "Контекст задан";
+"coach.context.status.missing" = "Контекст не задан";
 "coach.action.send" = "Отправить";
 "coach.action.review_apply" = "Проверить и применить";
 "coach.action.open_profile" = "Открыть профиль";

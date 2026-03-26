@@ -830,11 +830,13 @@ function filterChatAnswerMarkdown(
   constraints: ProgramCommentConstraints,
   locale: string
 ): string {
+  const sanitizedAnswer = sanitizeChatAnswerMarkdown(answerMarkdown);
+
   if (!hasFrequencyStructureGuardrails(constraints)) {
-    return answerMarkdown.trim();
+    return sanitizedAnswer;
   }
 
-  const lines = answerMarkdown
+  const lines = sanitizedAnswer
     .split(/\n+/)
     .map((line) => line.trim())
     .filter(Boolean)
@@ -845,6 +847,66 @@ function filterChatAnswerMarkdown(
   }
 
   return localizedCoachText(locale, "commentConstraintAcknowledged");
+}
+
+function sanitizeChatAnswerMarkdown(answerMarkdown: string): string {
+  const normalized = answerMarkdown.replace(/\r\n/g, "\n").trim();
+  if (!normalized) {
+    return "";
+  }
+
+  const cleanedLines: string[] = [];
+  let insideCodeFence = false;
+
+  for (const rawLine of normalized.split("\n")) {
+    const line = rawLine.trimEnd();
+    const trimmed = line.trim();
+
+    if (trimmed.startsWith("```")) {
+      insideCodeFence = !insideCodeFence;
+      continue;
+    }
+
+    if (insideCodeFence) {
+      continue;
+    }
+
+    if (!trimmed) {
+      cleanedLines.push("");
+      continue;
+    }
+
+    if (looksLikeSuggestedChangesHeading(trimmed)) {
+      break;
+    }
+
+    if (trimmed.toLowerCase() === "markdown") {
+      continue;
+    }
+
+    if (looksLikeStructuredChangeLine(trimmed)) {
+      continue;
+    }
+
+    cleanedLines.push(line);
+  }
+
+  const collapsed = cleanedLines
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+  return collapsed || normalized;
+}
+
+function looksLikeSuggestedChangesHeading(line: string): boolean {
+  return /^(?:#{1,6}\s*)?(?:suggested changes?|предлагаемые изменения)\s*:?\s*$/i
+    .test(line);
+}
+
+function looksLikeStructuredChangeLine(line: string): boolean {
+  return /^(?:[-*]\s*)?(?:setWeeklyWorkoutTarget|addWorkoutDay|deleteWorkoutDay|swapWorkoutExercise|updateTemplateExercisePrescription)\s*:/i
+    .test(line);
 }
 
 function hasFrequencyStructureGuardrails(

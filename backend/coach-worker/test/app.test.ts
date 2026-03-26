@@ -718,6 +718,44 @@ describe("WorkersAICoachService", () => {
     expect(result.data.generationStatus).toBe("model");
   });
 
+  it("removes leaked suggested-changes markdown from the chat answer", async () => {
+    const aiRun = vi.fn().mockResolvedValue({
+      response: {
+        answerMarkdown: [
+          "### Recovery check",
+          "",
+          "- Keep training volume stable this week.",
+          "",
+          "### Suggested Changes:",
+          "",
+          "```markdown",
+          "- setWeeklyWorkoutTarget: 2",
+          "```",
+        ].join("\n"),
+        followUps: [],
+        suggestedChanges: [
+          {
+            id: "weekly-target-2",
+            type: "setWeeklyWorkoutTarget",
+            title: "Reduce weekly target",
+            summary: "Reduce weekly training target to 2.",
+            weeklyWorkoutTarget: 2,
+          },
+        ],
+      },
+    });
+
+    const service = new WorkersAICoachService(makeEnv({ AI: { run: aiRun } }));
+    const result = await service.generateChat(makeChatRequestFixture());
+
+    expect(result.data.answerMarkdown).toContain("### Recovery check");
+    expect(result.data.answerMarkdown).toContain(
+      "Keep training volume stable this week."
+    );
+    expect(result.data.answerMarkdown).not.toContain("Suggested Changes");
+    expect(result.data.answerMarkdown).not.toContain("setWeeklyWorkoutTarget");
+  });
+
   it("filters conflicting frequency and structure guidance from profile insights", async () => {
     const aiRun = vi.fn().mockResolvedValue({
       response: {

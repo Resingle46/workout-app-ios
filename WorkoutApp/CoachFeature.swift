@@ -2006,19 +2006,6 @@ struct CoachView: View {
         store.programs
     }
 
-    private var hasSavedAnalysisContext: Bool {
-        store.coachAnalysisSettings.selectedProgramID != nil &&
-            !store.coachAnalysisSettings.programComment.isEmpty
-    }
-
-    private var savedAnalysisProgramTitle: String? {
-        guard let selectedProgramID = store.coachAnalysisSettings.selectedProgramID else {
-            return nil
-        }
-
-        return store.program(for: selectedProgramID)?.title
-    }
-
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 20) {
@@ -2071,8 +2058,7 @@ struct CoachView: View {
                     ),
                     programs: availablePrograms,
                     saveState: coachStore.analysisSettingsSaveState,
-                    isExpanded: isEditingAnalysisContext || !hasSavedAnalysisContext,
-                    savedProgramTitle: savedAnalysisProgramTitle,
+                    isExpanded: isEditingAnalysisContext,
                     savedProgramComment: store.coachAnalysisSettings.programComment,
                     commentFieldFocus: $focusedField,
                     onEdit: {
@@ -2086,7 +2072,7 @@ struct CoachView: View {
                         Task {
                             await coachStore.saveAnalysisSettings(using: store)
                             withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
-                                isEditingAnalysisContext = !hasSavedAnalysisContext
+                                isEditingAnalysisContext = false
                             }
                         }
                     }
@@ -2198,7 +2184,7 @@ struct CoachView: View {
             if store.selectedTab == .coach {
                 coachStore.syncAnalysisSettingsDrafts(using: store)
                 withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) {
-                    isEditingAnalysisContext = !hasSavedAnalysisContext
+                    isEditingAnalysisContext = false
                 }
                 if coachStore.profileInsights == nil {
                     await coachStore.refreshProfileInsights(using: store)
@@ -2346,7 +2332,6 @@ private struct CoachContextPreferencesCard: View {
     let programs: [WorkoutProgram]
     let saveState: CoachAnalysisSettingsSaveState
     let isExpanded: Bool
-    let savedProgramTitle: String?
     let savedProgramComment: String
     let commentFieldFocus: FocusState<CoachFocusField?>.Binding
     let onEdit: () -> Void
@@ -2358,6 +2343,18 @@ private struct CoachContextPreferencesCard: View {
 
     private var isSaved: Bool {
         saveState == .saved
+    }
+
+    private var hasSavedComment: Bool {
+        !savedProgramComment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var collapsedStatusKey: LocalizedStringKey {
+        hasSavedComment ? "coach.context.status.ready" : "coach.context.status.missing"
+    }
+
+    private var collapsedStatusColor: Color {
+        hasSavedComment ? AppTheme.success : AppTheme.destructive
     }
 
     var body: some View {
@@ -2453,15 +2450,9 @@ private struct CoachContextPreferencesCard: View {
                     .opacity(isSaving || isSaved ? 0.92 : 1)
                 }
             } else {
-                VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: 12) {
                     HStack(alignment: .firstTextBaseline, spacing: 12) {
-                        VStack(alignment: .leading, spacing: 6) {
-                            AppSectionTitle(titleKey: "coach.context.title")
-
-                            Text("coach.context.ready_title")
-                                .font(AppTypography.body(size: 16, weight: .semibold))
-                                .foregroundStyle(AppTheme.primaryText)
-                        }
+                        AppSectionTitle(titleKey: "coach.context.title")
 
                         Spacer(minLength: 12)
 
@@ -2471,23 +2462,13 @@ private struct CoachContextPreferencesCard: View {
                         .buttonStyle(CoachPromptButtonStyle())
                     }
 
-                    Text("coach.context.ready_description")
-                        .font(AppTypography.body(size: 14, weight: .medium, relativeTo: .subheadline))
-                        .foregroundStyle(AppTheme.secondaryText)
-                        .fixedSize(horizontal: false, vertical: true)
+                    HStack(spacing: 8) {
+                        CoachStatusDot(color: collapsedStatusColor, size: 8)
 
-                    if let savedProgramTitle {
-                        Text(savedProgramTitle)
-                            .font(AppTypography.body(size: 15, weight: .semibold))
-                            .foregroundStyle(AppTheme.primaryText)
-                            .lineLimit(1)
+                        Text(collapsedStatusKey)
+                            .font(AppTypography.body(size: 14, weight: .medium, relativeTo: .subheadline))
+                            .foregroundStyle(AppTheme.secondaryText)
                     }
-
-                    Text(savedProgramComment)
-                        .font(AppTypography.caption(size: 13, weight: .medium))
-                        .foregroundStyle(AppTheme.secondaryText)
-                        .lineLimit(2)
-                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
@@ -2498,7 +2479,18 @@ private struct CoachConversationCard: View {
     let messages: [CoachChatMessage]
     let onFollowUpTap: (String) -> Void
 
-    private let cardHeight: CGFloat = 340
+    @State private var contentHeight: CGFloat = 0
+
+    private let baseCardHeight: CGFloat = 340
+
+    private var maxCardHeight: CGFloat {
+        baseCardHeight * 2
+    }
+
+    private var resolvedCardHeight: CGFloat {
+        let measuredHeight = contentHeight + 12
+        return min(max(baseCardHeight, measuredHeight), maxCardHeight)
+    }
 
     var body: some View {
         AppCard {
@@ -2522,8 +2514,21 @@ private struct CoachConversationCard: View {
                                 }
                             }
                         }
+                        .background(
+                            GeometryReader { proxy in
+                                Color.clear
+                                    .preference(
+                                        key: CoachConversationContentHeightPreferenceKey.self,
+                                        value: proxy.size.height
+                                    )
+                            }
+                        )
                     }
-                    .frame(height: cardHeight)
+                    .frame(height: resolvedCardHeight)
+                    .animation(.spring(response: 0.28, dampingFraction: 0.84), value: resolvedCardHeight)
+                    .onPreferenceChange(CoachConversationContentHeightPreferenceKey.self) { newHeight in
+                        contentHeight = newHeight
+                    }
                     .onChange(of: messages.last?.id) { _, lastMessageID in
                         guard let lastMessageID else {
                             return
@@ -2653,10 +2658,7 @@ private struct CoachGenerationStatusDot: View {
     }
 
     var body: some View {
-        Circle()
-            .fill(color)
-            .frame(width: 8, height: 8)
-            .accessibilityHidden(true)
+        CoachStatusDot(color: color, size: 8)
     }
 }
 
@@ -2666,10 +2668,7 @@ private struct CoachMarkdownText: View {
     let isStatus: Bool
 
     var body: some View {
-        if let attributedString = try? AttributedString(
-            markdown: content,
-            options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        ) {
+        if let attributedString = try? AttributedString(markdown: content) {
             Text(attributedString)
                 .font(AppTypography.body(size: 15, weight: .medium, relativeTo: .subheadline))
                 .foregroundStyle(foregroundColor)
@@ -2688,6 +2687,18 @@ private struct CoachMarkdownText: View {
         }
 
         return isAssistant ? AppTheme.primaryText : AppTheme.secondaryText
+    }
+}
+
+private struct CoachStatusDot: View {
+    let color: Color
+    let size: CGFloat
+
+    var body: some View {
+        Circle()
+            .fill(color)
+            .frame(width: size, height: size)
+            .accessibilityHidden(true)
     }
 }
 
@@ -2794,6 +2805,14 @@ private struct FlowLayout: Layout {
             point.x += size.width + spacing
             lineHeight = max(lineHeight, size.height)
         }
+    }
+}
+
+private struct CoachConversationContentHeightPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
     }
 }
 
