@@ -3,6 +3,20 @@ import Foundation
 import Observation
 import OSLog
 
+private let workoutSummaryDefaultPrewarmDebounceDuration: Duration = .milliseconds(300)
+private let workoutSummaryDefaultMaxPollingDuration: TimeInterval = 90
+
+private func workoutSummaryDefaultPollIntervalMs(_ attempt: Int) -> Int {
+    switch attempt {
+    case 0:
+        return 1_500
+    case 1:
+        return 3_000
+    default:
+        return 5_000
+    }
+}
+
 enum WorkoutSummaryRequestMode: String, Codable, Hashable, Sendable {
     case prewarm
     case final
@@ -142,6 +156,7 @@ struct WorkoutSummaryPreparedRequest: Hashable, Sendable {
     }
 }
 
+@MainActor
 enum WorkoutSummaryRequestBuilder {
     static func prewarmRequest(
         for session: WorkoutSession,
@@ -432,8 +447,6 @@ private struct WorkoutSummarySessionState: Hashable, Sendable {
 final class WorkoutSummaryStore {
     private static let initialPollAfterMs = 1_500
     private static let retainedSessionCount = 2
-    private static let defaultPrewarmDebounceDuration: Duration = .milliseconds(300)
-    private static let defaultMaxPollingDuration: TimeInterval = 90
 
     private var configuration: CoachRuntimeConfiguration
     private var sessionStates: [UUID: WorkoutSummarySessionState] = [:]
@@ -452,9 +465,9 @@ final class WorkoutSummaryStore {
         client: any CoachAPIClient,
         configuration: CoachRuntimeConfiguration,
         localStateStore: CoachLocalStateStore = CoachLocalStateStore(),
-        prewarmDebounceDuration: Duration = WorkoutSummaryStore.defaultPrewarmDebounceDuration,
-        maxPollingDuration: TimeInterval = WorkoutSummaryStore.defaultMaxPollingDuration,
-        pollIntervalProvider: @escaping @Sendable (Int) -> Int = WorkoutSummaryStore.defaultPollIntervalMs,
+        prewarmDebounceDuration: Duration = workoutSummaryDefaultPrewarmDebounceDuration,
+        maxPollingDuration: TimeInterval = workoutSummaryDefaultMaxPollingDuration,
+        pollIntervalProvider: @escaping @Sendable (Int) -> Int = workoutSummaryDefaultPollIntervalMs,
         logger: Logger = Logger(
             subsystem: Bundle.main.bundleIdentifier ?? "WorkoutApp",
             category: "WorkoutSummary"
@@ -1076,17 +1089,6 @@ final class WorkoutSummaryStore {
         }
 
         return false
-    }
-
-    private static func defaultPollIntervalMs(for attempt: Int) -> Int {
-        switch attempt {
-        case 0:
-            return 1_500
-        case 1:
-            return 3_000
-        default:
-            return 5_000
-        }
     }
 
     private static func makeJobError(from error: Error) -> CoachChatJobError {
