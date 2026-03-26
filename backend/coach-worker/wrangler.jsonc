@@ -46,6 +46,11 @@
       "name": "coach-chat-job",
       "binding": "COACH_CHAT_WORKFLOW",
       "class_name": "CoachChatJobWorkflow"
+    },
+    {
+      "name": "workout-summary-job",
+      "binding": "WORKOUT_SUMMARY_WORKFLOW",
+      "class_name": "WorkoutSummaryJobWorkflow"
     }
   ],
   "vars": {

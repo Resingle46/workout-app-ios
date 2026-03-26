@@ -486,6 +486,15 @@ protocol CoachAPIClient: Sendable {
         installID: String
     ) async throws -> CoachChatJobStatusResponse
 
+    func createWorkoutSummaryJob(
+        _ request: WorkoutSummaryJobCreateRequest
+    ) async throws -> WorkoutSummaryJobCreateResponse
+
+    func getWorkoutSummaryJob(
+        jobID: String,
+        installID: String
+    ) async throws -> WorkoutSummaryJobStatusResponse
+
     func sendChat(
         locale: String,
         question: String,
@@ -496,6 +505,21 @@ protocol CoachAPIClient: Sendable {
     ) async throws -> CoachChatResponse
 
     func deleteRemoteState(installID: String) async throws
+}
+
+extension CoachAPIClient {
+    func createWorkoutSummaryJob(
+        _ request: WorkoutSummaryJobCreateRequest
+    ) async throws -> WorkoutSummaryJobCreateResponse {
+        throw CoachClientError.invalidResponse
+    }
+
+    func getWorkoutSummaryJob(
+        jobID: String,
+        installID: String
+    ) async throws -> WorkoutSummaryJobStatusResponse {
+        throw CoachClientError.invalidResponse
+    }
 }
 
 typealias CompactCoachSnapshot = CoachContextPayload
@@ -1150,6 +1174,71 @@ struct CoachAPIHTTPClient: CoachAPIClient {
 
         do {
             return try Self.decoder.decode(CoachChatJobStatusResponse.self, from: data)
+        } catch {
+            throw CoachClientError.invalidResponse
+        }
+    }
+
+    func createWorkoutSummaryJob(
+        _ request: WorkoutSummaryJobCreateRequest
+    ) async throws -> WorkoutSummaryJobCreateResponse {
+        try await send(
+            path: "v2/coach/workout-summary-jobs",
+            method: "POST",
+            body: request,
+            session: standardSession,
+            timeoutInterval: Self.standardRequestTimeoutInterval,
+            responseType: WorkoutSummaryJobCreateResponse.self
+        )
+    }
+
+    func getWorkoutSummaryJob(
+        jobID: String,
+        installID: String
+    ) async throws -> WorkoutSummaryJobStatusResponse {
+        guard configuration.isFeatureEnabled else {
+            throw CoachClientError.featureDisabled
+        }
+        guard let baseURL = configuration.backendBaseURL else {
+            throw CoachClientError.missingBaseURL
+        }
+        guard let internalBearerToken = configuration.internalBearerToken else {
+            throw CoachClientError.missingAuthToken
+        }
+
+        var components = URLComponents(
+            url: baseURL.appending(path: "v2/coach/workout-summary-jobs/\(jobID)"),
+            resolvingAgainstBaseURL: false
+        )
+        components?.queryItems = [
+            URLQueryItem(name: "installID", value: installID)
+        ]
+
+        guard let url = components?.url else {
+            throw CoachClientError.invalidResponse
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = Self.standardRequestTimeoutInterval
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("Bearer \(internalBearerToken)", forHTTPHeaderField: "Authorization")
+
+        let (data, response) = try await standardSession.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw CoachClientError.invalidResponse
+        }
+
+        guard (200...299).contains(httpResponse.statusCode) else {
+            throw Self.parseAPIErrorResponse(
+                data: data,
+                statusCode: httpResponse.statusCode
+            )
+        }
+
+        do {
+            return try Self.decoder.decode(WorkoutSummaryJobStatusResponse.self, from: data)
         } catch {
             throw CoachClientError.invalidResponse
         }

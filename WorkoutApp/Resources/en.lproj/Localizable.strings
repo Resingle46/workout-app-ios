@@ -492,6 +492,10 @@
 "summary.total_sets" = "Total sets";
 "summary.completed_sets" = "Completed sets";
 "summary.total_reps" = "Total reps";
+"workout_summary.ai_title" = "AI summary";
+"workout_summary.loading" = "Preparing a quick summary for this workout...";
+"workout_summary.highlights_title" = "Highlights";
+"workout_summary.next_focus_title" = "Next workout focus";
 "workout.target_weight" = "Target";
 "workout.previous_weight" = "Last";
 "stats.last_workout" = "Last workout";

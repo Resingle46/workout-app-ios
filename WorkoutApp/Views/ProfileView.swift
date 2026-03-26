@@ -178,6 +178,7 @@ private struct ProfileSettingsView: View {
 private struct CoachBackendSettingsCard: View {
     @Environment(AppStore.self) private var store
     @Environment(CoachStore.self) private var coachStore
+    @Environment(WorkoutSummaryStore.self) private var workoutSummaryStore
     private let coachConfigurationStore = CoachRuntimeConfigurationStore(bundle: .main)
 
     @State private var isFeatureEnabled = false
@@ -325,6 +326,7 @@ private struct CoachBackendSettingsCard: View {
         internalBearerToken = coachConfigurationStore.internalBearerToken
 
         coachStore.updateConfiguration(configuration)
+        workoutSummaryStore.updateConfiguration(configuration)
         statusMessage = localizedString("profile.settings.coach.saved")
 
         Task {
@@ -342,6 +344,7 @@ private struct CoachBackendSettingsCard: View {
         internalBearerToken = coachConfigurationStore.internalBearerToken
 
         coachStore.updateConfiguration(configuration)
+        workoutSummaryStore.updateConfiguration(configuration)
 
         Task {
             await coachStore.refreshProfileInsights(using: store)

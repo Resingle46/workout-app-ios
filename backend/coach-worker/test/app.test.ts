@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app";
 import { executeChatJob } from "../src/chat-job-executor";
+import { executeWorkoutSummaryJob } from "../src/workout-summary-job-executor";
 import {
   buildCoachContextFromSnapshot,
   hashCoachContext,
@@ -21,6 +22,9 @@ import type {
   CoachChatResponse,
   CoachProfileInsightsRequest,
   CoachProfileInsightsResponse,
+  CoachWorkoutSummaryJobCreateRequest,
+  CoachWorkoutSummaryJobStatusResponse,
+  CoachWorkoutSummaryResponse,
   CompactCoachSnapshot,
 } from "../src/schemas";
 
@@ -87,6 +91,9 @@ describe("coach worker app", () => {
             },
             model: DEFAULT_AI_MODEL,
           };
+        },
+        async generateWorkoutSummary() {
+          throw new Error("not used");
         },
         async generateChat() {
           throw new Error("not used");
@@ -288,6 +295,9 @@ describe("coach worker app", () => {
             model: DEFAULT_AI_MODEL,
           };
         },
+        async generateWorkoutSummary() {
+          throw new Error("not used");
+        },
         async generateChat() {
           throw new Error("not used");
         },
@@ -357,6 +367,9 @@ describe("coach worker app", () => {
             model: DEFAULT_AI_MODEL,
           };
         },
+        async generateWorkoutSummary() {
+          throw new Error("not used");
+        },
         async generateChat() {
           throw new Error("not used");
         },
@@ -422,6 +435,9 @@ describe("coach worker app", () => {
             },
             model: DEFAULT_AI_MODEL,
           };
+        },
+        async generateWorkoutSummary() {
+          throw new Error("not used");
         },
         async generateChat() {
           throw new Error("not used");
@@ -489,6 +505,9 @@ describe("coach worker app", () => {
             model: DEFAULT_AI_MODEL,
           };
         },
+        async generateWorkoutSummary() {
+          throw new Error("not used");
+        },
         async generateChat() {
           throw new Error("not used");
         },
@@ -551,6 +570,9 @@ describe("coach worker app", () => {
     const app = createApp({
       createInferenceService: () => ({
         async generateProfileInsights() {
+          throw new Error("not used");
+        },
+        async generateWorkoutSummary() {
           throw new Error("not used");
         },
         async generateChat(request) {
@@ -1015,6 +1037,185 @@ describe("coach worker app", () => {
       ? await repository.getChatMemory(storedJob.installID, storedJob.contextHash)
       : null;
     expect(memory).toBeNull();
+  });
+
+  it("creates a queued workout summary job and starts the workflow", async () => {
+    const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
+    const workflowCreate = vi.fn().mockResolvedValue(makeWorkflowInstanceStub());
+    const app = createApp({
+      createInferenceService: () => stubInferenceService(),
+      createStateRepository: () => repository,
+    });
+    const env = makeEnv({
+      WORKOUT_SUMMARY_WORKFLOW: makeWorkflowBinding(workflowCreate),
+    });
+    const request = makeWorkoutSummaryJobCreateRequestFixture();
+
+    const response = await app.fetch(
+      authedRequest("https://coach.example.workers.dev/v2/coach/workout-summary-jobs", {
+        method: "POST",
+        body: JSON.stringify(request),
+      }),
+      env
+    );
+
+    expect(response.status).toBe(202);
+    await expect(response.json()).resolves.toMatchObject({
+      sessionID: request.sessionID,
+      fingerprint: request.fingerprint,
+      status: "queued",
+      pollAfterMs: 1500,
+      reusedExistingJob: false,
+    });
+    expect(workflowCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it("reuses an existing workout summary job for the same fingerprint", async () => {
+    const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
+    const workflowCreate = vi.fn().mockResolvedValue(makeWorkflowInstanceStub());
+    const app = createApp({
+      createInferenceService: () => stubInferenceService(),
+      createStateRepository: () => repository,
+    });
+    const env = makeEnv({
+      WORKOUT_SUMMARY_WORKFLOW: makeWorkflowBinding(workflowCreate),
+    });
+    const request = makeWorkoutSummaryJobCreateRequestFixture();
+
+    const firstResponse = await app.fetch(
+      authedRequest("https://coach.example.workers.dev/v2/coach/workout-summary-jobs", {
+        method: "POST",
+        body: JSON.stringify(request),
+      }),
+      env
+    );
+    const firstBody = await firstResponse.json();
+
+    const secondRequest = {
+      ...makeWorkoutSummaryJobCreateRequestFixture(),
+      sessionID: request.sessionID,
+      fingerprint: request.fingerprint,
+      currentWorkout: request.currentWorkout,
+      recentExerciseHistory: request.recentExerciseHistory,
+      requestMode: "final" as const,
+      trigger: "final_after_finish" as const,
+      inputMode: "finished_session" as const,
+    };
+
+    const secondResponse = await app.fetch(
+      authedRequest("https://coach.example.workers.dev/v2/coach/workout-summary-jobs", {
+        method: "POST",
+        body: JSON.stringify(secondRequest),
+      }),
+      env
+    );
+
+    expect(secondResponse.status).toBe(202);
+    await expect(secondResponse.json()).resolves.toMatchObject({
+      jobID: firstBody.jobID,
+      reusedExistingJob: true,
+    });
+    expect(workflowCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it("completes a workout summary job and serves the result", async () => {
+    const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
+    const workflowCreate = vi.fn().mockResolvedValue(makeWorkflowInstanceStub());
+    const app = createApp({
+      createStateRepository: () => repository,
+      createInferenceService: () =>
+        stubInferenceService({
+          workoutSummary: {
+            headline: "Bench volume held up",
+            summary: "You finished the main work with stable loading across all completed sets.",
+            highlights: ["Bench matched your best recent load."],
+            nextWorkoutFocus: ["Add load only if bar speed stays clean again."],
+            generationStatus: "model",
+          },
+        }),
+    });
+    const env = makeEnv({
+      WORKOUT_SUMMARY_WORKFLOW: makeWorkflowBinding(workflowCreate),
+    });
+    const request = makeWorkoutSummaryJobCreateRequestFixture();
+
+    const createResponse = await app.fetch(
+      authedRequest("https://coach.example.workers.dev/v2/coach/workout-summary-jobs", {
+        method: "POST",
+        body: JSON.stringify(request),
+      }),
+      env
+    );
+    const created = await createResponse.json();
+
+    await executeWorkoutSummaryJob(created.jobID, env, {
+      createStateRepository: () => repository,
+      createInferenceService: () =>
+        stubInferenceService({
+          workoutSummary: {
+            headline: "Bench volume held up",
+            summary: "You finished the main work with stable loading across all completed sets.",
+            highlights: ["Bench matched your best recent load."],
+            nextWorkoutFocus: ["Add load only if bar speed stays clean again."],
+            generationStatus: "model",
+          },
+        }),
+    });
+
+    const statusResponse = await app.fetch(
+      authedRequest(
+        `https://coach.example.workers.dev/v2/coach/workout-summary-jobs/${created.jobID}?installID=${request.installID}`,
+        { method: "GET" }
+      ),
+      env
+    );
+
+    expect(statusResponse.status).toBe(200);
+    await expect(statusResponse.json()).resolves.toMatchObject({
+      jobID: created.jobID,
+      sessionID: request.sessionID,
+      fingerprint: request.fingerprint,
+      status: "completed",
+      result: {
+        headline: "Bench volume held up",
+        inferenceMode: "structured",
+        generationStatus: "model",
+      },
+    });
+  });
+
+  it("allows a workout summary job while a chat job is already active", async () => {
+    const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
+    const chatWorkflowCreate = vi.fn().mockResolvedValue(makeWorkflowInstanceStub());
+    const summaryWorkflowCreate = vi.fn().mockResolvedValue(makeWorkflowInstanceStub());
+    const app = createApp({
+      createInferenceService: () => stubInferenceService(),
+      createStateRepository: () => repository,
+    });
+    const env = makeEnv({
+      COACH_CHAT_WORKFLOW: makeWorkflowBinding(chatWorkflowCreate),
+      WORKOUT_SUMMARY_WORKFLOW: makeWorkflowBinding(summaryWorkflowCreate),
+    });
+
+    const chatResponse = await app.fetch(
+      authedRequest("https://coach.example.workers.dev/v2/coach/chat-jobs", {
+        method: "POST",
+        body: JSON.stringify(makeChatJobCreateRequestFixture()),
+      }),
+      env
+    );
+    expect(chatResponse.status).toBe(202);
+
+    const summaryResponse = await app.fetch(
+      authedRequest("https://coach.example.workers.dev/v2/coach/workout-summary-jobs", {
+        method: "POST",
+        body: JSON.stringify(makeWorkoutSummaryJobCreateRequestFixture()),
+      }),
+      env
+    );
+
+    expect(summaryResponse.status).toBe(202);
+    expect(summaryWorkflowCreate).toHaveBeenCalledTimes(1);
   });
 
   it("deletes stored state for an install ID", async () => {
@@ -1587,8 +1788,10 @@ describe("WorkersAICoachService", () => {
 
 function stubInferenceService(overrides?: {
   profileInsights?: CoachProfileInsightsResponse;
+  workoutSummary?: CoachWorkoutSummaryResponse;
   chat?: CoachChatResponse;
   chatError?: Error;
+  workoutSummaryError?: Error;
 }): CoachInferenceService {
   return {
     async generateProfileInsights() {
@@ -1598,6 +1801,21 @@ function stubInferenceService(overrides?: {
           recommendations: ["Recommendation"],
           generationStatus: "model",
           insightSource: "fresh_model",
+        },
+        model: DEFAULT_AI_MODEL,
+      };
+    },
+    async generateWorkoutSummary() {
+      if (overrides?.workoutSummaryError) {
+        throw overrides.workoutSummaryError;
+      }
+      return {
+        data: overrides?.workoutSummary ?? {
+          headline: "Workout completed",
+          summary: "Solid session with repeatable work across the main lifts.",
+          highlights: ["Top sets stayed consistent."],
+          nextWorkoutFocus: ["Add load only where the last reps stayed clean."],
+          generationStatus: "model",
         },
         model: DEFAULT_AI_MODEL,
       };
@@ -1640,6 +1858,7 @@ function makeEnv(overrides: Partial<Env> = {}): Env {
     BACKUPS_R2: {} as Env["BACKUPS_R2"],
     APP_META_DB: {} as Env["APP_META_DB"],
     COACH_CHAT_WORKFLOW: makeWorkflowBinding(vi.fn()),
+    WORKOUT_SUMMARY_WORKFLOW: makeWorkflowBinding(vi.fn()),
     COACH_INTERNAL_TOKEN: "internal-token",
     AI_MODEL: DEFAULT_AI_MODEL,
     COACH_PROMPT_VERSION: "test.v1",
@@ -1832,6 +2051,64 @@ function makeChatJobCreateRequestFixture(): CoachChatJobCreateRequest {
   return {
     ...makeChatRequestFixture(),
     clientRequestID: crypto.randomUUID(),
+  };
+}
+
+function makeWorkoutSummaryJobCreateRequestFixture(): CoachWorkoutSummaryJobCreateRequest {
+  return {
+    locale: "en",
+    installID: "install_001",
+    clientRequestID: crypto.randomUUID(),
+    sessionID: "99999999-9999-4999-8999-999999999999",
+    fingerprint:
+      "7ce662704328b0c3ab015f053ec2778335f3d6958d51561d72163131855f6353",
+    requestMode: "prewarm",
+    trigger: "prewarm_one_remaining_set",
+    inputMode: "projected_final",
+    currentWorkout: {
+      workoutTemplateID: "22222222-2222-4222-8222-222222222222",
+      title: "Upper A",
+      exerciseCount: 1,
+      completedSetsCount: 2,
+      totalSetsCount: 2,
+      totalVolume: 1012.5,
+      exercises: [
+        {
+          templateExerciseID: "33333333-3333-4333-8333-333333333333",
+          exerciseID: "44444444-4444-4444-8444-444444444444",
+          exerciseName: "Barbell Bench Press",
+          groupKind: "regular",
+          sets: [
+            { index: 0, reps: 5, weight: 100, isCompleted: true },
+            { index: 1, reps: 5, weight: 102.5, isCompleted: true },
+          ],
+          completedSetsCount: 2,
+          totalSetsCount: 2,
+          totalVolume: 1012.5,
+        },
+      ],
+    },
+    recentExerciseHistory: [
+      {
+        exerciseID: "44444444-4444-4444-8444-444444444444",
+        exerciseName: "Barbell Bench Press",
+        sessions: [
+          {
+            sessionID: "55555555-5555-4555-8555-555555555555",
+            workoutTitle: "Upper A",
+            startedAt: "2026-03-24T17:00:00.000Z",
+            completedSetsCount: 2,
+            bestWeight: 102.5,
+            averageReps: 5,
+            totalVolume: 1012.5,
+            completedSets: [
+              { reps: 5, weight: 100 },
+              { reps: 5, weight: 102.5 },
+            ],
+          },
+        ],
+      },
+    ],
   };
 }
 

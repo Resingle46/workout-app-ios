@@ -28,6 +28,11 @@ import type {
   CoachProfileInsightsRequest,
   CoachProfileInsightsResponse,
   CoachSnapshotSyncRequest,
+  CoachWorkoutSummaryInputMode,
+  CoachWorkoutSummaryJobCreateRequest,
+  CoachWorkoutSummaryJobResult,
+  CoachWorkoutSummaryRequestMode,
+  CoachWorkoutSummaryTrigger,
   CompactCoachSnapshot,
   CoachRuntimeContextDelta,
 } from "./schemas";
@@ -145,6 +150,45 @@ export interface FailCoachChatJobInput {
   inferenceMode?: CoachChatInferenceMode;
 }
 
+export interface CreateWorkoutSummaryJobInput {
+  jobID: string;
+  installID: string;
+  clientRequestID: string;
+  sessionID: string;
+  fingerprint: string;
+  createdAt: string;
+  preparedRequest: CoachWorkoutSummaryJobCreateRequest;
+  requestMode: CoachWorkoutSummaryRequestMode;
+  trigger: CoachWorkoutSummaryTrigger;
+  inputMode: CoachWorkoutSummaryInputMode;
+  currentExerciseCount: number;
+  historyExerciseCount: number;
+  historySessionCount: number;
+}
+
+export interface CompleteWorkoutSummaryJobInput {
+  completedAt: string;
+  result: CoachWorkoutSummaryJobResult;
+  promptBytes?: number;
+  fallbackPromptBytes?: number;
+  modelDurationMs?: number;
+  fallbackModelDurationMs?: number;
+  totalJobDurationMs?: number;
+  inferenceMode?: CoachChatInferenceMode;
+  generationStatus?: CoachWorkoutSummaryJobResult["generationStatus"];
+}
+
+export interface FailWorkoutSummaryJobInput {
+  completedAt: string;
+  error: CoachChatJobError;
+  promptBytes?: number;
+  fallbackPromptBytes?: number;
+  modelDurationMs?: number;
+  fallbackModelDurationMs?: number;
+  totalJobDurationMs?: number;
+  inferenceMode?: CoachChatInferenceMode;
+}
+
 export interface CoachChatJobRecord {
   jobID: string;
   installID: string;
@@ -173,6 +217,36 @@ export interface CoachChatJobRecord {
   inferenceMode?: CoachChatInferenceMode;
   generationStatus?: CoachChatJobResult["generationStatus"];
   memoryCommittedAt?: string;
+}
+
+export interface CoachWorkoutSummaryJobRecord {
+  jobID: string;
+  installID: string;
+  clientRequestID: string;
+  sessionID: string;
+  fingerprint: string;
+  status: CoachChatJobStatus;
+  preparedRequest: CoachWorkoutSummaryJobCreateRequest;
+  result?: CoachWorkoutSummaryJobResult;
+  error?: CoachChatJobError;
+  createdAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  requestMode: CoachWorkoutSummaryRequestMode;
+  trigger: CoachWorkoutSummaryTrigger;
+  inputMode: CoachWorkoutSummaryInputMode;
+  currentExerciseCount: number;
+  historyExerciseCount: number;
+  historySessionCount: number;
+  promptVersion: string;
+  model: string;
+  promptBytes?: number;
+  fallbackPromptBytes?: number;
+  modelDurationMs?: number;
+  fallbackModelDurationMs?: number;
+  totalJobDurationMs?: number;
+  inferenceMode?: CoachChatInferenceMode;
+  generationStatus?: CoachWorkoutSummaryJobResult["generationStatus"];
 }
 
 export interface ClaimCoachChatJobExecutionResult {
@@ -232,6 +306,28 @@ export interface CoachStateStore {
     input: FailCoachChatJobInput
   ): Promise<CoachChatJobRecord>;
   commitChatJobMemory(jobID: string): Promise<void>;
+  createWorkoutSummaryJob(
+    input: CreateWorkoutSummaryJobInput
+  ): Promise<CoachWorkoutSummaryJobRecord>;
+  getWorkoutSummaryJob(
+    jobID: string,
+    installID: string
+  ): Promise<CoachWorkoutSummaryJobRecord | null>;
+  getWorkoutSummaryJobByID(
+    jobID: string
+  ): Promise<CoachWorkoutSummaryJobRecord | null>;
+  markWorkoutSummaryJobRunning(
+    jobID: string,
+    startedAt: string
+  ): Promise<{ job: CoachWorkoutSummaryJobRecord | null; claimed: boolean }>;
+  completeWorkoutSummaryJob(
+    jobID: string,
+    input: CompleteWorkoutSummaryJobInput
+  ): Promise<CoachWorkoutSummaryJobRecord>;
+  failWorkoutSummaryJob(
+    jobID: string,
+    input: FailWorkoutSummaryJobInput
+  ): Promise<CoachWorkoutSummaryJobRecord>;
   reconcileBackup(
     request: BackupReconcileRequest
   ): Promise<BackupReconcileResponse>;
@@ -306,6 +402,37 @@ interface CoachChatJobRow {
   inference_mode: CoachChatInferenceMode | null;
   generation_status: CoachChatJobResult["generationStatus"] | null;
   memory_committed_at: string | null;
+}
+
+interface WorkoutSummaryJobRow {
+  job_id: string;
+  install_id: string;
+  client_request_id: string;
+  session_id: string;
+  fingerprint: string;
+  status: CoachChatJobStatus;
+  prepared_request_json: string;
+  response_json: string | null;
+  error_code: string | null;
+  error_message: string | null;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  request_mode: CoachWorkoutSummaryRequestMode;
+  trigger: CoachWorkoutSummaryTrigger;
+  input_mode: CoachWorkoutSummaryInputMode;
+  current_exercise_count: number;
+  history_exercise_count: number;
+  history_session_count: number;
+  prompt_version: string;
+  model: string;
+  prompt_bytes: number | null;
+  fallback_prompt_bytes: number | null;
+  model_duration_ms: number | null;
+  fallback_model_duration_ms: number | null;
+  total_job_duration_ms: number | null;
+  inference_mode: CoachChatInferenceMode | null;
+  generation_status: CoachWorkoutSummaryJobResult["generationStatus"] | null;
 }
 
 interface InternalBackupRecord {
@@ -736,6 +863,244 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
       .run();
   }
 
+  async createWorkoutSummaryJob(
+    input: CreateWorkoutSummaryJobInput
+  ): Promise<CoachWorkoutSummaryJobRecord> {
+    const existingByClientRequestID =
+      await this.getWorkoutSummaryJobByClientRequestID(
+        input.installID,
+        input.clientRequestID
+      );
+    if (existingByClientRequestID) {
+      return existingByClientRequestID;
+    }
+
+    const existingByFingerprint = await this.getWorkoutSummaryJobByFingerprint(
+      input.installID,
+      input.sessionID,
+      input.fingerprint
+    );
+    if (existingByFingerprint) {
+      return existingByFingerprint;
+    }
+
+    try {
+      await this.db
+        .prepare(
+          `
+            INSERT INTO coach_workout_summary_jobs (
+              job_id,
+              install_id,
+              client_request_id,
+              session_id,
+              fingerprint,
+              status,
+              prepared_request_json,
+              created_at,
+              request_mode,
+              trigger,
+              input_mode,
+              current_exercise_count,
+              history_exercise_count,
+              history_session_count,
+              prompt_version,
+              model
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `
+        )
+        .bind(
+          input.jobID,
+          input.installID,
+          input.clientRequestID,
+          input.sessionID,
+          input.fingerprint,
+          "queued",
+          stableJSONStringify(input.preparedRequest),
+          input.createdAt,
+          input.requestMode,
+          input.trigger,
+          input.inputMode,
+          input.currentExerciseCount,
+          input.historyExerciseCount,
+          input.historySessionCount,
+          this.promptVersion,
+          this.model
+        )
+        .run();
+    } catch {
+      const duplicatedByClientRequestID =
+        await this.getWorkoutSummaryJobByClientRequestID(
+          input.installID,
+          input.clientRequestID
+        );
+      if (duplicatedByClientRequestID) {
+        return duplicatedByClientRequestID;
+      }
+
+      const duplicatedByFingerprint = await this.getWorkoutSummaryJobByFingerprint(
+        input.installID,
+        input.sessionID,
+        input.fingerprint
+      );
+      if (duplicatedByFingerprint) {
+        return duplicatedByFingerprint;
+      }
+
+      throw new Error("Failed to create workout summary job.");
+    }
+
+    const created = await this.getWorkoutSummaryJob(input.jobID, input.installID);
+    if (!created) {
+      throw new Error("Failed to read created workout summary job.");
+    }
+
+    return created;
+  }
+
+  async getWorkoutSummaryJob(
+    jobID: string,
+    installID: string
+  ): Promise<CoachWorkoutSummaryJobRecord | null> {
+    const row = await this.db
+      .prepare(
+        `
+          SELECT * FROM coach_workout_summary_jobs
+          WHERE job_id = ? AND install_id = ?
+          LIMIT 1
+        `
+      )
+      .bind(jobID, installID)
+      .first<WorkoutSummaryJobRow>();
+    return row ? parseWorkoutSummaryJobRow(row) : null;
+  }
+
+  async getWorkoutSummaryJobByID(
+    jobID: string
+  ): Promise<CoachWorkoutSummaryJobRecord | null> {
+    const row = await this.db
+      .prepare(
+        `SELECT * FROM coach_workout_summary_jobs WHERE job_id = ? LIMIT 1`
+      )
+      .bind(jobID)
+      .first<WorkoutSummaryJobRow>();
+    return row ? parseWorkoutSummaryJobRow(row) : null;
+  }
+
+  async markWorkoutSummaryJobRunning(
+    jobID: string,
+    startedAt: string
+  ): Promise<{ job: CoachWorkoutSummaryJobRecord | null; claimed: boolean }> {
+    const updateResult = await this.db
+      .prepare(
+        `
+          UPDATE coach_workout_summary_jobs
+          SET
+            status = 'running',
+            started_at = COALESCE(started_at, ?)
+          WHERE job_id = ? AND status = 'queued'
+        `
+      )
+      .bind(startedAt, jobID)
+      .run();
+
+    return {
+      job: await this.getWorkoutSummaryJobByID(jobID),
+      claimed: d1Changes(updateResult) > 0,
+    };
+  }
+
+  async completeWorkoutSummaryJob(
+    jobID: string,
+    input: CompleteWorkoutSummaryJobInput
+  ): Promise<CoachWorkoutSummaryJobRecord> {
+    await this.db
+      .prepare(
+        `
+          UPDATE coach_workout_summary_jobs
+          SET
+            status = 'completed',
+            response_json = ?,
+            error_code = NULL,
+            error_message = NULL,
+            completed_at = ?,
+            prompt_bytes = ?,
+            fallback_prompt_bytes = ?,
+            model_duration_ms = ?,
+            fallback_model_duration_ms = ?,
+            total_job_duration_ms = ?,
+            inference_mode = ?,
+            generation_status = ?
+          WHERE job_id = ?
+        `
+      )
+      .bind(
+        stableJSONStringify(input.result),
+        input.completedAt,
+        input.promptBytes ?? null,
+        input.fallbackPromptBytes ?? null,
+        input.modelDurationMs ?? null,
+        input.fallbackModelDurationMs ?? null,
+        input.totalJobDurationMs ?? null,
+        input.inferenceMode ?? null,
+        input.generationStatus ?? null,
+        jobID
+      )
+      .run();
+
+    const job = await this.getWorkoutSummaryJobByID(jobID);
+    if (!job) {
+      throw new Error("Completed workout summary job was not found.");
+    }
+
+    return job;
+  }
+
+  async failWorkoutSummaryJob(
+    jobID: string,
+    input: FailWorkoutSummaryJobInput
+  ): Promise<CoachWorkoutSummaryJobRecord> {
+    await this.db
+      .prepare(
+        `
+          UPDATE coach_workout_summary_jobs
+          SET
+            status = 'failed',
+            response_json = NULL,
+            error_code = ?,
+            error_message = ?,
+            completed_at = ?,
+            prompt_bytes = ?,
+            fallback_prompt_bytes = ?,
+            model_duration_ms = ?,
+            fallback_model_duration_ms = ?,
+            total_job_duration_ms = ?,
+            inference_mode = ?,
+            generation_status = NULL
+          WHERE job_id = ?
+        `
+      )
+      .bind(
+        input.error.code,
+        input.error.message,
+        input.completedAt,
+        input.promptBytes ?? null,
+        input.fallbackPromptBytes ?? null,
+        input.modelDurationMs ?? null,
+        input.fallbackModelDurationMs ?? null,
+        input.totalJobDurationMs ?? null,
+        input.inferenceMode ?? null,
+        jobID
+      )
+      .run();
+
+    const job = await this.getWorkoutSummaryJobByID(jobID);
+    if (!job) {
+      throw new Error("Failed workout summary job was not found.");
+    }
+
+    return job;
+  }
+
   async reconcileBackup(
     request: BackupReconcileRequest
   ): Promise<BackupReconcileResponse> {
@@ -1071,6 +1436,10 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
       .prepare(`DELETE FROM coach_chat_jobs WHERE install_id = ?`)
       .bind(installID)
       .run();
+    await this.db
+      .prepare(`DELETE FROM coach_workout_summary_jobs WHERE install_id = ?`)
+      .bind(installID)
+      .run();
   }
 
   private async getCurrentInstallState(
@@ -1169,6 +1538,42 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
       .first<CoachChatJobRow>();
     return row ? parseCoachChatJobRow(row) : null;
   }
+
+  private async getWorkoutSummaryJobByClientRequestID(
+    installID: string,
+    clientRequestID: string
+  ): Promise<CoachWorkoutSummaryJobRecord | null> {
+    const row = await this.db
+      .prepare(
+        `
+          SELECT * FROM coach_workout_summary_jobs
+          WHERE install_id = ? AND client_request_id = ?
+          LIMIT 1
+        `
+      )
+      .bind(installID, clientRequestID)
+      .first<WorkoutSummaryJobRow>();
+    return row ? parseWorkoutSummaryJobRow(row) : null;
+  }
+
+  private async getWorkoutSummaryJobByFingerprint(
+    installID: string,
+    sessionID: string,
+    fingerprint: string
+  ): Promise<CoachWorkoutSummaryJobRecord | null> {
+    const row = await this.db
+      .prepare(
+        `
+          SELECT * FROM coach_workout_summary_jobs
+          WHERE install_id = ? AND session_id = ? AND fingerprint = ?
+          ORDER BY created_at DESC
+          LIMIT 1
+        `
+      )
+      .bind(installID, sessionID, fingerprint)
+      .first<WorkoutSummaryJobRow>();
+    return row ? parseWorkoutSummaryJobRow(row) : null;
+  }
 }
 
 export class InMemoryCoachStateRepository implements CoachStateStore {
@@ -1178,6 +1583,7 @@ export class InMemoryCoachStateRepository implements CoachStateStore {
   private readonly insightsCache = new Map<string, CoachProfileInsightsResponse>();
   private readonly chatMemory = new Map<string, StoredChatMemory>();
   private readonly chatJobs = new Map<string, CoachChatJobRecord>();
+  private readonly workoutSummaryJobs = new Map<string, CoachWorkoutSummaryJobRecord>();
   private readonly coachStateVersions = new Map<string, number>();
 
   constructor(
@@ -1467,6 +1873,141 @@ export class InMemoryCoachStateRepository implements CoachStateStore {
     job.memoryCommittedAt = this.now().toISOString();
   }
 
+  async createWorkoutSummaryJob(
+    input: CreateWorkoutSummaryJobInput
+  ): Promise<CoachWorkoutSummaryJobRecord> {
+    const existingByClientRequestID = [...this.workoutSummaryJobs.values()].find(
+      (job) =>
+        job.installID === input.installID &&
+        job.clientRequestID === input.clientRequestID
+    );
+    if (existingByClientRequestID) {
+      return existingByClientRequestID;
+    }
+
+    const existingByFingerprint = [...this.workoutSummaryJobs.values()].find(
+      (job) =>
+        job.installID === input.installID &&
+        job.sessionID === input.sessionID &&
+        job.fingerprint === input.fingerprint
+    );
+    if (existingByFingerprint) {
+      return existingByFingerprint;
+    }
+
+    const created: CoachWorkoutSummaryJobRecord = {
+      jobID: input.jobID,
+      installID: input.installID,
+      clientRequestID: input.clientRequestID,
+      sessionID: input.sessionID,
+      fingerprint: input.fingerprint,
+      status: "queued",
+      preparedRequest: input.preparedRequest,
+      createdAt: input.createdAt,
+      requestMode: input.requestMode,
+      trigger: input.trigger,
+      inputMode: input.inputMode,
+      currentExerciseCount: input.currentExerciseCount,
+      historyExerciseCount: input.historyExerciseCount,
+      historySessionCount: input.historySessionCount,
+      promptVersion: this.promptVersion,
+      model: this.model,
+    };
+    this.workoutSummaryJobs.set(created.jobID, created);
+    return created;
+  }
+
+  async getWorkoutSummaryJob(
+    jobID: string,
+    installID: string
+  ): Promise<CoachWorkoutSummaryJobRecord | null> {
+    const job = this.workoutSummaryJobs.get(jobID);
+    if (!job || job.installID !== installID) {
+      return null;
+    }
+
+    return job;
+  }
+
+  async getWorkoutSummaryJobByID(
+    jobID: string
+  ): Promise<CoachWorkoutSummaryJobRecord | null> {
+    return this.workoutSummaryJobs.get(jobID) ?? null;
+  }
+
+  async markWorkoutSummaryJobRunning(
+    jobID: string,
+    startedAt: string
+  ): Promise<{ job: CoachWorkoutSummaryJobRecord | null; claimed: boolean }> {
+    const job = this.workoutSummaryJobs.get(jobID);
+    if (!job) {
+      return {
+        job: null,
+        claimed: false,
+      };
+    }
+
+    if (job.status === "queued") {
+      job.status = "running";
+      job.startedAt ??= startedAt;
+      return {
+        job,
+        claimed: true,
+      };
+    }
+
+    return {
+      job,
+      claimed: false,
+    };
+  }
+
+  async completeWorkoutSummaryJob(
+    jobID: string,
+    input: CompleteWorkoutSummaryJobInput
+  ): Promise<CoachWorkoutSummaryJobRecord> {
+    const job = this.workoutSummaryJobs.get(jobID);
+    if (!job) {
+      throw new Error("Completed workout summary job was not found.");
+    }
+
+    job.status = "completed";
+    job.result = input.result;
+    job.error = undefined;
+    job.completedAt = input.completedAt;
+    job.promptBytes = input.promptBytes;
+    job.fallbackPromptBytes = input.fallbackPromptBytes;
+    job.modelDurationMs = input.modelDurationMs;
+    job.fallbackModelDurationMs = input.fallbackModelDurationMs;
+    job.totalJobDurationMs = input.totalJobDurationMs;
+    job.inferenceMode = input.inferenceMode;
+    job.generationStatus = input.generationStatus;
+    return job;
+  }
+
+  async failWorkoutSummaryJob(
+    jobID: string,
+    input: FailWorkoutSummaryJobInput
+  ): Promise<CoachWorkoutSummaryJobRecord> {
+    const job = this.workoutSummaryJobs.get(jobID);
+    if (!job) {
+      throw new Error("Failed workout summary job was not found.");
+    }
+
+    job.status = "failed";
+    job.result = undefined;
+    job.error = input.error;
+    job.completedAt = input.completedAt;
+    job.promptBytes = input.promptBytes;
+    job.fallbackPromptBytes = input.fallbackPromptBytes;
+    job.modelDurationMs = input.modelDurationMs;
+    job.fallbackModelDurationMs = input.fallbackModelDurationMs;
+    job.totalJobDurationMs = input.totalJobDurationMs;
+    job.inferenceMode = input.inferenceMode;
+    job.generationStatus = undefined;
+    return job;
+  }
+
   async reconcileBackup(
     request: BackupReconcileRequest
   ): Promise<BackupReconcileResponse> {
@@ -1644,6 +2185,11 @@ export class InMemoryCoachStateRepository implements CoachStateStore {
         this.chatJobs.delete(jobID);
       }
     }
+    for (const [jobID, job] of this.workoutSummaryJobs.entries()) {
+      if (job.installID === installID) {
+        this.workoutSummaryJobs.delete(jobID);
+      }
+    }
     for (const key of [...this.insightsCache.keys()]) {
       if (key.startsWith(`${installID}:`)) {
         this.insightsCache.delete(key);
@@ -1752,6 +2298,51 @@ function parseCoachChatJobRow(row: CoachChatJobRow): CoachChatJobRecord {
     inferenceMode: row.inference_mode ?? undefined,
     generationStatus: row.generation_status ?? undefined,
     memoryCommittedAt: row.memory_committed_at ?? undefined,
+  };
+}
+
+function parseWorkoutSummaryJobRow(
+  row: WorkoutSummaryJobRow
+): CoachWorkoutSummaryJobRecord {
+  return {
+    jobID: row.job_id,
+    installID: row.install_id,
+    clientRequestID: row.client_request_id,
+    sessionID: row.session_id,
+    fingerprint: row.fingerprint,
+    status: row.status,
+    preparedRequest: JSON.parse(
+      row.prepared_request_json
+    ) as CoachWorkoutSummaryJobCreateRequest,
+    result: row.response_json
+      ? (JSON.parse(row.response_json) as CoachWorkoutSummaryJobResult)
+      : undefined,
+    error:
+      row.error_code && row.error_message
+        ? {
+            code: row.error_code,
+            message: row.error_message,
+            retryable: isRetryableJobErrorCode(row.error_code),
+          }
+        : undefined,
+    createdAt: row.created_at,
+    startedAt: row.started_at ?? undefined,
+    completedAt: row.completed_at ?? undefined,
+    requestMode: row.request_mode,
+    trigger: row.trigger,
+    inputMode: row.input_mode,
+    currentExerciseCount: row.current_exercise_count,
+    historyExerciseCount: row.history_exercise_count,
+    historySessionCount: row.history_session_count,
+    promptVersion: row.prompt_version,
+    model: row.model,
+    promptBytes: nullableNumber(row.prompt_bytes),
+    fallbackPromptBytes: nullableNumber(row.fallback_prompt_bytes),
+    modelDurationMs: nullableNumber(row.model_duration_ms),
+    fallbackModelDurationMs: nullableNumber(row.fallback_model_duration_ms),
+    totalJobDurationMs: nullableNumber(row.total_job_duration_ms),
+    inferenceMode: row.inference_mode ?? undefined,
+    generationStatus: row.generation_status ?? undefined,
   };
 }
 

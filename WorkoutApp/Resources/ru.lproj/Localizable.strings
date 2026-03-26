@@ -458,6 +458,10 @@
 "summary.total_sets" = "Всего подходов";
 "summary.completed_sets" = "Выполнено подходов";
 "summary.total_reps" = "Всего повторений";
+"workout_summary.ai_title" = "AI-сводка";
+"workout_summary.loading" = "Готовим краткую сводку по этой тренировке...";
+"workout_summary.highlights_title" = "Ключевые моменты";
+"workout_summary.next_focus_title" = "Фокус следующей тренировки";
 "workout.target_weight" = "Цель";
 "workout.previous_weight" = "Прошлый";
 "stats.last_workout" = "Последняя тренировка";

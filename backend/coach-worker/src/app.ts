@@ -15,6 +15,9 @@ import {
   snapshotSyncRequestSchema,
   snapshotSyncResponseSchema,
   stateDeleteRequestSchema,
+  workoutSummaryJobCreateRequestSchema,
+  workoutSummaryJobCreateResponseSchema,
+  workoutSummaryJobStatusResponseSchema,
   type CoachProfileInsightsResponse,
 } from "./schemas";
 import {
@@ -510,6 +513,138 @@ export function createApp(
           return json(result.data, 200);
         }
 
+        if (pathname === "/v2/coach/workout-summary-jobs" && request.method === "POST") {
+          const body = workoutSummaryJobCreateRequestSchema.parse(
+            await readJSON(request)
+          );
+          const currentExerciseCount = body.currentWorkout.exerciseCount;
+          const historyExerciseCount = body.recentExerciseHistory.length;
+          const historySessionCount = totalWorkoutSummaryHistorySessionCount(
+            body.recentExerciseHistory
+          );
+          const createdAt = new Date(deps.now()).toISOString();
+          const jobID = buildWorkoutSummaryJobID();
+
+          routeDiagnostics = {
+            installID: body.installID,
+            sessionID: body.sessionID,
+            fingerprint: body.fingerprint,
+            requestMode: body.requestMode,
+            trigger: body.trigger,
+            inputMode: body.inputMode,
+            currentExerciseCount,
+            historyExerciseCount,
+            historySessionCount,
+          };
+
+          const job = await stateRepository.createWorkoutSummaryJob({
+            jobID,
+            installID: body.installID,
+            clientRequestID: body.clientRequestID,
+            sessionID: body.sessionID,
+            fingerprint: body.fingerprint,
+            createdAt,
+            preparedRequest: body,
+            requestMode: body.requestMode,
+            trigger: body.trigger,
+            inputMode: body.inputMode,
+            currentExerciseCount,
+            historyExerciseCount,
+            historySessionCount,
+          });
+          const reusedExistingJob = job.jobID !== jobID;
+
+          if (!reusedExistingJob) {
+            try {
+              const workflow = mustGetWorkoutSummaryWorkflow(env);
+              await workflow.create({
+                id: job.jobID,
+                params: { jobID: job.jobID },
+              });
+            } catch (error) {
+              const failedAt = new Date(deps.now()).toISOString();
+              await stateRepository.failWorkoutSummaryJob(job.jobID, {
+                completedAt: failedAt,
+                error: {
+                  code: "workflow_start_failed",
+                  message: "Workout summary workflow failed to start.",
+                  retryable: true,
+                },
+                totalJobDurationMs: Math.max(
+                  deps.now() - Date.parse(job.createdAt),
+                  0
+                ),
+              });
+              throw new RequestError(
+                500,
+                "workflow_start_failed",
+                "Coach backend is not configured.",
+                {
+                  ...routeDiagnostics,
+                  providerMessage:
+                    error instanceof Error
+                      ? error.message.slice(0, 200)
+                      : "Unknown workflow start error",
+                }
+              );
+            }
+          }
+
+          const response = workoutSummaryJobCreateResponseSchema.parse({
+            jobID: job.jobID,
+            sessionID: job.sessionID,
+            fingerprint: job.fingerprint,
+            status: job.status,
+            createdAt: job.createdAt,
+            pollAfterMs: isTerminalJobStatus(job.status)
+              ? 0
+              : CHAT_JOB_INITIAL_POLL_AFTER_MS,
+            reusedExistingJob,
+          });
+
+          console.log(
+            JSON.stringify({
+              event: "workout_summary_job_created",
+              requestID,
+              jobID: job.jobID,
+              installID: job.installID,
+              sessionID: job.sessionID,
+              fingerprint: job.fingerprint,
+              requestMode: job.requestMode,
+              trigger: job.trigger,
+              inputMode: job.inputMode,
+              currentExerciseCount: job.currentExerciseCount,
+              historyExerciseCount: job.historyExerciseCount,
+              historySessionCount: job.historySessionCount,
+              promptVersion: job.promptVersion,
+              model: job.model,
+              reusedExistingJob,
+            })
+          );
+
+          const statusCode = isTerminalJobStatus(job.status) ? 200 : 202;
+
+          logRequest({
+            requestID,
+            route: pathname,
+            method: request.method,
+            status: statusCode,
+            durationMs: deps.now() - startedAt,
+            jobID: job.jobID,
+            installID: body.installID,
+            sessionID: body.sessionID,
+            fingerprint: body.fingerprint,
+            requestMode: body.requestMode,
+            trigger: body.trigger,
+            inputMode: body.inputMode,
+            currentExerciseCount,
+            historyExerciseCount,
+            historySessionCount,
+            reusedExistingJob,
+          });
+          return json(response, statusCode);
+        }
+
         const chatJobPath = parseChatJobPath(pathname);
         if (chatJobPath && request.method === "GET") {
           const installID = parseInstallIDQuery(request);
@@ -542,6 +677,57 @@ export function createApp(
             recentTurnCount: job.recentTurnCount,
             recentTurnChars: job.recentTurnChars,
             questionChars: job.questionChars,
+            inferenceMode: job.inferenceMode,
+            promptBytes: job.promptBytes,
+            modelDurationMs: job.modelDurationMs,
+            totalJobDurationMs: job.totalJobDurationMs,
+          });
+          return json(response, 200);
+        }
+
+        const workoutSummaryJobPath = parseWorkoutSummaryJobPath(pathname);
+        if (workoutSummaryJobPath && request.method === "GET") {
+          const installID = parseInstallIDQuery(request);
+          const job = await stateRepository.getWorkoutSummaryJob(
+            workoutSummaryJobPath.jobID,
+            installID
+          );
+          if (!job) {
+            throw new RequestError(
+              404,
+              "workout_summary_job_not_found",
+              "Workout summary job not found."
+            );
+          }
+
+          const response = workoutSummaryJobStatusResponseSchema.parse({
+            jobID: job.jobID,
+            sessionID: job.sessionID,
+            fingerprint: job.fingerprint,
+            status: job.status,
+            createdAt: job.createdAt,
+            startedAt: job.startedAt,
+            completedAt: job.completedAt,
+            result: job.result,
+            error: job.error,
+          });
+
+          logRequest({
+            requestID,
+            route: pathname,
+            method: request.method,
+            status: 200,
+            durationMs: deps.now() - startedAt,
+            jobID: job.jobID,
+            installID: job.installID,
+            sessionID: job.sessionID,
+            fingerprint: job.fingerprint,
+            requestMode: job.requestMode,
+            trigger: job.trigger,
+            inputMode: job.inputMode,
+            currentExerciseCount: job.currentExerciseCount,
+            historyExerciseCount: job.historyExerciseCount,
+            historySessionCount: job.historySessionCount,
             inferenceMode: job.inferenceMode,
             promptBytes: job.promptBytes,
             modelDurationMs: job.modelDurationMs,
@@ -635,6 +821,9 @@ function missingSecrets(env: Env): string[] {
   if (!env.COACH_CHAT_WORKFLOW) {
     missing.push("COACH_CHAT_WORKFLOW");
   }
+  if (!env.WORKOUT_SUMMARY_WORKFLOW) {
+    missing.push("WORKOUT_SUMMARY_WORKFLOW");
+  }
   if (!env.COACH_INTERNAL_TOKEN?.trim()) {
     missing.push("COACH_INTERNAL_TOKEN");
   }
@@ -691,6 +880,22 @@ function mustGetChatWorkflow(env: Env): NonNullable<Env["COACH_CHAT_WORKFLOW"]> 
       "server_misconfigured",
       "Coach backend is not configured.",
       { missing: ["COACH_CHAT_WORKFLOW"] }
+    );
+  }
+
+  return workflow;
+}
+
+function mustGetWorkoutSummaryWorkflow(
+  env: Env
+): NonNullable<Env["WORKOUT_SUMMARY_WORKFLOW"]> {
+  const workflow = env.WORKOUT_SUMMARY_WORKFLOW;
+  if (!workflow) {
+    throw new RequestError(
+      500,
+      "server_misconfigured",
+      "Coach backend is not configured.",
+      { missing: ["WORKOUT_SUMMARY_WORKFLOW"] }
     );
   }
 
@@ -1064,12 +1269,31 @@ function buildChatJobID(): string {
   return `coach-job_${crypto.randomUUID()}`;
 }
 
+function buildWorkoutSummaryJobID(): string {
+  return `workout-summary-job_${crypto.randomUUID()}`;
+}
+
 function parseChatJobPath(
   pathname: string
 ): {
   jobID: string;
 } | null {
   const match = pathname.match(/^\/v2\/coach\/chat-jobs\/([^/]+)$/);
+  if (!match?.[1]) {
+    return null;
+  }
+
+  return {
+    jobID: decodeURIComponent(match[1]),
+  };
+}
+
+function parseWorkoutSummaryJobPath(
+  pathname: string
+): {
+  jobID: string;
+} | null {
+  const match = pathname.match(/^\/v2\/coach\/workout-summary-jobs\/([^/]+)$/);
   if (!match?.[1]) {
     return null;
   }
@@ -1097,6 +1321,16 @@ function totalChatTurnChars(
   turns: Array<{ content: string }>
 ): number {
   return turns.reduce((total, turn) => total + turn.content.length, 0);
+}
+
+function totalWorkoutSummaryHistorySessionCount(
+  history: Array<{ sessions: unknown[] }>
+): number {
+  return history.reduce((total, exerciseHistory) => total + exerciseHistory.sessions.length, 0);
+}
+
+function isTerminalJobStatus(status: string): boolean {
+  return status === "completed" || status === "failed" || status === "canceled";
 }
 
 function normalizeReusableProfileInsightsCacheEntry(

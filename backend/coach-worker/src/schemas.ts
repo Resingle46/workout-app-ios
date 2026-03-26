@@ -9,6 +9,7 @@ const nonEmptyStringSchema = z.string().trim().min(1);
 const optionalTrimmedStringSchema = z.string().trim().min(1).optional();
 const installIDSchema = z.string().trim().min(1).max(200);
 const snapshotHashSchema = z.string().trim().min(1).max(200);
+const workoutSummaryGroupKindSchema = z.enum(["regular", "superset"]);
 
 const userProfileSchema = z
   .object({
@@ -272,6 +273,95 @@ export const chatRequestSchema = z
 export const chatJobCreateRequestSchema = chatRequestSchema
   .extend({
     clientRequestID: z.uuid(),
+  })
+  .strict();
+
+const workoutSummarySetSchema = z
+  .object({
+    index: z.int().min(0),
+    reps: z.int().min(0),
+    weight: z.number().finite(),
+    isCompleted: z.boolean(),
+  })
+  .strict();
+
+const workoutSummaryCurrentWorkoutExerciseSchema = z
+  .object({
+    templateExerciseID: uuidSchema,
+    exerciseID: uuidSchema,
+    exerciseName: nonEmptyStringSchema,
+    groupKind: workoutSummaryGroupKindSchema,
+    groupID: uuidSchema.optional(),
+    sets: z.array(workoutSummarySetSchema),
+    completedSetsCount: z.int().min(0),
+    totalSetsCount: z.int().min(0),
+    totalVolume: z.number().finite(),
+  })
+  .strict();
+
+const workoutSummaryCurrentWorkoutSchema = z
+  .object({
+    workoutTemplateID: uuidSchema,
+    title: nonEmptyStringSchema,
+    exerciseCount: z.int().min(0),
+    completedSetsCount: z.int().min(0),
+    totalSetsCount: z.int().min(0),
+    totalVolume: z.number().finite(),
+    exercises: z.array(workoutSummaryCurrentWorkoutExerciseSchema),
+  })
+  .strict();
+
+const workoutSummaryHistorySetSchema = z
+  .object({
+    reps: z.int().min(0),
+    weight: z.number().finite(),
+  })
+  .strict();
+
+const workoutSummaryHistorySessionSchema = z
+  .object({
+    sessionID: uuidSchema,
+    workoutTitle: nonEmptyStringSchema,
+    startedAt: isoDateTimeSchema,
+    completedSetsCount: z.int().min(0),
+    bestWeight: z.number().finite().optional(),
+    averageReps: z.number().finite().optional(),
+    totalVolume: z.number().finite(),
+    completedSets: z.array(workoutSummaryHistorySetSchema),
+  })
+  .strict();
+
+const workoutSummaryExerciseHistorySchema = z
+  .object({
+    exerciseID: uuidSchema,
+    exerciseName: nonEmptyStringSchema,
+    sessions: z.array(workoutSummaryHistorySessionSchema).max(3),
+  })
+  .strict();
+
+export const workoutSummaryRequestModeSchema = z.enum(["prewarm", "final"]);
+export const workoutSummaryTriggerSchema = z.enum([
+  "prewarm_one_remaining_set",
+  "prewarm_all_sets_completed",
+  "final_after_finish",
+]);
+export const workoutSummaryInputModeSchema = z.enum([
+  "projected_final",
+  "finished_session",
+]);
+
+export const workoutSummaryJobCreateRequestSchema = z
+  .object({
+    locale: nonEmptyStringSchema,
+    installID: installIDSchema,
+    clientRequestID: z.uuid(),
+    sessionID: uuidSchema,
+    fingerprint: snapshotHashSchema,
+    requestMode: workoutSummaryRequestModeSchema,
+    trigger: workoutSummaryTriggerSchema,
+    inputMode: workoutSummaryInputModeSchema,
+    currentWorkout: workoutSummaryCurrentWorkoutSchema,
+    recentExerciseHistory: z.array(workoutSummaryExerciseHistorySchema),
   })
   .strict();
 
@@ -564,6 +654,65 @@ export const chatJobStatusResponseSchema = z
   })
   .strict();
 
+export const workoutSummaryResponseSchema = z
+  .object({
+    headline: nonEmptyStringSchema.max(160),
+    summary: nonEmptyStringSchema.max(900),
+    highlights: z.array(nonEmptyStringSchema.max(240)).min(1).max(4),
+    nextWorkoutFocus: z.array(nonEmptyStringSchema.max(220)).max(3),
+    generationStatus: coachResponseGenerationStatusSchema.default("fallback"),
+  })
+  .strict();
+
+export const workoutSummaryModelOutputSchema = z
+  .object({
+    headline: nonEmptyStringSchema.max(160),
+    summary: nonEmptyStringSchema.max(900),
+    highlights: z.array(nonEmptyStringSchema.max(240)).min(1).max(4),
+    nextWorkoutFocus: z.array(nonEmptyStringSchema.max(220)).max(3),
+    suggestedChanges: z.array(z.unknown()).max(5).optional(),
+  })
+  .strict();
+
+export const workoutSummaryJobResultSchema = z
+  .object({
+    headline: nonEmptyStringSchema.max(160),
+    summary: nonEmptyStringSchema.max(900),
+    highlights: z.array(nonEmptyStringSchema.max(240)).min(1).max(4),
+    nextWorkoutFocus: z.array(nonEmptyStringSchema.max(220)).max(3),
+    generationStatus: coachResponseGenerationStatusSchema.default("fallback"),
+    inferenceMode: chatInferenceModeSchema,
+    modelDurationMs: z.int().min(0).optional(),
+    totalJobDurationMs: z.int().min(0).optional(),
+  })
+  .strict();
+
+export const workoutSummaryJobCreateResponseSchema = z
+  .object({
+    jobID: nonEmptyStringSchema.max(200),
+    sessionID: uuidSchema,
+    fingerprint: snapshotHashSchema,
+    status: chatJobStatusSchema,
+    createdAt: isoDateTimeSchema,
+    pollAfterMs: z.int().min(0),
+    reusedExistingJob: z.boolean(),
+  })
+  .strict();
+
+export const workoutSummaryJobStatusResponseSchema = z
+  .object({
+    jobID: nonEmptyStringSchema.max(200),
+    sessionID: uuidSchema,
+    fingerprint: snapshotHashSchema,
+    status: chatJobStatusSchema,
+    createdAt: isoDateTimeSchema,
+    startedAt: isoDateTimeSchema.optional(),
+    completedAt: isoDateTimeSchema.optional(),
+    result: workoutSummaryJobResultSchema.optional(),
+    error: chatJobErrorSchema.optional(),
+  })
+  .strict();
+
 export const chatResponseModelOutputSchema = z
   .object({
     answerMarkdown: nonEmptyStringSchema.max(6000),
@@ -615,6 +764,30 @@ export type CoachChatJobCreateResponse = z.infer<
 >;
 export type CoachChatJobStatusResponse = z.infer<
   typeof chatJobStatusResponseSchema
+>;
+export type CoachWorkoutSummaryRequestMode = z.infer<
+  typeof workoutSummaryRequestModeSchema
+>;
+export type CoachWorkoutSummaryTrigger = z.infer<
+  typeof workoutSummaryTriggerSchema
+>;
+export type CoachWorkoutSummaryInputMode = z.infer<
+  typeof workoutSummaryInputModeSchema
+>;
+export type CoachWorkoutSummaryJobCreateRequest = z.infer<
+  typeof workoutSummaryJobCreateRequestSchema
+>;
+export type CoachWorkoutSummaryResponse = z.infer<
+  typeof workoutSummaryResponseSchema
+>;
+export type CoachWorkoutSummaryJobResult = z.infer<
+  typeof workoutSummaryJobResultSchema
+>;
+export type CoachWorkoutSummaryJobCreateResponse = z.infer<
+  typeof workoutSummaryJobCreateResponseSchema
+>;
+export type CoachWorkoutSummaryJobStatusResponse = z.infer<
+  typeof workoutSummaryJobStatusResponseSchema
 >;
 export type CompactCoachSnapshot = z.infer<typeof coachContextPayloadSchema>;
 export type CoachConversationTurn = z.infer<typeof coachConversationTurnSchema>;

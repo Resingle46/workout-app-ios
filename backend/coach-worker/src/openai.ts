@@ -5,12 +5,17 @@ import {
   type CoachChatResponse,
   type CoachProfileInsightsRequest,
   type CoachProfileInsightsResponse,
+  type CoachWorkoutSummaryJobCreateRequest,
+  type CoachWorkoutSummaryResponse,
+  workoutSummaryModelOutputSchema,
 } from "./schemas";
 import {
   buildProfileInsightsMessages,
   buildChatMessages,
   buildFallbackChatMessages,
   buildFallbackProfileInsightsMessages,
+  buildWorkoutSummaryMessages,
+  buildFallbackWorkoutSummaryMessages,
 } from "./prompts";
 import { extractProgramCommentConstraints, type ProgramCommentConstraints } from "./context";
 import type {
@@ -28,6 +33,12 @@ const PROFILE_INSIGHTS_TOTAL_BUDGET_MS = 28_000;
 const PROFILE_INSIGHTS_STRUCTURED_TIMEOUT_MS = 16_000;
 const PROFILE_INSIGHTS_PLAIN_TEXT_TIMEOUT_MS = 10_000;
 const PROFILE_INSIGHTS_FALLBACK_MIN_TIMEOUT_MS = 4_000;
+const WORKOUT_SUMMARY_STRUCTURED_MAX_TOKENS = 420;
+const WORKOUT_SUMMARY_PLAIN_TEXT_MAX_TOKENS = 320;
+const WORKOUT_SUMMARY_TOTAL_BUDGET_MS = 45_000;
+const WORKOUT_SUMMARY_STRUCTURED_TIMEOUT_MS = 22_000;
+const WORKOUT_SUMMARY_PLAIN_TEXT_TIMEOUT_MS = 14_000;
+const WORKOUT_SUMMARY_FALLBACK_MIN_TIMEOUT_MS = 4_000;
 const SYNC_CHAT_TIMEOUTS = {
   totalBudgetMs: 28_000,
   structuredTimeoutMs: 12_000,
@@ -61,6 +72,7 @@ export interface Env {
   BACKUPS_R2?: CoachR2Bucket;
   APP_META_DB?: CoachD1Database;
   COACH_CHAT_WORKFLOW?: WorkflowBinding<{ jobID: string }>;
+  WORKOUT_SUMMARY_WORKFLOW?: WorkflowBinding<{ jobID: string }>;
   COACH_INTERNAL_TOKEN: string;
   AI_MODEL?: string;
   COACH_PROMPT_VERSION?: string;
@@ -82,6 +94,10 @@ type CoachProfileInsightsContent = Omit<
   CoachProfileInsightsResponse,
   "generationStatus" | "insightSource"
 >;
+type CoachWorkoutSummaryContent = Omit<
+  CoachWorkoutSummaryResponse,
+  "generationStatus"
+>;
 type CoachChatContent = Omit<
   CoachChatResponse,
   "responseID" | "generationStatus"
@@ -91,6 +107,9 @@ export interface CoachInferenceService {
   generateProfileInsights(
     request: CoachProfileInsightsRequest
   ): Promise<InferenceResult<CoachProfileInsightsResponse>>;
+  generateWorkoutSummary(
+    request: CoachWorkoutSummaryJobCreateRequest
+  ): Promise<InferenceResult<CoachWorkoutSummaryResponse>>;
   generateChat(
     request: CoachChatRequest,
     options?: GenerateChatOptions
@@ -295,6 +314,164 @@ export class WorkersAICoachService implements CoachInferenceService {
     }
   }
 
+  async generateWorkoutSummary(
+    request: CoachWorkoutSummaryJobCreateRequest
+  ): Promise<InferenceResult<CoachWorkoutSummaryResponse>> {
+    const operation = "workout_summary";
+    const startedAt = Date.now();
+    const localFallback = buildNeutralWorkoutSummary(request);
+    const sharedDetails = {
+      sessionID: request.sessionID,
+      fingerprint: request.fingerprint,
+      requestMode: request.requestMode,
+      trigger: request.trigger,
+      inputMode: request.inputMode,
+      currentExerciseCount: request.currentWorkout.exerciseCount,
+      historyExerciseCount: request.recentExerciseHistory.length,
+      historySessionCount: request.recentExerciseHistory.reduce(
+        (total, exerciseHistory) => total + exerciseHistory.sessions.length,
+        0
+      ),
+    };
+
+    try {
+      const invocation = await this.runStructured({
+        operation,
+        messages: buildWorkoutSummaryMessages(request),
+        schema: workoutSummaryResponseJsonSchema,
+        maxTokens: WORKOUT_SUMMARY_STRUCTURED_MAX_TOKENS,
+        timeoutMs: WORKOUT_SUMMARY_STRUCTURED_TIMEOUT_MS,
+        extraDetails: sharedDetails,
+      });
+      const parsed = normalizeWorkoutSummaryResponse(
+        parseStructuredOutput(
+          invocation.rawResponse,
+          workoutSummaryModelOutputSchema,
+          "workout summary",
+          {
+            operation,
+            model: this.modelName,
+            sessionID: request.sessionID,
+            fingerprint: request.fingerprint,
+          }
+        )
+      );
+
+      return {
+        data: {
+          ...parsed,
+          generationStatus: "model",
+        },
+        model: this.modelName,
+        mode: "structured",
+        usage: extractUsage(invocation.rawResponse),
+        promptBytes: invocation.promptBytes,
+        modelDurationMs: invocation.modelDurationMs,
+      };
+    } catch (error) {
+      if (!(error instanceof CoachInferenceServiceError)) {
+        throw error;
+      }
+
+      if (!shouldAttemptWorkoutSummaryPlainTextFallback(error)) {
+        return {
+          data: localFallback,
+          model: this.modelName,
+          mode: "degraded_fallback",
+          promptBytes: resolvePromptBytes(error.details),
+          modelDurationMs: Date.now() - startedAt,
+        };
+      }
+
+      const remainingBudgetMs = remainingWorkoutSummaryBudgetMs(startedAt);
+
+      console.warn(
+        JSON.stringify({
+          event: "coach_workout_summary_structured_fallback",
+          operation,
+          model: this.modelName,
+          reasonCode: error.code,
+          reasonDetails: error.details,
+          remainingBudgetMs,
+          ...sharedDetails,
+        })
+      );
+
+      if (remainingBudgetMs < WORKOUT_SUMMARY_FALLBACK_MIN_TIMEOUT_MS) {
+        return {
+          data: localFallback,
+          model: this.modelName,
+          mode: "degraded_fallback",
+          promptBytes: resolvePromptBytes(error.details),
+          modelDurationMs: Date.now() - startedAt,
+        };
+      }
+
+      try {
+        const fallbackInvocation = await this.runPlainText({
+          operation,
+          messages: buildFallbackWorkoutSummaryMessages(request),
+          maxTokens: WORKOUT_SUMMARY_PLAIN_TEXT_MAX_TOKENS,
+          timeoutMs: Math.min(
+            WORKOUT_SUMMARY_PLAIN_TEXT_TIMEOUT_MS,
+            remainingBudgetMs
+          ),
+          includeFallbackNotice: false,
+          extraDetails: {
+            ...sharedDetails,
+            fallbackTrigger: error.code,
+            remainingBudgetMs,
+          },
+        });
+
+        return {
+          data: {
+            ...parsePlainWorkoutSummary(
+              extractPlainText(
+                fallbackInvocation.rawResponse,
+                "workout summary fallback"
+              )
+            ),
+            generationStatus: "model",
+          },
+          model: this.modelName,
+          mode: "plain_text_fallback",
+          usage: extractUsage(fallbackInvocation.rawResponse),
+          promptBytes: resolvePromptBytes(error.details),
+          fallbackPromptBytes: fallbackInvocation.promptBytes,
+          modelDurationMs: resolveModelDurationMs(error.details),
+          fallbackModelDurationMs: fallbackInvocation.modelDurationMs,
+        };
+      } catch (fallbackError) {
+        if (!(fallbackError instanceof CoachInferenceServiceError)) {
+          throw fallbackError;
+        }
+
+        console.warn(
+          JSON.stringify({
+            event: "coach_workout_summary_degraded_response",
+            operation,
+            model: this.modelName,
+            reasonCode: fallbackError.code,
+            reasonDetails: fallbackError.details,
+            originalReasonCode: error.code,
+            originalReasonDetails: error.details,
+            ...sharedDetails,
+          })
+        );
+
+        return {
+          data: localFallback,
+          model: this.modelName,
+          mode: "degraded_fallback",
+          promptBytes: resolvePromptBytes(error.details),
+          fallbackPromptBytes: resolvePromptBytes(fallbackError.details),
+          modelDurationMs: Date.now() - startedAt,
+        };
+      }
+    }
+  }
+
   async generateChat(
     request: CoachChatRequest,
     options: GenerateChatOptions = {}
@@ -474,7 +651,7 @@ export class WorkersAICoachService implements CoachInferenceService {
   }
 
   private async runStructured(input: {
-    operation: "profile_insights" | "chat";
+    operation: "profile_insights" | "workout_summary" | "chat";
     messages: PromptMessage[];
     schema: Record<string, unknown>;
     maxTokens: number;
@@ -500,7 +677,7 @@ export class WorkersAICoachService implements CoachInferenceService {
   }
 
   private async runPlainText(input: {
-    operation: "profile_insights" | "chat";
+    operation: "profile_insights" | "workout_summary" | "chat";
     messages: PromptMessage[];
     maxTokens: number;
     timeoutMs: number;
@@ -591,6 +768,12 @@ function shouldAttemptProfilePlainTextFallback(
   return error.code.startsWith("upstream_");
 }
 
+function shouldAttemptWorkoutSummaryPlainTextFallback(
+  error: CoachInferenceServiceError
+): boolean {
+  return error.code.startsWith("upstream_");
+}
+
 function shouldAttemptChatPlainTextFallback(
   error: CoachInferenceServiceError
 ): boolean {
@@ -646,6 +829,22 @@ function normalizeProfileInsightsResponse(
   };
 }
 
+function normalizeWorkoutSummaryResponse(
+  response: {
+    headline: string;
+    summary: string;
+    highlights: string[];
+    nextWorkoutFocus: string[];
+  }
+): CoachWorkoutSummaryContent {
+  return {
+    headline: response.headline.trim(),
+    summary: response.summary.trim(),
+    highlights: dedupeText(response.highlights).slice(0, 4),
+    nextWorkoutFocus: dedupeText(response.nextWorkoutFocus).slice(0, 3),
+  };
+}
+
 function parsePlainProfileInsights(
   content: string
 ): CoachProfileInsightsContent {
@@ -686,6 +885,51 @@ function parsePlainProfileInsights(
       ...bulletRecommendations,
       ...narrativeRecommendations,
     ]).slice(0, 8),
+  };
+}
+
+function parsePlainWorkoutSummary(
+  content: string
+): CoachWorkoutSummaryContent {
+  const normalized = content.replace(/\r\n/g, "\n").trim();
+  const lines = normalized.split("\n");
+  const sections = parseLabeledSections(lines);
+
+  const headline = cleanPlainParagraph(
+    sections.headline ?? lines[0] ?? ""
+  ).slice(0, 160);
+  const summary = cleanPlainParagraph(
+    sections.summary ??
+      normalized
+        .split(/\n\s*\n+/)
+        .map((paragraph) => cleanPlainParagraph(paragraph))
+        .find(Boolean) ??
+      ""
+  ).slice(0, 900);
+  const highlights = dedupeText(
+    extractSectionBullets(sections.highlights).map((item) =>
+      cleanPlainParagraph(item)
+    )
+  ).slice(0, 4);
+  const nextWorkoutFocus = dedupeText(
+    extractSectionBullets(sections.nextWorkoutFocus).map((item) =>
+      cleanPlainParagraph(item)
+    )
+  ).slice(0, 3);
+
+  if (!headline || !summary || highlights.length === 0) {
+    throw new CoachInferenceServiceError(
+      502,
+      "upstream_invalid_output",
+      "Workers AI returned schema-invalid workout summary fallback output"
+    );
+  }
+
+  return {
+    headline,
+    summary,
+    highlights,
+    nextWorkoutFocus,
   };
 }
 
@@ -791,6 +1035,72 @@ function buildNeutralProfileInsights(
     recommendations: dedupeText(recommendations).slice(0, 5),
     generationStatus: "fallback",
     insightSource: "fallback",
+  };
+}
+
+function buildNeutralWorkoutSummary(
+  request: CoachWorkoutSummaryJobCreateRequest
+): CoachWorkoutSummaryResponse {
+  const locale = request.locale.toLowerCase().startsWith("ru") ? "ru" : "en";
+  const currentWorkout = request.currentWorkout;
+  const topExercise = currentWorkout.exercises
+    .slice()
+    .sort((left, right) => right.totalVolume - left.totalVolume)[0];
+  const matchedHistoryCount = request.recentExerciseHistory.reduce(
+    (total, exerciseHistory) => total + exerciseHistory.sessions.length,
+    0
+  );
+  const progressHighlight = topExercise
+    ? buildWorkoutSummaryExerciseProgressHighlight(
+        request,
+        topExercise.exerciseID
+      )
+    : undefined;
+
+  const headline =
+    locale === "ru"
+      ? `Тренировка ${currentWorkout.title} завершена`
+      : `${currentWorkout.title} completed`;
+  const summary =
+    locale === "ru"
+      ? `Выполнено ${currentWorkout.completedSetsCount} из ${currentWorkout.totalSetsCount} сетов по ${currentWorkout.exerciseCount} упражнениям. Сводка опирается на текущую тренировку${matchedHistoryCount > 0 ? " и недавние выполнения тех же упражнений" : ""}.`
+      : `You completed ${currentWorkout.completedSetsCount} of ${currentWorkout.totalSetsCount} sets across ${currentWorkout.exerciseCount} exercises. This summary is based on the current workout${matchedHistoryCount > 0 ? " and recent same-exercise history" : ""}.`;
+
+  const highlights = dedupeText(
+    [
+      topExercise
+        ? locale === "ru"
+          ? `Наибольший объём пришёлся на ${topExercise.exerciseName}: ${formatLoad(topExercise.totalVolume)} кг общего тоннажа.`
+          : `${topExercise.exerciseName} carried the highest workload at ${formatLoad(topExercise.totalVolume)} kg of total volume.`
+        : undefined,
+      progressHighlight,
+      locale === "ru"
+        ? `Завершено ${currentWorkout.completedSetsCount} рабочих сетов в этой сессии.`
+        : `${currentWorkout.completedSetsCount} working sets were completed in this session.`,
+    ].filter((value): value is string => Boolean(value))
+  ).slice(0, 4);
+
+  const nextWorkoutFocus = dedupeText(
+    [
+      locale === "ru"
+        ? "Ориентируйтесь на уверенно выполненные сегодняшние сеты как на базу для следующей тренировки."
+        : "Use the cleanest sets from today as the baseline for the next session.",
+      locale === "ru"
+        ? "Повышайте нагрузку только там, где техника и повторы выглядели повторяемыми."
+        : "Add load only where today's reps and execution looked repeatable.",
+    ]
+  ).slice(0, 3);
+
+  return {
+    headline,
+    summary,
+    highlights: highlights.length > 0
+      ? highlights
+      : locale === "ru"
+        ? ["Текущая тренировка завершена и может служить базой для следующего прогресса."]
+        : ["This completed session can serve as the baseline for your next progression step."],
+    nextWorkoutFocus,
+    generationStatus: "fallback",
   };
 }
 
@@ -1250,6 +1560,10 @@ function remainingProfileInsightsBudgetMs(startedAt: number): number {
   return Math.max(PROFILE_INSIGHTS_TOTAL_BUDGET_MS - (Date.now() - startedAt), 0);
 }
 
+function remainingWorkoutSummaryBudgetMs(startedAt: number): number {
+  return Math.max(WORKOUT_SUMMARY_TOTAL_BUDGET_MS - (Date.now() - startedAt), 0);
+}
+
 function remainingChatBudgetMs(startedAt: number, totalBudgetMs: number): number {
   return Math.max(totalBudgetMs - (Date.now() - startedAt), 0);
 }
@@ -1535,6 +1849,108 @@ function looksLikeRecommendationSection(text: string): boolean {
   );
 }
 
+function parseLabeledSections(lines: string[]): Record<string, string> {
+  const sections: Record<string, string> = {};
+  let currentKey: string | undefined;
+
+  for (const rawLine of lines) {
+    const line = rawLine.trimEnd();
+    const match = line.match(
+      /^(Headline|Summary|Highlights|Next workout focus)\s*:\s*(.*)$/i
+    );
+
+    if (match) {
+      currentKey = normalizeSectionKey(match[1] ?? "");
+      sections[currentKey] = (match[2] ?? "").trim();
+      continue;
+    }
+
+    if (!currentKey) {
+      continue;
+    }
+
+    sections[currentKey] = [sections[currentKey], line.trim()]
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  return sections;
+}
+
+function normalizeSectionKey(value: string): string {
+  switch (value.trim().toLowerCase()) {
+    case "headline":
+      return "headline";
+    case "summary":
+      return "summary";
+    case "highlights":
+      return "highlights";
+    case "next workout focus":
+      return "nextWorkoutFocus";
+    default:
+      return value.trim();
+  }
+}
+
+function extractSectionBullets(section: string | undefined): string[] {
+  if (!section) {
+    return [];
+  }
+
+  const bulletLines = section
+    .split("\n")
+    .map((line) => parseBulletRecommendation(line))
+    .filter((value): value is string => Boolean(value));
+
+  if (bulletLines.length > 0) {
+    return bulletLines;
+  }
+
+  return section
+    .split(/\n+/)
+    .map((line) => cleanPlainParagraph(line))
+    .filter(Boolean);
+}
+
+function buildWorkoutSummaryExerciseProgressHighlight(
+  request: CoachWorkoutSummaryJobCreateRequest,
+  exerciseID: string
+): string | undefined {
+  const locale = request.locale.toLowerCase().startsWith("ru") ? "ru" : "en";
+  const currentExercise = request.currentWorkout.exercises.find(
+    (exercise) => exercise.exerciseID === exerciseID
+  );
+  const history = request.recentExerciseHistory.find(
+    (exercise) => exercise.exerciseID === exerciseID
+  );
+
+  if (!currentExercise || !history || history.sessions.length === 0) {
+    return undefined;
+  }
+
+  const currentBestWeight = currentExercise.sets
+    .filter((set) => set.isCompleted && set.weight > 0)
+    .reduce((best, set) => Math.max(best, set.weight), 0);
+  const historicalBestWeight = history.sessions
+    .map((session) => session.bestWeight ?? 0)
+    .reduce((best, value) => Math.max(best, value), 0);
+
+  if (currentBestWeight > 0 && currentBestWeight >= historicalBestWeight) {
+    return locale === "ru"
+      ? `${currentExercise.exerciseName} вышло на лучший недавний вес: ${formatLoad(currentBestWeight)} кг.`
+      : `${currentExercise.exerciseName} matched or exceeded your best recent load at ${formatLoad(currentBestWeight)} kg.`;
+  }
+
+  const latestAverageReps = history.sessions[0]?.averageReps;
+  if (latestAverageReps !== undefined) {
+    return locale === "ru"
+      ? `${currentExercise.exerciseName} можно сравнивать с недавней базой около ${formatLoad(latestAverageReps)} повторений в среднем за сет.`
+      : `${currentExercise.exerciseName} can be compared against a recent baseline of about ${formatLoad(latestAverageReps)} reps per set.`;
+  }
+
+  return undefined;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -1590,4 +2006,29 @@ const chatResponseJsonSchema = {
     },
   },
   required: ["answerMarkdown", "followUps"],
+} as const;
+
+const workoutSummaryResponseJsonSchema = {
+  type: "object",
+  properties: {
+    headline: {
+      type: "string",
+    },
+    summary: {
+      type: "string",
+    },
+    highlights: {
+      type: "array",
+      items: {
+        type: "string",
+      },
+    },
+    nextWorkoutFocus: {
+      type: "array",
+      items: {
+        type: "string",
+      },
+    },
+  },
+  required: ["headline", "summary", "highlights", "nextWorkoutFocus"],
 } as const;

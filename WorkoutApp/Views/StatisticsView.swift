@@ -339,6 +339,7 @@ enum WorkoutSummaryMode {
 
 struct WorkoutSummaryView: View {
     @Environment(AppStore.self) private var store
+    @Environment(WorkoutSummaryStore.self) private var workoutSummaryStore
 
     let session: WorkoutSession
     var mode: WorkoutSummaryMode = .history
@@ -354,6 +355,10 @@ struct WorkoutSummaryView: View {
                 } else if mode == .previousWorkout {
                     Text("stats.previous_workout_preview")
                         .font(AppTypography.title(size: 30))
+                }
+
+                if mode == .completion {
+                    workoutSummaryAICard
                 }
 
                 AppCard {
@@ -408,6 +413,16 @@ struct WorkoutSummaryView: View {
             .padding(20)
             .padding(.bottom, mode == .completion || mode == .previousWorkout ? 96 : 0)
         }
+        .task(id: session) {
+            guard mode == .completion else {
+                return
+            }
+
+            await workoutSummaryStore.finalizeOrResumeSummary(
+                for: session,
+                using: store
+            )
+        }
         .safeAreaInset(edge: .bottom) {
             if mode == .completion {
                 continueCTA
@@ -418,6 +433,18 @@ struct WorkoutSummaryView: View {
         .navigationTitle(mode == .history ? session.title : "")
         .navigationBarTitleDisplayMode(.inline)
         .appScreenBackground()
+    }
+
+    @ViewBuilder
+    private var workoutSummaryAICard: some View {
+        switch workoutSummaryStore.cardState(for: session.id) {
+        case .hidden:
+            EmptyView()
+        case .loading:
+            WorkoutSummaryAILoadingCard()
+        case .ready(let result):
+            WorkoutSummaryAIResultCard(result: result)
+        }
     }
 
     private var continueCTA: some View {
@@ -519,6 +546,94 @@ private struct WorkoutSummaryMetricCard: View {
             RoundedRectangle(cornerRadius: 22, style: .continuous)
                 .stroke(AppTheme.stroke, lineWidth: 1)
         )
+    }
+}
+
+private struct WorkoutSummaryAILoadingCard: View {
+    var body: some View {
+        AppCard {
+            HStack(alignment: .center, spacing: 14) {
+                ProgressView()
+                    .tint(AppTheme.accent)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Label("workout_summary.ai_title", systemImage: "sparkles")
+                        .font(AppTypography.caption(size: 13, weight: .semibold))
+                        .foregroundStyle(AppTheme.secondaryText)
+
+                    Text("workout_summary.loading")
+                        .font(AppTypography.body(size: 16, weight: .medium, relativeTo: .subheadline))
+                        .foregroundStyle(AppTheme.primaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer(minLength: 0)
+            }
+        }
+    }
+}
+
+private struct WorkoutSummaryAIResultCard: View {
+    let result: WorkoutSummaryJobResult
+
+    var body: some View {
+        AppCard {
+            VStack(alignment: .leading, spacing: 16) {
+                Label("workout_summary.ai_title", systemImage: "sparkles")
+                    .font(AppTypography.caption(size: 13, weight: .semibold))
+                    .foregroundStyle(AppTheme.secondaryText)
+
+                Text(result.headline)
+                    .font(AppTypography.heading(size: 23))
+                    .foregroundStyle(AppTheme.primaryText)
+
+                Text(result.summary)
+                    .font(AppTypography.body(size: 16, weight: .medium, relativeTo: .subheadline))
+                    .foregroundStyle(AppTheme.primaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if !result.highlights.isEmpty {
+                    workoutSummarySection(
+                        titleKey: "workout_summary.highlights_title",
+                        items: result.highlights
+                    )
+                }
+
+                if !result.nextWorkoutFocus.isEmpty {
+                    workoutSummarySection(
+                        titleKey: "workout_summary.next_focus_title",
+                        items: result.nextWorkoutFocus
+                    )
+                }
+            }
+        }
+    }
+
+    private func workoutSummarySection(
+        titleKey: LocalizedStringKey,
+        items: [String]
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(titleKey)
+                .font(AppTypography.caption(size: 13, weight: .semibold))
+                .foregroundStyle(AppTheme.secondaryText)
+
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(Array(items.enumerated()), id: \.offset) { _, item in
+                    HStack(alignment: .top, spacing: 10) {
+                        Circle()
+                            .fill(AppTheme.accent)
+                            .frame(width: 6, height: 6)
+                            .padding(.top, 7)
+
+                        Text(item)
+                            .font(AppTypography.body(size: 15, weight: .medium, relativeTo: .subheadline))
+                            .foregroundStyle(AppTheme.primaryText)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+        }
     }
 }
 

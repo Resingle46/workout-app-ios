@@ -5,6 +5,7 @@ struct WorkoutAppApp: App {
     @Environment(\.scenePhase) private var scenePhase
     @State private var store: AppStore
     @State private var coachStore: CoachStore
+    @State private var workoutSummaryStore: WorkoutSummaryStore
     @State private var cloudSyncStore: CloudSyncStore
 
     init() {
@@ -28,6 +29,13 @@ struct WorkoutAppApp: App {
                 cloudSyncStore: cloudSyncStore
             )
         )
+        _workoutSummaryStore = State(
+            initialValue: WorkoutSummaryStore(
+                client: client,
+                configuration: configuration,
+                localStateStore: localStateStore
+            )
+        )
     }
 
     var body: some Scene {
@@ -35,6 +43,7 @@ struct WorkoutAppApp: App {
             RootTabView()
                 .environment(store)
                 .environment(coachStore)
+                .environment(workoutSummaryStore)
                 .environment(cloudSyncStore)
                 .preferredColorScheme(.dark)
                 .task {

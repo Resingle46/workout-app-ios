@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ActiveWorkoutView: View {
     @Environment(AppStore.self) private var store
+    @Environment(WorkoutSummaryStore.self) private var workoutSummaryStore
     @Environment(\.appBottomRailInset) private var bottomRailInset
 
     @State private var presentedSummary: PresentedWorkoutSummary?
@@ -29,12 +30,28 @@ struct ActiveWorkoutView: View {
                 presentedSummary = nil
             }
         }
+        .task(id: store.activeSession) {
+            guard let session = store.activeSession else {
+                return
+            }
+
+            await workoutSummaryStore.maybePrewarmSummary(
+                for: session,
+                using: store
+            )
+        }
         .onChange(of: store.activeSession?.id) { _ in
             guard store.activeSession != nil, let session = store.lastFinishedSession else { return }
             presentedSummary = PresentedWorkoutSummary(session: session, mode: .previousWorkout)
         }
         .onChange(of: store.lastFinishedSession?.id) { _ in
             guard store.activeSession == nil, let session = store.lastFinishedSession else { return }
+            Task {
+                await workoutSummaryStore.finalizeOrResumeSummary(
+                    for: session,
+                    using: store
+                )
+            }
             presentedSummary = PresentedWorkoutSummary(session: session, mode: .completion)
         }
         .fullScreenCover(item: $presentedSummary) { presented in
