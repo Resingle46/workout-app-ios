@@ -115,8 +115,12 @@ export function createApp(
 
         if (pathname === "/v1/backup" && request.method === "PUT") {
           const rawBody = await readJSON(request);
-          routeDiagnostics = buildBackupUploadDiagnostics(rawBody);
-          const body = backupUploadRequestSchema.parse(rawBody);
+          const normalized = normalizeBackupUploadPayload(rawBody);
+          routeDiagnostics = buildBackupUploadDiagnostics(
+            normalized.body,
+            normalized.migratedLegacyCategoryIDs
+          );
+          const body = backupUploadRequestSchema.parse(normalized.body);
           const response = backupUploadResponseSchema.parse(
             await stateRepository.uploadBackup(body)
           );
@@ -207,7 +211,9 @@ export function createApp(
 
         if (pathname === "/v1/coach/profile-insights" && request.method === "POST") {
           const body = profileInsightsRequestSchema.parse(await readJSON(request));
+          const contextResolveStartedAt = deps.now();
           const context = await stateRepository.resolveCoachContext(body);
+          const contextResolveMs = deps.now() - contextResolveStartedAt;
           const snapshotBytes = jsonByteLength(context.snapshot);
           const programCommentChars =
             context.snapshot.coachAnalysisSettings.programComment.trim().length;
@@ -228,12 +234,14 @@ export function createApp(
             relativeStrengthCount,
             preferredProgramWorkoutCount,
           };
+          const cacheLookupStartedAt = deps.now();
           const cachedResponse = !body.forceRefresh && context.cacheAllowed
             ? await stateRepository.getInsightsCache(
                 body.installID,
                 context.contextHash
               )
             : null;
+          const cacheLookupMs = deps.now() - cacheLookupStartedAt;
           const reusableCachedResponse = normalizeReusableProfileInsightsCacheEntry(
             cachedResponse
           );
@@ -250,6 +258,8 @@ export function createApp(
               profileContextVariant: "compact_profile_v1",
               forceRefresh: body.forceRefresh,
               insightsCacheHit: true,
+              cacheLookupMs,
+              contextResolveMs,
               insightSource: reusableCachedResponse.insightSource,
               modelInferenceExecuted: false,
               snapshotBytes,
@@ -270,6 +280,12 @@ export function createApp(
               context.backupHead?.uploadedAt ?? body.snapshotUpdatedAt,
           });
           const modelDurationMs = deps.now() - inferenceStartedAt;
+          const cacheStoreStartedAt = deps.now();
+          let cacheStoreMs = 0;
+          const cacheMissReason = resolveInsightsCacheMissReason(
+            body.forceRefresh,
+            context.cacheAllowed
+          );
 
           if (
             context.cacheAllowed &&
@@ -281,6 +297,7 @@ export function createApp(
               result.data
             );
           }
+          cacheStoreMs = deps.now() - cacheStoreStartedAt;
 
           logRequest({
             requestID,
@@ -296,6 +313,10 @@ export function createApp(
             contextSource: context.source,
             forceRefresh: body.forceRefresh,
             insightsCacheHit: false,
+            cacheMissReason,
+            cacheLookupMs,
+            cacheStoreMs,
+            contextResolveMs,
             insightSource: result.data.insightSource,
             modelInferenceExecuted: true,
             snapshotBytes,
@@ -372,18 +393,36 @@ export function createApp(
               });
             } catch (error) {
               const failedAt = new Date(deps.now()).toISOString();
-              await stateRepository.failChatJob(job.jobID, {
-                completedAt: failedAt,
-                error: {
-                  code: "workflow_start_failed",
-                  message: "Chat workflow failed to start.",
-                  retryable: true,
-                },
-                totalJobDurationMs: Math.max(
-                  deps.now() - Date.parse(job.createdAt),
-                  0
-                ),
-              });
+              try {
+                await stateRepository.failChatJob(job.jobID, {
+                  completedAt: failedAt,
+                  error: {
+                    code: "workflow_start_failed",
+                    message: "Chat workflow failed to start.",
+                    retryable: true,
+                  },
+                  totalJobDurationMs: Math.max(
+                    deps.now() - Date.parse(job.createdAt),
+                    0
+                  ),
+                });
+              } catch (persistError) {
+                console.error(
+                  JSON.stringify({
+                    event: "terminal_state_persist_failed",
+                    phase: "persist_failure",
+                    route: pathname,
+                    jobID: job.jobID,
+                    installID: job.installID,
+                    clientRequestID: job.clientRequestID,
+                    errorCode: "workflow_start_failed",
+                    persistErrorMessage:
+                      persistError instanceof Error
+                        ? persistError.message.slice(0, 200)
+                        : "Unknown persistence error",
+                  })
+                );
+              }
               throw new RequestError(
                 500,
                 "workflow_start_failed",
@@ -952,7 +991,8 @@ async function readJSON(request: Request): Promise<unknown> {
 }
 
 function buildBackupUploadDiagnostics(
-  rawBody: unknown
+  rawBody: unknown,
+  migratedLegacyCategoryIDs = 0
 ): Record<string, unknown> | undefined {
   if (!isRecord(rawBody)) {
     return undefined;
@@ -972,8 +1012,67 @@ function buildBackupUploadDiagnostics(
   if (snapshotCounts) {
     diagnostics.snapshotCounts = snapshotCounts;
   }
+  if (migratedLegacyCategoryIDs > 0) {
+    diagnostics.migratedLegacyCategoryIDs = migratedLegacyCategoryIDs;
+  }
 
   return Object.keys(diagnostics).length > 0 ? diagnostics : undefined;
+}
+
+const LEGACY_CATEGORY_ID_MAP: Readonly<Record<string, string>> = {
+  "A1000000-0000-0000-0000-000000000001": "A1000000-0000-4000-8000-000000000001",
+  "A1000000-0000-0000-0000-000000000002": "A1000000-0000-4000-8000-000000000002",
+  "A1000000-0000-0000-0000-000000000003": "A1000000-0000-4000-8000-000000000003",
+  "A1000000-0000-0000-0000-000000000004": "A1000000-0000-4000-8000-000000000004",
+  "A1000000-0000-0000-0000-000000000005": "A1000000-0000-4000-8000-000000000005",
+  "A1000000-0000-0000-0000-000000000006": "A1000000-0000-4000-8000-000000000006",
+};
+
+function normalizeBackupUploadPayload(rawBody: unknown): {
+  body: unknown;
+  migratedLegacyCategoryIDs: number;
+} {
+  if (!isRecord(rawBody) || !isRecord(rawBody.snapshot)) {
+    return { body: rawBody, migratedLegacyCategoryIDs: 0 };
+  }
+
+  const snapshot = rawBody.snapshot;
+  if (!Array.isArray(snapshot.exercises)) {
+    return { body: rawBody, migratedLegacyCategoryIDs: 0 };
+  }
+
+  let migratedLegacyCategoryIDs = 0;
+  const normalizedExercises = snapshot.exercises.map((exercise) => {
+    if (!isRecord(exercise) || typeof exercise.categoryID !== "string") {
+      return exercise;
+    }
+
+    const canonicalCategoryID = LEGACY_CATEGORY_ID_MAP[exercise.categoryID];
+    if (!canonicalCategoryID) {
+      return exercise;
+    }
+
+    migratedLegacyCategoryIDs += 1;
+    return {
+      ...exercise,
+      categoryID: canonicalCategoryID,
+    };
+  });
+
+  if (migratedLegacyCategoryIDs === 0) {
+    return { body: rawBody, migratedLegacyCategoryIDs: 0 };
+  }
+
+  return {
+    body: {
+      ...rawBody,
+      snapshot: {
+        ...snapshot,
+        exercises: normalizedExercises,
+      },
+    },
+    migratedLegacyCategoryIDs,
+  };
 }
 
 function extractBackupSnapshotCounts(
@@ -1008,6 +1107,19 @@ function extractBackupSnapshotCounts(
   }
 
   return Object.keys(counts).length > 0 ? counts : undefined;
+}
+
+function resolveInsightsCacheMissReason(
+  forceRefresh: boolean | undefined,
+  cacheAllowed: boolean
+): "force_refresh" | "cache_disallowed_active_workout" | "cache_key_miss" {
+  if (forceRefresh) {
+    return "force_refresh";
+  }
+  if (!cacheAllowed) {
+    return "cache_disallowed_active_workout";
+  }
+  return "cache_key_miss";
 }
 
 function mapError(

@@ -2376,6 +2376,7 @@ function isRetryableJobErrorCode(code: string): boolean {
   return (
     code.startsWith("upstream_") ||
     code === "workflow_start_failed" ||
+    code === "persistence_error" ||
     code === "internal_error"
   );
 }

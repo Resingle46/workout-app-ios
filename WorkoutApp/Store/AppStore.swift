@@ -83,7 +83,7 @@ final class AppStore {
     }
 
     func currentSnapshot() -> AppSnapshot {
-        AppSnapshot(
+        Self.normalizedSnapshot(from: AppSnapshot(
             programs: programs,
             exercises: exercises,
             history: history,
@@ -92,7 +92,7 @@ final class AppStore {
                 coachAnalysisSettings,
                 availablePrograms: programs
             )
-        )
+        ))
     }
 
     func apply(snapshot: AppSnapshot) {
@@ -1482,7 +1482,9 @@ final class AppStore {
             }
 
             guard let definition = SeedData.definition(forExerciseNamed: exercise.name) else {
-                result.append(exercise)
+                var normalizedExercise = exercise
+                normalizedExercise.categoryID = SeedData.canonicalCategoryID(for: exercise.categoryID)
+                result.append(normalizedExercise)
                 continue
             }
 

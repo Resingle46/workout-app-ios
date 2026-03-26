@@ -278,6 +278,41 @@ describe("coach worker app", () => {
     });
   });
 
+  it("accepts backup uploads with legacy seed category IDs by normalizing to canonical IDs", async () => {
+    const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
+    const app = createApp({
+      createInferenceService: () => stubInferenceService(),
+      createStateRepository: () => repository,
+    });
+    const upload = makeBackupUploadRequestFixture();
+    upload.snapshot.exercises[0]!.categoryID =
+      "A1000000-0000-0000-0000-000000000002";
+
+    const response = await app.fetch(
+      authedRequest("https://coach.example.workers.dev/v1/backup", {
+        method: "PUT",
+        body: JSON.stringify(upload),
+      }),
+      makeEnv()
+    );
+
+    expect(response.status).toBe(200);
+    const downloadResponse = await app.fetch(
+      authedRequest(
+        `https://coach.example.workers.dev/v1/backup/download?installID=${upload.installID}&version=current`,
+        {
+          method: "GET",
+        }
+      ),
+      makeEnv()
+    );
+    expect(downloadResponse.status).toBe(200);
+    const stored = await downloadResponse.json();
+    expect(stored.backup.snapshot.exercises[0]?.categoryID).toBe(
+      "A1000000-0000-4000-8000-000000000002"
+    );
+  });
+
   it("uses server-side backup state plus coach preferences for slim insights requests", async () => {
     const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
     let capturedSnapshot: CompactCoachSnapshot | undefined;
@@ -1037,6 +1072,61 @@ describe("coach worker app", () => {
       ? await repository.getChatMemory(storedJob.installID, storedJob.contextHash)
       : null;
     expect(memory).toBeNull();
+  });
+
+  it("keeps failing chat jobs terminal even when fail-state persistence fails once", async () => {
+    class FailOncePersistRepository extends InMemoryCoachStateRepository {
+      private hasFailedPersist = false;
+
+      override async failChatJob(
+        ...args: Parameters<InMemoryCoachStateRepository["failChatJob"]>
+      ): ReturnType<InMemoryCoachStateRepository["failChatJob"]> {
+        if (!this.hasFailedPersist) {
+          this.hasFailedPersist = true;
+          throw new Error("D1 transient write failure");
+        }
+        return super.failChatJob(...args);
+      }
+    }
+
+    const repository = new FailOncePersistRepository("test.v1", DEFAULT_AI_MODEL);
+    const workflowCreate = vi.fn().mockResolvedValue(makeWorkflowInstanceStub());
+    const app = createApp({
+      createInferenceService: () => stubInferenceService(),
+      createStateRepository: () => repository,
+    });
+    const env = makeEnv({
+      COACH_CHAT_WORKFLOW: makeWorkflowBinding(workflowCreate),
+    });
+    const createRequest = makeChatJobCreateRequestFixture();
+
+    const createResponse = await app.fetch(
+      authedRequest("https://coach.example.workers.dev/v2/coach/chat-jobs", {
+        method: "POST",
+        body: JSON.stringify(createRequest),
+      }),
+      env
+    );
+    const created = await createResponse.json();
+
+    const failed = await executeChatJob(created.jobID, env, {
+      createStateRepository: () => repository,
+      createInferenceService: () =>
+        stubInferenceService({
+          chatError: new CoachInferenceServiceError(
+            504,
+            "upstream_timeout",
+            "Workers AI request timed out"
+          ),
+        }),
+    });
+
+    expect(failed?.status).toBe("failed");
+    expect(failed?.error?.code).toBe("upstream_timeout");
+
+    const storedJob = await repository.getChatJob(created.jobID, createRequest.installID);
+    expect(storedJob?.status).toBe("failed");
+    expect(storedJob?.error?.code).toBe("upstream_timeout");
   });
 
   it("creates a queued workout summary job and starts the workflow", async () => {

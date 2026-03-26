@@ -163,23 +163,94 @@ export async function executeChatJob(
       0
     );
     const failure = normalizeChatJobExecutionError(error);
-    const failedJob = await stateRepository.failChatJob(jobID, {
-      completedAt: failedAt,
-      error: failure,
-      promptBytes: extractNumericErrorDetail(error, "promptBytes"),
-      fallbackPromptBytes: extractNumericErrorDetail(error, "fallbackPromptBytes"),
-      modelDurationMs: extractNumericErrorDetail(error, "modelDurationMs"),
-      fallbackModelDurationMs: extractNumericErrorDetail(
-        error,
-        "fallbackModelDurationMs"
-      ),
-      totalJobDurationMs,
-      inferenceMode: normalizeInferenceMode(error),
-    });
+    const failedJob = await persistFailedStateSafely(
+      stateRepository,
+      jobID,
+      {
+        completedAt: failedAt,
+        error: failure,
+        promptBytes: extractNumericErrorDetail(error, "promptBytes"),
+        fallbackPromptBytes: extractNumericErrorDetail(error, "fallbackPromptBytes"),
+        modelDurationMs: extractNumericErrorDetail(error, "modelDurationMs"),
+        fallbackModelDurationMs: extractNumericErrorDetail(
+          error,
+          "fallbackModelDurationMs"
+        ),
+        totalJobDurationMs,
+        inferenceMode: normalizeInferenceMode(error),
+      },
+      currentJob
+    );
     logChatJobEvent("coach_chat_job_failed", failedJob, {
       errorCode: failure.code,
     });
     return failedJob;
+  }
+}
+
+async function persistFailedStateSafely(
+  stateRepository: CoachStateStore,
+  jobID: string,
+  input: {
+    completedAt: string;
+    error: CoachChatJobError;
+    promptBytes?: number;
+    fallbackPromptBytes?: number;
+    modelDurationMs?: number;
+    fallbackModelDurationMs?: number;
+    totalJobDurationMs?: number;
+    inferenceMode?: CoachChatJobRecord["inferenceMode"];
+  },
+  fallbackJob: CoachChatJobRecord
+): Promise<CoachChatJobRecord> {
+  try {
+    return await stateRepository.failChatJob(jobID, input);
+  } catch (persistError) {
+    console.error(
+      JSON.stringify({
+        event: "terminal_state_persist_failed",
+        phase: "persist_failure",
+        jobID,
+        installID: fallbackJob.installID,
+        clientRequestID: fallbackJob.clientRequestID,
+        errorCode: input.error.code,
+        persistErrorMessage:
+          persistError instanceof Error
+            ? persistError.message.slice(0, 300)
+            : "Unknown persistence error",
+      })
+    );
+
+    try {
+      return await stateRepository.failChatJob(jobID, input);
+    } catch (retryPersistError) {
+      console.error(
+        JSON.stringify({
+          event: "terminal_state_persist_retry_failed",
+          phase: "persist_failure",
+          jobID,
+          installID: fallbackJob.installID,
+          clientRequestID: fallbackJob.clientRequestID,
+          errorCode: input.error.code,
+          persistErrorMessage:
+            retryPersistError instanceof Error
+              ? retryPersistError.message.slice(0, 300)
+              : "Unknown persistence retry error",
+        })
+      );
+      return {
+        ...fallbackJob,
+        status: "failed",
+        completedAt: input.completedAt,
+        error: input.error,
+        promptBytes: input.promptBytes,
+        fallbackPromptBytes: input.fallbackPromptBytes,
+        modelDurationMs: input.modelDurationMs,
+        fallbackModelDurationMs: input.fallbackModelDurationMs,
+        totalJobDurationMs: input.totalJobDurationMs,
+        inferenceMode: input.inferenceMode,
+      };
+    }
   }
 }
 
@@ -216,6 +287,7 @@ function logChatJobEvent(
 ): void {
   const payload = JSON.stringify({
     event,
+    phase: resolveEventPhase(event),
     jobID: job.jobID,
     installID: job.installID,
     clientRequestID: job.clientRequestID,
@@ -264,11 +336,49 @@ function normalizeChatJobExecutionError(error: unknown): CoachChatJobError {
     };
   }
 
+  if (isPersistenceError(error)) {
+    return {
+      code: "persistence_error",
+      message: "Failed to persist job state.",
+      retryable: true,
+    };
+  }
+
   return {
     code: "internal_error",
     message: "Internal server error.",
     retryable: true,
   };
+}
+
+function resolveEventPhase(event: string): string {
+  if (event.includes("started") || event.includes("running")) {
+    return "claim";
+  }
+  if (event.includes("completed")) {
+    return "persist_completion";
+  }
+  if (event.includes("failed")) {
+    return "persist_failure";
+  }
+  if (event.includes("memory")) {
+    return "memory_commit";
+  }
+  return "inference";
+}
+
+function isPersistenceError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("d1") ||
+    message.includes("kv") ||
+    message.includes("r2") ||
+    message.includes("persist") ||
+    message.includes("sqlite")
+  );
 }
 
 function extractNumericErrorDetail(

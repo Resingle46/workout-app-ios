@@ -7,12 +7,28 @@ struct ExerciseSeedDefinition: Sendable {
 }
 
 enum SeedData {
-    static let chestCategoryID = UUID(uuidString: "A1000000-0000-0000-0000-000000000001")!
-    static let backCategoryID = UUID(uuidString: "A1000000-0000-0000-0000-000000000002")!
-    static let legsCategoryID = UUID(uuidString: "A1000000-0000-0000-0000-000000000003")!
-    static let shouldersCategoryID = UUID(uuidString: "A1000000-0000-0000-0000-000000000004")!
-    static let armsCategoryID = UUID(uuidString: "A1000000-0000-0000-0000-000000000005")!
-    static let coreCategoryID = UUID(uuidString: "A1000000-0000-0000-0000-000000000006")!
+    static let chestCategoryID = UUID(uuidString: "A1000000-0000-4000-8000-000000000001")!
+    static let backCategoryID = UUID(uuidString: "A1000000-0000-4000-8000-000000000002")!
+    static let legsCategoryID = UUID(uuidString: "A1000000-0000-4000-8000-000000000003")!
+    static let shouldersCategoryID = UUID(uuidString: "A1000000-0000-4000-8000-000000000004")!
+    static let armsCategoryID = UUID(uuidString: "A1000000-0000-4000-8000-000000000005")!
+    static let coreCategoryID = UUID(uuidString: "A1000000-0000-4000-8000-000000000006")!
+
+    private static let legacyChestCategoryID = UUID(uuidString: "A1000000-0000-0000-0000-000000000001")!
+    private static let legacyBackCategoryID = UUID(uuidString: "A1000000-0000-0000-0000-000000000002")!
+    private static let legacyLegsCategoryID = UUID(uuidString: "A1000000-0000-0000-0000-000000000003")!
+    private static let legacyShouldersCategoryID = UUID(uuidString: "A1000000-0000-0000-0000-000000000004")!
+    private static let legacyArmsCategoryID = UUID(uuidString: "A1000000-0000-0000-0000-000000000005")!
+    private static let legacyCoreCategoryID = UUID(uuidString: "A1000000-0000-0000-0000-000000000006")!
+
+    private static let legacyCategoryIDMap: [UUID: UUID] = [
+        legacyChestCategoryID: chestCategoryID,
+        legacyBackCategoryID: backCategoryID,
+        legacyLegsCategoryID: legsCategoryID,
+        legacyShouldersCategoryID: shouldersCategoryID,
+        legacyArmsCategoryID: armsCategoryID,
+        legacyCoreCategoryID: coreCategoryID,
+    ]
 
     static let categories: [ExerciseCategory] = [
         ExerciseCategory(id: chestCategoryID, nameKey: "muscle.chest", symbol: "figure.strengthtraining.traditional"),
@@ -104,6 +120,10 @@ enum SeedData {
     static func definition(forExerciseNamed name: String) -> ExerciseSeedDefinition? {
         let canonicalName = legacySeedExerciseNameAliases[name] ?? name
         return exerciseDefinitions.first { $0.name == canonicalName }
+    }
+
+    static func canonicalCategoryID(for categoryID: UUID) -> UUID {
+        legacyCategoryIDMap[categoryID] ?? categoryID
     }
 
     static func isDeprecatedSeedExercise(named name: String) -> Bool {

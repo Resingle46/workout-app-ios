@@ -157,6 +157,32 @@ final class BackupCoordinatorTests: XCTestCase {
     }
 
     @MainActor
+    func testAppStoreApplyNormalizesLegacySeedCategoryIdentifierForCustomExercise() {
+        let legacyBackCategoryID = UUID(uuidString: "A1000000-0000-0000-0000-000000000002")!
+        let customID = UUID(uuidString: "ABABABAB-ABAB-4BAB-8BAB-ABABABABABAB")!
+        let snapshot = AppSnapshot(
+            programs: [],
+            exercises: [
+                Exercise(
+                    id: customID,
+                    name: "My Pull Variation",
+                    categoryID: legacyBackCategoryID,
+                    equipment: "Cable",
+                    notes: "custom"
+                )
+            ],
+            history: [],
+            profile: UserProfile(sex: "M", age: 29, weight: 88, height: 182, appLanguageCode: "en")
+        )
+
+        let store = AppStore()
+        store.apply(snapshot: snapshot)
+
+        let migrated = try? XCTUnwrap(store.exercises.first(where: { $0.id == customID }))
+        XCTAssertEqual(migrated?.categoryID, SeedData.backCategoryID)
+    }
+
+    @MainActor
     func testAppStoreApplyRenamesFacePullAndDropsDeprecatedUnreferencedSeedExercise() {
         let facePullID = UUID(uuidString: "11111111-2222-3333-4444-555555555555")!
         let deprecatedID = UUID(uuidString: "66666666-7777-8888-9999-AAAAAAAAAAAA")!
