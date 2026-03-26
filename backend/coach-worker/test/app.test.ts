@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app";
 import { executeChatJob } from "../src/chat-job-executor";
+import * as chatJobExecutorModule from "../src/chat-job-executor";
+import { CoachChatJobWorkflow } from "../src/chat-job-workflow";
 import { executeWorkoutSummaryJob } from "../src/workout-summary-job-executor";
 import {
   buildCoachContextFromSnapshot,
@@ -27,6 +29,16 @@ import type {
   CoachWorkoutSummaryResponse,
   CompactCoachSnapshot,
 } from "../src/schemas";
+
+vi.mock("cloudflare:workers", () => ({
+  WorkflowEntrypoint: class {
+    protected env: unknown;
+
+    constructor(_ctx: unknown, env: unknown) {
+      this.env = env;
+    }
+  },
+}));
 
 describe("coach worker app", () => {
   it("returns health for configured runtime", async () => {
@@ -960,6 +972,92 @@ describe("coach worker app", () => {
     const storedJob = await repository.getChatJob(created.jobID, createRequest.installID);
     expect(storedJob?.status).toBe("completed");
     expect(storedJob?.error).toBeUndefined();
+  });
+
+  it("logs workflow run completion with safe correlation fields on normal return", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const env = makeEnv();
+    const workflow = new CoachChatJobWorkflow({}, env);
+    const returnedJob = {
+      jobID: "job_diag_001",
+      installID: "install_diag_001",
+      clientRequestID: "client_request_diag_001",
+      status: "completed" as const,
+      preparedRequest: {
+        ...makeChatRequestFixture(),
+        clientRequestID: "client_request_diag_001",
+        responseID: "coach-turn_diag_001",
+      },
+      result: {
+        answerMarkdown: "Sensitive coach answer that must not reach workflow logs.",
+        responseID: "coach-turn_diag_001",
+        followUps: ["Sensitive follow-up"],
+        generationStatus: "model" as const,
+        inferenceMode: "structured" as const,
+        totalJobDurationMs: 987,
+      },
+      createdAt: "2026-03-26T19:00:00.000Z",
+      completedAt: "2026-03-26T19:00:10.000Z",
+      contextHash: "context_hash_diag_001",
+      contextSource: "remote_full" as const,
+      chatMemoryHit: false,
+      snapshotBytes: 2048,
+      recentTurnCount: 2,
+      recentTurnChars: 88,
+      questionChars: 41,
+      promptVersion: "test.v1",
+      model: DEFAULT_AI_MODEL,
+      totalJobDurationMs: 987,
+      inferenceMode: "structured" as const,
+      generationStatus: "model" as const,
+    };
+    const executeSpy = vi
+      .spyOn(chatJobExecutorModule, "executeChatJob")
+      .mockResolvedValue(returnedJob);
+    const event = {
+      payload: { jobID: returnedJob.jobID },
+      instanceId: "workflow-instance-diag-001",
+    } as Parameters<CoachChatJobWorkflow["run"]>[0];
+    const step = {
+      do: vi.fn(async (_name: string, callback: () => Promise<unknown>) => callback()),
+    } as Parameters<CoachChatJobWorkflow["run"]>[1];
+
+    try {
+      const result = await workflow.run(event, step);
+
+      expect(result).toBe(returnedJob);
+      expect(executeSpy).toHaveBeenCalledWith(returnedJob.jobID, env, {}, step);
+      expect(errorSpy).not.toHaveBeenCalled();
+      expect(logSpy).toHaveBeenCalledTimes(1);
+
+      const logged = parseLoggedPayload(logSpy);
+      expect(logged).toMatchObject({
+        event: "coach_chat_workflow_run_completed",
+        phase: "workflow_run",
+        jobID: returnedJob.jobID,
+        workflowInstanceID: "workflow-instance-diag-001",
+        finalStatus: "completed",
+        installID: returnedJob.installID,
+        clientRequestID: returnedJob.clientRequestID,
+        inferenceMode: "structured",
+        totalJobDurationMs: 987,
+      });
+      expect(logged).not.toHaveProperty("preparedRequest");
+      expect(logged).not.toHaveProperty("result");
+      expect(logged).not.toHaveProperty("snapshot");
+      const loggedText = JSON.stringify(logged);
+      expect(loggedText).not.toContain(returnedJob.preparedRequest.question);
+      expect(loggedText).not.toContain(
+        returnedJob.preparedRequest.clientRecentTurns[0]!.content
+      );
+      expect(loggedText).not.toContain(returnedJob.result.answerMarkdown);
+      expect(loggedText).not.toContain("Upper A");
+    } finally {
+      executeSpy.mockRestore();
+      logSpy.mockRestore();
+      errorSpy.mockRestore();
+    }
   });
 
   it("does not execute the same async chat job twice", async () => {

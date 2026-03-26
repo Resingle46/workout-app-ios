@@ -21,7 +21,21 @@ export class CoachChatJobWorkflow extends WorkflowEntrypoint<
         : undefined;
 
     try {
-      return await executeChatJob(event.payload.jobID, this.env, {}, step);
+      const finalJob = await executeChatJob(event.payload.jobID, this.env, {}, step);
+      console.log(
+        JSON.stringify({
+          event: "coach_chat_workflow_run_completed",
+          phase: "workflow_run",
+          jobID: event.payload.jobID,
+          workflowInstanceID,
+          finalStatus: finalJob?.status,
+          installID: finalJob?.installID,
+          clientRequestID: finalJob?.clientRequestID,
+          inferenceMode: finalJob?.inferenceMode,
+          totalJobDurationMs: finalJob?.totalJobDurationMs,
+        })
+      );
+      return finalJob;
     } catch (error) {
       console.error(
         JSON.stringify({
