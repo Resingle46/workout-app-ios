@@ -1562,7 +1562,7 @@ final class CoachStore {
     @ObservationIgnored private let cloudSyncStore: CloudSyncStore
     @ObservationIgnored private let contextBuilder: CoachContextBuilder
     @ObservationIgnored private let localStateStore: CoachLocalStateStore
-    @ObservationIgnored private let allQuickPromptKeys: [String] = Self.makeQuickPromptKeys()
+    @ObservationIgnored private let allQuickPromptKeys: [String]
     private var configuration: CoachRuntimeConfiguration
     @ObservationIgnored private let capabilityScope: CoachCapabilityScope
 
@@ -1585,6 +1585,7 @@ final class CoachStore {
         )
         self.contextBuilder = contextBuilder
         self.capabilityScope = capabilityScope
+        self.allQuickPromptKeys = CoachStore.makeQuickPromptKeys()
         configureQuickPromptsIfNeeded()
     }
 
