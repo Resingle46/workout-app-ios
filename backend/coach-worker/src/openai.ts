@@ -27,8 +27,10 @@ const CHAT_STRUCTURED_MAX_TOKENS = 700;
 const CHAT_FALLBACK_MAX_TOKENS = 450;
 const PROFILE_INSIGHTS_STRUCTURED_TIMEOUT_MS = 12_000;
 const PROFILE_INSIGHTS_PLAIN_TEXT_TIMEOUT_MS = 8_000;
-const CHAT_STRUCTURED_TIMEOUT_MS = 30_000;
-const CHAT_FALLBACK_TIMEOUT_MS = 15_000;
+const CHAT_TOTAL_BUDGET_MS = 24_000;
+const CHAT_STRUCTURED_TIMEOUT_MS = 18_000;
+const CHAT_FALLBACK_TIMEOUT_MS = 6_000;
+const CHAT_FALLBACK_MIN_TIMEOUT_MS = 2_000;
 
 interface WorkersAI {
   run(model: string, inputs: Record<string, unknown>): Promise<unknown>;
@@ -48,6 +50,7 @@ export interface InferenceResult<T> {
   data: T;
   responseId?: string;
   model: string;
+  mode?: string;
   usage?: unknown;
   promptBytes?: number;
   modelDurationMs?: number;
@@ -85,6 +88,7 @@ export class WorkersAICoachService implements CoachInferenceService {
   ): Promise<InferenceResult<CoachProfileInsightsResponse>> {
     const operation = "profile_insights";
     const localFallback = buildNeutralProfileInsights(request);
+    const startedAt = Date.now();
 
     try {
       const invocation = await this.runStructured({
@@ -113,6 +117,7 @@ export class WorkersAICoachService implements CoachInferenceService {
           localFallback
         ),
         model: this.modelName,
+        mode: "structured",
         usage: extractUsage(invocation.rawResponse),
         promptBytes: invocation.promptBytes,
         modelDurationMs: invocation.modelDurationMs,
@@ -136,6 +141,7 @@ export class WorkersAICoachService implements CoachInferenceService {
         return {
           data: localFallback,
           model: this.modelName,
+          mode: "local_fallback",
         };
       }
 
@@ -167,9 +173,10 @@ export class WorkersAICoachService implements CoachInferenceService {
             localFallback
           ),
           model: this.modelName,
+          mode: "plain_text_fallback",
           usage: extractUsage(fallbackInvocation.rawResponse),
           promptBytes: fallbackInvocation.promptBytes,
-          modelDurationMs: fallbackInvocation.modelDurationMs,
+          modelDurationMs: Date.now() - startedAt,
         };
       } catch (fallbackError) {
         if (!(fallbackError instanceof CoachInferenceServiceError)) {
@@ -190,6 +197,7 @@ export class WorkersAICoachService implements CoachInferenceService {
       return {
         data: localFallback,
         model: this.modelName,
+        mode: "local_fallback",
       };
     }
   }
@@ -200,6 +208,14 @@ export class WorkersAICoachService implements CoachInferenceService {
     const operation = "chat";
     const turnID = buildOpaqueResponseID();
     const messages = buildChatMessages(request);
+    const localFallback = buildNeutralChatResponse(request);
+    const startedAt = Date.now();
+    const sharedDetails = {
+      turnID,
+      recentTurnCount: request.clientRecentTurns.length,
+      recentTurnChars: totalTurnCharacters(request.clientRecentTurns),
+      questionChars: request.question.trim().length,
+    };
 
     try {
       const rawResponse = await this.runStructured({
@@ -208,6 +224,7 @@ export class WorkersAICoachService implements CoachInferenceService {
         schema: chatResponseJsonSchema,
         maxTokens: CHAT_STRUCTURED_MAX_TOKENS,
         timeoutMs: CHAT_STRUCTURED_TIMEOUT_MS,
+        extraDetails: sharedDetails,
       });
       const parsed = normalizeChatResponse(
         parseStructuredOutput(
@@ -229,6 +246,7 @@ export class WorkersAICoachService implements CoachInferenceService {
         },
         responseId: turnID,
         model: this.modelName,
+        mode: "structured",
         usage: extractUsage(rawResponse.rawResponse),
         promptBytes: rawResponse.promptBytes,
         modelDurationMs: rawResponse.modelDurationMs,
@@ -237,9 +255,11 @@ export class WorkersAICoachService implements CoachInferenceService {
       if (!(error instanceof CoachInferenceServiceError)) {
         throw error;
       }
-      if (!shouldAttemptPlainTextFallback(error)) {
+      if (!shouldAttemptChatPlainTextFallback(error)) {
         throw error;
       }
+
+      const remainingBudgetMs = remainingChatBudgetMs(startedAt);
 
       console.warn(
         JSON.stringify({
@@ -249,35 +269,97 @@ export class WorkersAICoachService implements CoachInferenceService {
           turnID,
           reasonCode: error.code,
           reasonDetails: error.details,
+          remainingBudgetMs,
         })
       );
 
-      const fallbackResponse = await this.runPlainText({
-        operation,
-        messages: buildFallbackChatMessages(request),
-        maxTokens: CHAT_FALLBACK_MAX_TOKENS,
-        timeoutMs: CHAT_FALLBACK_TIMEOUT_MS,
-      });
-      const answerMarkdown = extractPlainText(
-        fallbackResponse.rawResponse,
-        "chat fallback"
-      );
+      if (remainingBudgetMs < CHAT_FALLBACK_MIN_TIMEOUT_MS) {
+        console.warn(
+          JSON.stringify({
+            event: "coach_chat_degraded_response",
+            operation,
+            model: this.modelName,
+            turnID,
+            degradedReason: "insufficient_fallback_budget",
+            reasonCode: error.code,
+            reasonDetails: error.details,
+            remainingBudgetMs,
+          })
+        );
 
-      return {
-        data: {
-          ...applyChatGuardrails(request, {
-            answerMarkdown,
-            followUps: [],
-            suggestedChanges: [],
-          }),
-          responseID: turnID,
-        },
-        responseId: turnID,
-        model: this.modelName,
-        usage: extractUsage(fallbackResponse.rawResponse),
-        promptBytes: fallbackResponse.promptBytes,
-        modelDurationMs: fallbackResponse.modelDurationMs,
-      };
+        return buildDegradedChatResult({
+          request,
+          responseId: turnID,
+          fallback: localFallback,
+          model: this.modelName,
+          mode: "degraded_fallback",
+          startedAt,
+          errors: [error],
+        });
+      }
+
+      try {
+        const fallbackResponse = await this.runPlainText({
+          operation,
+          messages: buildFallbackChatMessages(request),
+          maxTokens: CHAT_FALLBACK_MAX_TOKENS,
+          timeoutMs: Math.min(CHAT_FALLBACK_TIMEOUT_MS, remainingBudgetMs),
+          extraDetails: {
+            ...sharedDetails,
+            fallbackTrigger: error.code,
+            remainingBudgetMs,
+          },
+        });
+        const answerMarkdown = extractPlainText(
+          fallbackResponse.rawResponse,
+          "chat fallback"
+        );
+
+        return {
+          data: {
+            ...applyChatGuardrails(request, {
+              answerMarkdown,
+              followUps: [],
+              suggestedChanges: [],
+            }),
+            responseID: turnID,
+          },
+          responseId: turnID,
+          model: this.modelName,
+          mode: "plain_text_fallback",
+          usage: extractUsage(fallbackResponse.rawResponse),
+          promptBytes: fallbackResponse.promptBytes,
+          modelDurationMs: Date.now() - startedAt,
+        };
+      } catch (fallbackError) {
+        if (!(fallbackError instanceof CoachInferenceServiceError)) {
+          throw fallbackError;
+        }
+
+        console.warn(
+          JSON.stringify({
+            event: "coach_chat_degraded_response",
+            operation,
+            model: this.modelName,
+            turnID,
+            degradedReason: "fallback_failed",
+            reasonCode: fallbackError.code,
+            reasonDetails: fallbackError.details,
+            originalReasonCode: error.code,
+            originalReasonDetails: error.details,
+          })
+        );
+
+        return buildDegradedChatResult({
+          request,
+          responseId: turnID,
+          fallback: localFallback,
+          model: this.modelName,
+          mode: "degraded_fallback",
+          startedAt,
+          errors: [fallbackError, error],
+        });
+      }
     }
   }
 
@@ -291,15 +373,17 @@ export class WorkersAICoachService implements CoachInferenceService {
     schema: Record<string, unknown>;
     maxTokens: number;
     timeoutMs: number;
+    extraDetails?: Record<string, unknown>;
   }): Promise<ModelInvocationResult> {
     return this.runModel(
       {
-      messages: input.messages,
-      guided_json: input.schema,
-      max_tokens: input.maxTokens,
-      temperature: 0.2,
+        messages: input.messages,
+        guided_json: input.schema,
+        max_tokens: input.maxTokens,
+        temperature: 0.2,
       },
       {
+        ...input.extraDetails,
         operation: input.operation,
         mode: "structured",
         messageCount: input.messages.length,
@@ -315,6 +399,7 @@ export class WorkersAICoachService implements CoachInferenceService {
     maxTokens: number;
     timeoutMs: number;
     includeFallbackNotice?: boolean;
+    extraDetails?: Record<string, unknown>;
   }): Promise<ModelInvocationResult> {
     const messages = input.includeFallbackNotice === false
       ? input.messages
@@ -329,14 +414,15 @@ export class WorkersAICoachService implements CoachInferenceService {
 
     return this.runModel(
       {
-      messages,
-      max_tokens: input.maxTokens,
-      temperature: 0.25,
+        messages,
+        max_tokens: input.maxTokens,
+        temperature: 0.25,
       },
       {
+        ...input.extraDetails,
         operation: input.operation,
         mode: "plain_text_fallback",
-        messageCount: input.messages.length,
+        messageCount: messages.length,
         maxTokens: input.maxTokens,
         timeoutMs: input.timeoutMs,
       }
@@ -359,19 +445,21 @@ export class WorkersAICoachService implements CoachInferenceService {
     try {
       const timeoutMs = parseTimeoutMs(details.timeoutMs);
       const startedAt = Date.now();
+      const promptBytes = byteLength(payload.messages);
       const rawResponse = await withTimeout(
         this.env.AI.run(this.modelName, payload),
         timeoutMs
       );
       return {
         rawResponse,
-        promptBytes: byteLength(payload.messages),
+        promptBytes,
         modelDurationMs: Date.now() - startedAt,
       };
     } catch (error) {
       throw normalizeWorkersAIError(error, {
         ...details,
         model: this.modelName,
+        promptBytes: byteLength(payload.messages),
       });
     }
   }
@@ -387,6 +475,12 @@ function shouldAttemptPlainTextFallback(
   error: CoachInferenceServiceError
 ): boolean {
   return error.code !== "upstream_timeout";
+}
+
+function shouldAttemptChatPlainTextFallback(
+  error: CoachInferenceServiceError
+): boolean {
+  return error.code.startsWith("upstream_");
 }
 
 function parseStructuredOutput<T>(
@@ -590,6 +684,73 @@ function buildNeutralProfileInsights(
   return {
     summary: localizedCoachText(locale, "fallbackSummary"),
     recommendations: dedupeText(recommendations).slice(0, 5),
+    suggestedChanges: [],
+  };
+}
+
+function buildNeutralChatResponse(
+  request: CoachChatRequest
+): Omit<CoachChatResponse, "responseID"> {
+  const snapshot = request.snapshot;
+  const locale = request.locale;
+  const bullets: string[] = [];
+
+  if (!snapshot) {
+    bullets.push(localizedCoachText(locale, "fallbackProgressionBaseline"));
+    return {
+      answerMarkdown: formatFallbackMarkdown(
+        localizedCoachText(locale, "fallbackSummary"),
+        bullets
+      ),
+      followUps: [],
+      suggestedChanges: [],
+    };
+  }
+
+  const constraints = extractConstraintsFromSnapshot(snapshot);
+  const consistency = snapshot.analytics.consistency;
+
+  if (
+    constraints.rollingSplitExecution ||
+    constraints.preserveWeeklyFrequency ||
+    constraints.preserveProgramWorkoutCount
+  ) {
+    bullets.push(localizedCoachText(locale, "fallbackCommentGuardrail"));
+  }
+
+  if (consistency.workoutsThisWeek < consistency.weeklyTarget) {
+    bullets.push(
+      localizedCoachText(locale, "consistencyGap", {
+        completed: consistency.workoutsThisWeek,
+        target: consistency.weeklyTarget,
+      })
+    );
+  } else if (consistency.streakWeeks > 0) {
+    bullets.push(
+      localizedCoachText(locale, "streak", {
+        weeks: consistency.streakWeeks,
+      })
+    );
+  }
+
+  const recentPR = snapshot.analytics.recentPersonalRecords[0];
+  if (recentPR) {
+    bullets.push(
+      localizedCoachText(locale, "fallbackRecentPR", {
+        exercise: recentPR.exerciseName,
+        delta: formatLoad(recentPR.delta),
+      })
+    );
+  }
+
+  bullets.push(localizedCoachText(locale, "fallbackProgressionBaseline"));
+
+  return {
+    answerMarkdown: formatFallbackMarkdown(
+      localizedCoachText(locale, "fallbackSummary"),
+      dedupeText(bullets).slice(0, 4)
+    ),
+    followUps: [],
     suggestedChanges: [],
   };
 }
@@ -964,6 +1125,52 @@ function describeResponseShape(rawResponse: unknown): Record<string, unknown> {
 
 function byteLength(value: unknown): number {
   return new TextEncoder().encode(JSON.stringify(value)).length;
+}
+
+function totalTurnCharacters(turns: CoachChatRequest["clientRecentTurns"]): number {
+  return turns.reduce((total, turn) => total + turn.content.length, 0);
+}
+
+function remainingChatBudgetMs(startedAt: number): number {
+  return Math.max(CHAT_TOTAL_BUDGET_MS - (Date.now() - startedAt), 0);
+}
+
+function buildDegradedChatResult(input: {
+  request: CoachChatRequest;
+  responseId: string;
+  fallback: Omit<CoachChatResponse, "responseID">;
+  model: string;
+  mode: string;
+  startedAt: number;
+  errors: CoachInferenceServiceError[];
+}): InferenceResult<CoachChatResponse> {
+  const promptBytes = input.errors
+    .map((error) => resolvePromptBytes(error.details))
+    .find((value): value is number => value !== undefined);
+
+  return {
+    data: {
+      ...applyChatGuardrails(input.request, input.fallback),
+      responseID: input.responseId,
+    },
+    responseId: input.responseId,
+    model: input.model,
+    mode: input.mode,
+    promptBytes,
+    modelDurationMs: Date.now() - input.startedAt,
+  };
+}
+
+function resolvePromptBytes(
+  details?: Record<string, unknown>
+): number | undefined {
+  const value = details?.promptBytes;
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function formatFallbackMarkdown(summary: string, bullets: string[]): string {
+  const markdownBullets = bullets.map((bullet) => `- ${bullet}`);
+  return [summary, ...markdownBullets].join("\n\n");
 }
 
 function localizedCoachText(

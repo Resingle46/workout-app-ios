@@ -393,6 +393,55 @@ describe("coach worker app", () => {
     expect(capturedRequest?.snapshot).toBeTruthy();
   });
 
+  it("returns a chat answer instead of 504 when timeout fallback succeeds", async () => {
+    const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
+    const aiRun = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Request timed out"))
+      .mockResolvedValueOnce({
+        response: "Keep load the same next week and add one rep where bar speed stays solid.",
+      });
+    const app = createApp({
+      createStateRepository: () => repository,
+    });
+    const env = makeEnv({
+      AI: {
+        run: aiRun,
+      },
+    });
+    const upload = makeBackupUploadRequestFixture();
+
+    await app.fetch(
+      authedRequest("https://coach.example.workers.dev/v1/backup", {
+        method: "PUT",
+        body: JSON.stringify(upload),
+      }),
+      env
+    );
+
+    const response = await app.fetch(
+      authedRequest("https://coach.example.workers.dev/v1/coach/chat", {
+        method: "POST",
+        body: JSON.stringify({
+          locale: "en",
+          installID: upload.installID,
+          question: "How should I progress next week?",
+          clientRecentTurns: [],
+          capabilityScope: "draft_changes",
+        }),
+      }),
+      env
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      answerMarkdown:
+        "Keep load the same next week and add one rep where bar speed stays solid.",
+      followUps: [],
+      suggestedChanges: [],
+    });
+  });
+
   it("deletes stored state for an install ID", async () => {
     const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
     const app = createApp({
@@ -497,6 +546,10 @@ describe("WorkersAICoachService", () => {
         },
       ])
     );
+    const finalUserMessage = payload?.messages?.at(-1)?.content ?? "";
+    expect(finalUserMessage).toContain("Sanitized coach context JSON:");
+    expect(finalUserMessage).not.toContain("Coach analysis settings JSON:");
+    expect(finalUserMessage).not.toContain("Selected program for analysis JSON:");
     expect(result.data.responseID).toMatch(/^coach-turn_/);
   });
 
@@ -563,12 +616,36 @@ describe("WorkersAICoachService", () => {
 
     expect(aiRun).toHaveBeenCalledTimes(2);
     expect(aiRun.mock.calls[1]?.[1]).not.toHaveProperty("guided_json");
+    const fallbackPromptText = JSON.stringify(aiRun.mock.calls[1]?.[1]?.messages ?? []);
+    expect(fallbackPromptText).not.toContain("Coach analysis settings JSON:");
+    expect(fallbackPromptText).not.toContain("Selected program for analysis JSON:");
     expect(result.data.answerMarkdown).toBe(
       "Keep load the same next week and add one rep to the final set."
     );
     expect(result.data.followUps).toEqual([]);
     expect(result.data.suggestedChanges).toEqual([]);
     expect(result.data.responseID).toMatch(/^coach-turn_/);
+  });
+
+  it("falls back to plain-text chat when structured output times out and budget remains", async () => {
+    const aiRun = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Request timed out"))
+      .mockResolvedValueOnce({
+        response:
+          "Repeat the last successful load and add one rep only where the final set looked repeatable.",
+      });
+
+    const service = new WorkersAICoachService(makeEnv({ AI: { run: aiRun } }));
+    const result = await service.generateChat(makeChatRequestFixture());
+
+    expect(aiRun).toHaveBeenCalledTimes(2);
+    expect(result.mode).toBe("plain_text_fallback");
+    expect(result.data.answerMarkdown).toBe(
+      "Repeat the last successful load and add one rep only where the final set looked repeatable."
+    );
+    expect(result.data.followUps).toEqual([]);
+    expect(result.data.suggestedChanges).toEqual([]);
   });
 
   it("filters conflicting frequency and structure guidance from profile insights", async () => {
@@ -732,19 +809,31 @@ describe("WorkersAICoachService", () => {
     }
   });
 
-  it("maps timeout-like upstream errors to 504 for chat", async () => {
-    const service = new WorkersAICoachService(
-      makeEnv({
-        AI: {
-          run: vi.fn().mockRejectedValue(new Error("Request timed out")),
-        },
-      })
-    );
+  it("degrades chat to a safe response when structured and fallback attempts time out", async () => {
+    vi.useFakeTimers();
+    try {
+      const aiRun = vi
+        .fn()
+        .mockImplementation(() => new Promise<unknown>(() => undefined));
+      const service = new WorkersAICoachService(makeEnv({ AI: { run: aiRun } }));
 
-    await expect(service.generateChat(makeChatRequestFixture())).rejects.toMatchObject({
-      code: "upstream_timeout",
-      status: 504,
-    });
+      const requestPromise = service.generateChat(makeChatRequestFixture());
+      const expectation = expect(requestPromise).resolves.toMatchObject({
+        mode: "degraded_fallback",
+        data: {
+          answerMarkdown: expect.any(String),
+          followUps: [],
+          suggestedChanges: [],
+          responseID: expect.stringMatching(/^coach-turn_/),
+        },
+      });
+
+      await vi.advanceTimersByTimeAsync(24_050);
+      await expectation;
+      expect(aiRun).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

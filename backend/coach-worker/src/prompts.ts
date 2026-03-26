@@ -9,6 +9,13 @@ type PromptMessage = {
   content: string;
 };
 
+type CoachAnalysisContextOptions = {
+  includeCoachAnalysisSettings?: boolean;
+  includePreferredProgram?: boolean;
+  includeUserComment?: boolean;
+  includeSanitizedContext?: boolean;
+};
+
 function localeInstruction(locale: string): string {
   return locale.toLowerCase().startsWith("ru")
     ? "Write all user-facing text in Russian."
@@ -71,19 +78,30 @@ function highPriorityConstraintLines(
 }
 
 function coachAnalysisContextLines(
-  snapshot: CoachProfileInsightsRequest["snapshot"] | CoachChatRequest["snapshot"]
+  snapshot: CoachProfileInsightsRequest["snapshot"] | CoachChatRequest["snapshot"],
+  options: CoachAnalysisContextOptions = {}
 ): string[] {
   if (!snapshot) {
     return [];
   }
 
   const promptContext = buildInferencePromptContext(snapshot);
-  const lines = [
-    "Coach analysis settings JSON:",
-    JSON.stringify(snapshot.coachAnalysisSettings),
-  ];
+  const {
+    includeCoachAnalysisSettings = true,
+    includePreferredProgram = true,
+    includeUserComment = true,
+    includeSanitizedContext = true,
+  } = options;
+  const lines: string[] = [];
 
-  if (promptContext.preferredProgram) {
+  if (includeCoachAnalysisSettings) {
+    lines.push(
+      "Coach analysis settings JSON:",
+      JSON.stringify(snapshot.coachAnalysisSettings)
+    );
+  }
+
+  if (includePreferredProgram && promptContext.preferredProgram) {
     lines.push(
       "Selected program for analysis JSON:",
       JSON.stringify(promptContext.preferredProgram)
@@ -91,7 +109,7 @@ function coachAnalysisContextLines(
   }
 
   const comment = snapshot.coachAnalysisSettings.programComment.trim();
-  if (comment) {
+  if (includeUserComment && comment) {
     lines.push(`User comment about how they actually run the program: ${comment}`);
   }
 
@@ -101,8 +119,10 @@ function coachAnalysisContextLines(
     lines.push(...constraintLines);
   }
 
-  lines.push("Sanitized coach context JSON:");
-  lines.push(JSON.stringify(promptContext));
+  if (includeSanitizedContext) {
+    lines.push("Sanitized coach context JSON:");
+    lines.push(JSON.stringify(promptContext));
+  }
 
   return lines;
 }
@@ -155,7 +175,11 @@ export function buildChatMessages(
         `Capability scope: ${request.capabilityScope}`,
         `Question: ${request.question}`,
         "Return JSON that strictly matches the provided schema.",
-        ...coachAnalysisContextLines(request.snapshot),
+        ...coachAnalysisContextLines(request.snapshot, {
+          includeCoachAnalysisSettings: false,
+          includePreferredProgram: false,
+          includeUserComment: false,
+        }),
       ].join("\n\n"),
     },
   ];
@@ -208,7 +232,11 @@ export function buildFallbackChatMessages(
       content: [
         `Capability scope: ${request.capabilityScope}`,
         `Question: ${request.question}`,
-        ...coachAnalysisContextLines(request.snapshot),
+        ...coachAnalysisContextLines(request.snapshot, {
+          includeCoachAnalysisSettings: false,
+          includePreferredProgram: false,
+          includeUserComment: false,
+        }),
       ].join("\n\n"),
     },
   ];

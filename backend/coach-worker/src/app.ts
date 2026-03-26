@@ -62,6 +62,7 @@ export function createApp(
       const requestID = deps.requestId();
       const startedAt = deps.now();
       const pathname = new URL(request.url).pathname;
+      let routeDiagnostics: Record<string, unknown> | undefined;
 
       try {
         if (pathname === "/health" && request.method === "GET") {
@@ -243,6 +244,7 @@ export function createApp(
             model: result.model,
             responseID: result.responseId,
             usage: result.usage,
+            inferenceMode: result.mode,
             contextSource: context.source,
             insightsCacheHit: false,
             snapshotBytes: jsonByteLength(context.snapshot),
@@ -263,6 +265,20 @@ export function createApp(
               ? storedMemory.recentTurns
               : body.clientRecentTurns
           );
+          const chatMemoryHit = Boolean(storedMemory?.recentTurns?.length);
+          const snapshotBytes = jsonByteLength(context.snapshot);
+          const recentTurnCount = recentTurns.length;
+          const recentTurnChars = totalChatTurnChars(recentTurns);
+          const questionChars = body.question.trim().length;
+          routeDiagnostics = {
+            installID: body.installID,
+            contextSource: context.source,
+            chatMemoryHit,
+            snapshotBytes,
+            recentTurnCount,
+            recentTurnChars,
+            questionChars,
+          };
 
           const inferenceStartedAt = deps.now();
           const result = await inferenceService.generateChat({
@@ -295,9 +311,13 @@ export function createApp(
             model: result.model,
             responseID: result.responseId,
             usage: result.usage,
+            inferenceMode: result.mode,
             contextSource: context.source,
-            chatMemoryHit: Boolean(storedMemory?.recentTurns?.length),
-            snapshotBytes: jsonByteLength(context.snapshot),
+            chatMemoryHit,
+            snapshotBytes,
+            recentTurnCount,
+            recentTurnChars,
+            questionChars,
             promptBytes: result.promptBytes,
             modelDurationMs,
           });
@@ -307,7 +327,7 @@ export function createApp(
         throw new RequestError(404, "not_found", "Route not found");
       } catch (error) {
         const mapped = mapError(error, requestID);
-        const errorDetails =
+        const rawErrorDetails =
           error instanceof CoachInferenceServiceError
             ? error.details
             : error instanceof RequestError
@@ -315,6 +335,7 @@ export function createApp(
               : error instanceof StaleRemoteStateError
                 ? { currentRemoteVersion: error.currentRemoteVersion }
                 : undefined;
+        const errorDetails = mergeErrorDetails(routeDiagnostics, rawErrorDetails);
 
         logRequest({
           requestID,
@@ -608,4 +629,24 @@ function logRequest(payload: Record<string, unknown>) {
   }
 
   console.log(serialized);
+}
+
+function mergeErrorDetails(
+  routeDiagnostics?: Record<string, unknown>,
+  errorDetails?: Record<string, unknown>
+): Record<string, unknown> | undefined {
+  if (!routeDiagnostics && !errorDetails) {
+    return undefined;
+  }
+
+  return {
+    ...(routeDiagnostics ?? {}),
+    ...(errorDetails ?? {}),
+  };
+}
+
+function totalChatTurnChars(
+  turns: Array<{ content: string }>
+): number {
+  return turns.reduce((total, turn) => total + turn.content.length, 0);
 }
