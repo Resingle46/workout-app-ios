@@ -732,16 +732,7 @@ private struct ProfileConsistencyCard: View {
 private struct ProfileGoalProgressCard: View {
     let summary: ProfileGoalSummary
 
-    private var accent: DashboardCardAccent {
-        switch summary.primaryGoal {
-        case .fatLoss:
-            return .mint
-        case .generalFitness:
-            return .orange
-        default:
-            return .aqua
-        }
-    }
+    private let accent = DashboardCardAccent.indigo
 
     private var deltaText: String {
         guard let delta = summary.remainingWeightDelta else {
@@ -850,7 +841,7 @@ private struct ProfileMetabolismCard: View {
     }
 
     var body: some View {
-        ProfileAccentCard(accent: .cyan) {
+        ProfileAccentCard(accent: .ember) {
             VStack(alignment: .leading, spacing: 18) {
                 ProfileCardHeader(
                     eyebrowKey: "profile.card.metabolism.eyebrow",
@@ -866,19 +857,19 @@ private struct ProfileMetabolismCard: View {
 
                 Text("\(sourceText) \(localizedString("profile.card.metabolism.note"))")
                     .font(AppTypography.body(size: 16, weight: .medium, relativeTo: .subheadline))
-                    .foregroundStyle(DashboardCardAccent.cyan.secondaryText)
+                    .foregroundStyle(DashboardCardAccent.ember.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
 
                 HStack(spacing: 12) {
                     ProfileMetricTile(
                         titleKey: "profile.card.metabolism.bmr",
                         value: "\(summary.bmr) kcal",
-                        accent: .cyan
+                        accent: .ember
                     )
                     ProfileMetricTile(
                         titleKey: "profile.card.metabolism.activity_factor",
                         value: activityFactorText,
-                        accent: .cyan
+                        accent: .ember
                     )
                 }
             }
@@ -1015,7 +1006,7 @@ private struct ProfileTrainingRecommendationsCard: View {
     }
 
     var body: some View {
-        ProfileAccentCard(accent: .orange) {
+        ProfileAccentCard(accent: .gold) {
             VStack(alignment: .leading, spacing: 18) {
                 ProfileCardHeader(
                     eyebrowKey: "profile.card.recommendations.eyebrow",
@@ -1031,7 +1022,7 @@ private struct ProfileTrainingRecommendationsCard: View {
                 if summary.isGenericFallback {
                     Text("profile.card.recommendations.complete_profile")
                         .font(AppTypography.body(size: 16, weight: .medium, relativeTo: .subheadline))
-                        .foregroundStyle(DashboardCardAccent.orange.secondaryText)
+                        .foregroundStyle(DashboardCardAccent.gold.secondaryText)
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
@@ -1039,22 +1030,22 @@ private struct ProfileTrainingRecommendationsCard: View {
                     ProfileMetricTile(
                         titleKey: "profile.card.recommendations.frequency",
                         value: frequencyText,
-                        accent: .orange
+                        accent: .gold
                     )
                     ProfileMetricTile(
                         titleKey: "profile.card.recommendations.rep_range",
                         value: repRangeText,
-                        accent: .orange
+                        accent: .gold
                     )
                     ProfileMetricTile(
                         titleKey: "profile.card.recommendations.volume",
                         value: volumeText,
-                        accent: .orange
+                        accent: .gold
                     )
                     ProfileMetricTile(
                         titleKey: "profile.card.recommendations.split",
                         value: splitText,
-                        accent: .orange
+                        accent: .gold
                     )
                 }
 
@@ -1062,13 +1053,13 @@ private struct ProfileTrainingRecommendationsCard: View {
                     if let splitSourceText {
                         Text(splitSourceText)
                             .font(AppTypography.caption(size: 13, weight: .medium))
-                            .foregroundStyle(DashboardCardAccent.orange.secondaryText)
+                            .foregroundStyle(DashboardCardAccent.gold.secondaryText)
                             .fixedSize(horizontal: false, vertical: true)
                     }
 
                     Text("profile.card.recommendations.rep_range_note")
                         .font(AppTypography.caption(size: 13, weight: .medium))
-                        .foregroundStyle(DashboardCardAccent.orange.secondaryText)
+                        .foregroundStyle(DashboardCardAccent.gold.secondaryText)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -1080,7 +1071,7 @@ private struct ProfileGoalCompatibilityCard: View {
     let summary: ProfileGoalCompatibilitySummary
 
     private var accent: DashboardCardAccent {
-        summary.isAligned ? .mint : .orange
+        summary.isAligned ? .emerald : .rose
     }
 
     var body: some View {
@@ -1542,6 +1533,46 @@ private struct DashboardCardAccent {
         secondaryText: Color(red: 0.9, green: 1.0, blue: 0.95),
         primaryGlowCenter: .bottomTrailing,
         secondaryGlowCenter: UnitPoint(x: 0.7, y: 0.82)
+    )
+
+    static let indigo = DashboardCardAccent(
+        glowPrimary: Color(red: 0.51, green: 0.62, blue: 1.0),
+        glowSecondary: Color(red: 0.29, green: 0.38, blue: 0.95),
+        secondaryText: Color(red: 0.89, green: 0.92, blue: 1.0),
+        primaryGlowCenter: UnitPoint(x: 0.86, y: 0.22),
+        secondaryGlowCenter: UnitPoint(x: 0.2, y: 0.88)
+    )
+
+    static let ember = DashboardCardAccent(
+        glowPrimary: Color(red: 0.99, green: 0.4, blue: 0.28),
+        glowSecondary: Color(red: 1.0, green: 0.66, blue: 0.24),
+        secondaryText: Color(red: 1.0, green: 0.9, blue: 0.84),
+        primaryGlowCenter: UnitPoint(x: 0.86, y: 0.2),
+        secondaryGlowCenter: UnitPoint(x: 0.24, y: 0.88)
+    )
+
+    static let gold = DashboardCardAccent(
+        glowPrimary: Color(red: 1.0, green: 0.88, blue: 0.3),
+        glowSecondary: Color(red: 0.93, green: 0.68, blue: 0.16),
+        secondaryText: Color(red: 1.0, green: 0.97, blue: 0.82),
+        primaryGlowCenter: UnitPoint(x: 0.82, y: 0.16),
+        secondaryGlowCenter: UnitPoint(x: 0.26, y: 0.84)
+    )
+
+    static let emerald = DashboardCardAccent(
+        glowPrimary: Color(red: 0.28, green: 0.95, blue: 0.58),
+        glowSecondary: Color(red: 0.08, green: 0.72, blue: 0.44),
+        secondaryText: Color(red: 0.88, green: 1.0, blue: 0.92),
+        primaryGlowCenter: UnitPoint(x: 0.82, y: 0.18),
+        secondaryGlowCenter: UnitPoint(x: 0.22, y: 0.86)
+    )
+
+    static let rose = DashboardCardAccent(
+        glowPrimary: Color(red: 1.0, green: 0.44, blue: 0.62),
+        glowSecondary: Color(red: 0.98, green: 0.24, blue: 0.48),
+        secondaryText: Color(red: 1.0, green: 0.88, blue: 0.93),
+        primaryGlowCenter: UnitPoint(x: 0.84, y: 0.18),
+        secondaryGlowCenter: UnitPoint(x: 0.24, y: 0.86)
     )
 }
 
