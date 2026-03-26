@@ -3711,7 +3711,7 @@ private struct CoachConversationThread: View {
     @State private var contentHeight: CGFloat = 0
 
     private let minConversationHeight: CGFloat = 270
-    private let maxConversationHeight: CGFloat = 760
+    private let maxConversationHeight: CGFloat = 1200
 
     private var resolvedConversationHeight: CGFloat {
         let measuredHeight = contentHeight + 12
@@ -3911,26 +3911,11 @@ private struct CoachMarkdownText: View {
     let isStatus: Bool
 
     var body: some View {
-        if shouldRenderAsMarkdown,
-           let attributedString = try? AttributedString(
-                markdown: normalizedContent,
-                options: AttributedString.MarkdownParsingOptions(
-                    interpretedSyntax: .full,
-                    failurePolicy: .returnPartiallyParsedIfPossible
-                )
-           ) {
-            Text(attributedString)
-                .font(AppTypography.body(size: 15, weight: .medium, relativeTo: .subheadline))
-                .foregroundStyle(foregroundColor)
-                .lineSpacing(4)
-                .fixedSize(horizontal: false, vertical: true)
-        } else {
-            Text(verbatim: normalizedContent)
-                .font(AppTypography.body(size: 15, weight: .medium, relativeTo: .subheadline))
-                .foregroundStyle(foregroundColor)
-                .lineSpacing(4)
-                .fixedSize(horizontal: false, vertical: true)
-        }
+        Text(verbatim: normalizedContent)
+            .font(AppTypography.body(size: 15, weight: .medium, relativeTo: .subheadline))
+            .foregroundStyle(foregroundColor)
+            .lineSpacing(4)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     private var normalizedContent: String {
@@ -3938,43 +3923,98 @@ private struct CoachMarkdownText: View {
     }
 
     static func normalizedContent(from content: String) -> String {
-        coachNormalizedReadableText(
-            content
-                .replacingOccurrences(of: "\r\n", with: "\n")
-                .replacingOccurrences(of: "\u{2028}", with: "\n")
-                .replacingOccurrences(
-                    of: #"<br\s*/?>"#,
-                    with: "\n",
-                    options: .regularExpression
-                )
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-        )
+        let normalizedLineBreaks = content
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+            .replacingOccurrences(of: "\u{2028}", with: "\n")
+            .replacingOccurrences(
+                of: #"<br\s*/?>"#,
+                with: "\n",
+                options: [.regularExpression, .caseInsensitive]
+            )
+
+        let normalizedLines = normalizedLineBreaks
+            .components(separatedBy: "\n")
+            .map(Self.normalizedLine(from:))
+
+        return Self.cleanedInlineMarkdown(in: normalizedLines.joined(separator: "\n"))
+            .replacingOccurrences(
+                of: #"\n{3,}"#,
+                with: "\n\n",
+                options: .regularExpression
+            )
+            .replacingOccurrences(
+                of: #"([.!?])(\p{Lu})"#,
+                with: "$1 $2",
+                options: .regularExpression
+            )
+            .replacingOccurrences(
+                of: #"([:;])(\p{Lu})"#,
+                with: "$1 $2",
+                options: .regularExpression
+            )
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private var shouldRenderAsMarkdown: Bool {
-        normalizedContent
-            .split(separator: "\n", omittingEmptySubsequences: false)
-            .contains { rawLine in
-                let line = String(rawLine).trimmingCharacters(in: .whitespaces)
-                guard !line.isEmpty else {
-                    return false
-                }
+    private static func normalizedLine(from line: String) -> String {
+        let trimmedLine = line.trimmingCharacters(in: .whitespaces)
+        guard !trimmedLine.isEmpty else {
+            return ""
+        }
 
-                if line.hasPrefix("#") ||
-                    line.hasPrefix("- ") ||
-                    line.hasPrefix("* ") ||
-                    line.hasPrefix("> ") ||
-                    line.contains("**") ||
-                    line.contains("`") ||
-                    line.contains("[") {
-                    return true
-                }
+        let headingNormalized = trimmedLine.replacingOccurrences(
+            of: #"^#{1,6}\s*"#,
+            with: "",
+            options: .regularExpression
+        )
+        if headingNormalized != trimmedLine {
+            return headingNormalized.trimmingCharacters(in: .whitespaces)
+        }
 
-                return line.range(
-                    of: #"^\d+[.)]\s"#,
-                    options: .regularExpression
-                ) != nil
-            }
+        let bulletNormalized = trimmedLine.replacingOccurrences(
+            of: #"^[-*+]\s+"#,
+            with: "• ",
+            options: .regularExpression
+        )
+        if bulletNormalized != trimmedLine {
+            return bulletNormalized
+        }
+
+        let numberedListNormalized = trimmedLine.replacingOccurrences(
+            of: #"^(\d+)[.)]\s+"#,
+            with: "$1. ",
+            options: .regularExpression
+        )
+        return numberedListNormalized
+    }
+
+    private static func cleanedInlineMarkdown(in text: String) -> String {
+        text
+            .replacingOccurrences(
+                of: #"\*\*(.+?)\*\*"#,
+                with: "$1",
+                options: .regularExpression
+            )
+            .replacingOccurrences(
+                of: #"__(.+?)__"#,
+                with: "$1",
+                options: .regularExpression
+            )
+            .replacingOccurrences(
+                of: #"(?<!\*)\*(?!\s)(.+?)(?<!\s)\*(?!\*)"#,
+                with: "$1",
+                options: .regularExpression
+            )
+            .replacingOccurrences(
+                of: #"(?<!_)_(?!\s)(.+?)(?<!\s)_(?!_)"#,
+                with: "$1",
+                options: .regularExpression
+            )
+            .replacingOccurrences(
+                of: #"`([^`]+)`"#,
+                with: "$1",
+                options: .regularExpression
+            )
     }
 
     private var foregroundColor: Color {
