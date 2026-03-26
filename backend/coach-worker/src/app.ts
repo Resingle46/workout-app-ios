@@ -111,7 +111,9 @@ export function createApp(
         }
 
         if (pathname === "/v1/backup" && request.method === "PUT") {
-          const body = backupUploadRequestSchema.parse(await readJSON(request));
+          const rawBody = await readJSON(request);
+          routeDiagnostics = buildBackupUploadDiagnostics(rawBody);
+          const body = backupUploadRequestSchema.parse(rawBody);
           const response = backupUploadResponseSchema.parse(
             await stateRepository.uploadBackup(body)
           );
@@ -560,6 +562,7 @@ export function createApp(
                 ? { currentRemoteVersion: error.currentRemoteVersion }
                 : undefined;
         const errorDetails = mergeErrorDetails(routeDiagnostics, rawErrorDetails);
+        const validationIssues = extractValidationIssues(error);
 
         logRequest({
           requestID,
@@ -569,6 +572,7 @@ export function createApp(
           durationMs: deps.now() - startedAt,
           errorCode: extractMappedErrorCode(mapped.body),
           errorDetails,
+          validationIssues,
         });
         return json(mapped.body, mapped.status);
       }
@@ -742,6 +746,65 @@ async function readJSON(request: Request): Promise<unknown> {
   }
 }
 
+function buildBackupUploadDiagnostics(
+  rawBody: unknown
+): Record<string, unknown> | undefined {
+  if (!isRecord(rawBody)) {
+    return undefined;
+  }
+
+  const diagnostics: Record<string, unknown> = {};
+  const installID = readNonEmptyString(rawBody.installID);
+  if (installID) {
+    diagnostics.installID = installID;
+  }
+
+  diagnostics.hasExpectedRemoteVersion = hasOwn(rawBody, "expectedRemoteVersion");
+  diagnostics.hasBackupHash = hasOwn(rawBody, "backupHash");
+  diagnostics.hasSnapshot = hasOwn(rawBody, "snapshot");
+
+  const snapshotCounts = extractBackupSnapshotCounts(rawBody.snapshot);
+  if (snapshotCounts) {
+    diagnostics.snapshotCounts = snapshotCounts;
+  }
+
+  return Object.keys(diagnostics).length > 0 ? diagnostics : undefined;
+}
+
+function extractBackupSnapshotCounts(
+  snapshot: unknown
+):
+  | {
+      programs?: number;
+      exercises?: number;
+      history?: number;
+    }
+  | undefined {
+  if (!isRecord(snapshot)) {
+    return undefined;
+  }
+
+  const counts: {
+    programs?: number;
+    exercises?: number;
+    history?: number;
+  } = {};
+
+  if (Array.isArray(snapshot.programs)) {
+    counts.programs = snapshot.programs.length;
+  }
+
+  if (Array.isArray(snapshot.exercises)) {
+    counts.exercises = snapshot.exercises.length;
+  }
+
+  if (Array.isArray(snapshot.history)) {
+    counts.history = snapshot.history.length;
+  }
+
+  return Object.keys(counts).length > 0 ? counts : undefined;
+}
+
 function mapError(
   error: unknown,
   requestID: string
@@ -853,13 +916,75 @@ function mapError(
   };
 }
 
-function isZodLikeError(error: unknown): error is { name: string } {
+function isZodLikeError(
+  error: unknown
+): error is { name: string; issues: unknown[] } {
   return (
     typeof error === "object" &&
     error !== null &&
     "name" in error &&
+    "issues" in error &&
+    Array.isArray((error as { issues: unknown[] }).issues) &&
     (error as { name: string }).name === "ZodError"
   );
+}
+
+function extractValidationIssues(
+  error: unknown
+):
+  | Array<{
+      code?: string;
+      path: Array<string | number>;
+      message: string;
+      expected?: unknown;
+      received?: unknown;
+    }>
+  | undefined {
+  if (!isZodLikeError(error)) {
+    return undefined;
+  }
+
+  return error.issues.map((issue) => buildValidationIssueLog(issue));
+}
+
+function buildValidationIssueLog(issue: unknown): {
+  code?: string;
+  path: Array<string | number>;
+  message: string;
+  expected?: unknown;
+  received?: unknown;
+} {
+  const record = isRecord(issue) ? issue : {};
+  const message =
+    typeof record.message === "string" ? record.message : "Invalid input.";
+  const received =
+    hasOwn(record, "received") && record.received !== undefined
+      ? record.received
+      : inferReceivedFromValidationMessage(message);
+
+  return {
+    ...(typeof record.code === "string" ? { code: record.code } : {}),
+    path: normalizeValidationIssuePath(record.path),
+    message,
+    ...(hasOwn(record, "expected") ? { expected: record.expected } : {}),
+    ...(received !== undefined ? { received } : {}),
+  };
+}
+
+function normalizeValidationIssuePath(path: unknown): Array<string | number> {
+  if (!Array.isArray(path)) {
+    return [];
+  }
+
+  return path.filter(
+    (segment): segment is string | number =>
+      typeof segment === "string" || typeof segment === "number"
+  );
+}
+
+function inferReceivedFromValidationMessage(message: string): string | undefined {
+  const match = /, received ([^,]+)$/i.exec(message);
+  return match?.[1];
 }
 
 function json(body: unknown, status = 200): Response {
@@ -874,12 +999,13 @@ function json(body: unknown, status = 200): Response {
 
 function logRequest(payload: Record<string, unknown>) {
   const serialized = JSON.stringify(payload);
-  if (
-    typeof payload.status === "number" &&
-    Number.isFinite(payload.status) &&
-    payload.status >= 400
-  ) {
+  if (isFiniteStatusCode(payload.status) && payload.status >= 500) {
     console.error(serialized);
+    return;
+  }
+
+  if (isFiniteStatusCode(payload.status) && payload.status >= 400) {
+    console.warn(serialized);
     return;
   }
 
@@ -908,6 +1034,30 @@ function extractMappedErrorCode(body: Record<string, unknown>): string | undefin
 
   const code = (error as { code?: unknown }).code;
   return typeof code === "string" ? code : undefined;
+}
+
+function isFiniteStatusCode(status: unknown): status is number {
+  return typeof status === "number" && Number.isFinite(status);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasOwn<T extends object>(
+  value: T,
+  key: PropertyKey
+): key is keyof T {
+  return Object.prototype.hasOwnProperty.call(value, key);
+}
+
+function readNonEmptyString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
 }
 
 function buildChatJobID(): string {

@@ -1058,6 +1058,181 @@ describe("coach worker app", () => {
     expect(downloadResponse.status).toBe(404);
   });
 
+  it("returns 400 for invalid backup uploads and logs safe validation details at warn level", async () => {
+    const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
+    const app = createApp({
+      createInferenceService: () => stubInferenceService(),
+      createStateRepository: () => repository,
+    });
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const invalidUpload = {
+      ...makeBackupUploadRequestFixture(),
+      appVersion: 42,
+      buildNumber: 100,
+    };
+
+    try {
+      const response = await app.fetch(
+        authedRequest("https://coach.example.workers.dev/v1/backup", {
+          method: "PUT",
+          body: JSON.stringify(invalidUpload),
+        }),
+        makeEnv()
+      );
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toMatchObject({
+        error: {
+          code: "invalid_request",
+        },
+      });
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(errorSpy).not.toHaveBeenCalled();
+      expect(logSpy).not.toHaveBeenCalled();
+
+      const logged = parseLoggedPayload(warnSpy);
+      expect(logged).toMatchObject({
+        route: "/v1/backup",
+        method: "PUT",
+        requestID: expect.any(String),
+        status: 400,
+        errorCode: "invalid_request",
+        errorDetails: {
+          installID: "install_backup",
+          hasExpectedRemoteVersion: false,
+          hasBackupHash: false,
+          hasSnapshot: true,
+          snapshotCounts: {
+            programs: 1,
+            exercises: 1,
+            history: 1,
+          },
+        },
+        validationIssues: expect.arrayContaining([
+          expect.objectContaining({
+            code: "invalid_type",
+            path: ["appVersion"],
+            expected: "string",
+            received: "number",
+          }),
+          expect.objectContaining({
+            code: "invalid_type",
+            path: ["buildNumber"],
+            expected: "string",
+            received: "number",
+          }),
+        ]),
+      });
+      expect(logged).not.toHaveProperty("snapshot");
+      expect(logged).not.toHaveProperty("body");
+      expect(JSON.stringify(logged)).not.toContain("Upper Lower");
+      expect(JSON.stringify(logged)).not.toContain("Barbell Bench Press");
+    } finally {
+      warnSpy.mockRestore();
+      errorSpy.mockRestore();
+      logSpy.mockRestore();
+    }
+  });
+
+  it("logs other client errors at warn level instead of error level", async () => {
+    const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
+    const app = createApp({
+      createInferenceService: () => stubInferenceService(),
+      createStateRepository: () => repository,
+    });
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    try {
+      const response = await app.fetch(
+        new Request("https://coach.example.workers.dev/v1/coach/profile-insights", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(makeProfileInsightsRequestFixture()),
+        }),
+        makeEnv()
+      );
+
+      expect(response.status).toBe(401);
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(errorSpy).not.toHaveBeenCalled();
+      expect(logSpy).not.toHaveBeenCalled();
+      expect(parseLoggedPayload(warnSpy)).toMatchObject({
+        route: "/v1/coach/profile-insights",
+        method: "POST",
+        status: 401,
+        errorCode: "unauthorized",
+      });
+    } finally {
+      warnSpy.mockRestore();
+      errorSpy.mockRestore();
+      logSpy.mockRestore();
+    }
+  });
+
+  it("keeps unexpected 5xx errors on error-level logs", async () => {
+    class FailingUploadRepository extends InMemoryCoachStateRepository {
+      override async uploadBackup(_request: BackupUploadRequest): Promise<never> {
+        throw new Error("simulated upload failure");
+      }
+    }
+
+    const app = createApp({
+      createInferenceService: () => stubInferenceService(),
+      createStateRepository: () =>
+        new FailingUploadRepository("test.v1", DEFAULT_AI_MODEL),
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    try {
+      const response = await app.fetch(
+        authedRequest("https://coach.example.workers.dev/v1/backup", {
+          method: "PUT",
+          body: JSON.stringify(makeBackupUploadRequestFixture()),
+        }),
+        makeEnv()
+      );
+
+      expect(response.status).toBe(500);
+      await expect(response.json()).resolves.toMatchObject({
+        error: {
+          code: "internal_error",
+        },
+      });
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      expect(warnSpy).not.toHaveBeenCalled();
+      expect(logSpy).not.toHaveBeenCalled();
+      expect(parseLoggedPayload(errorSpy)).toMatchObject({
+        route: "/v1/backup",
+        method: "PUT",
+        status: 500,
+        errorCode: "internal_error",
+        errorDetails: {
+          installID: "install_backup",
+          hasExpectedRemoteVersion: false,
+          hasBackupHash: false,
+          hasSnapshot: true,
+          snapshotCounts: {
+            programs: 1,
+            exercises: 1,
+            history: 1,
+          },
+        },
+      });
+    } finally {
+      errorSpy.mockRestore();
+      warnSpy.mockRestore();
+      logSpy.mockRestore();
+    }
+  });
+
   it("maps invalid request bodies to 400", async () => {
     const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
     const app = createApp({
@@ -1486,6 +1661,15 @@ function makeWorkflowInstanceStub() {
     id: "workflow-instance",
     status: vi.fn().mockResolvedValue({ status: "queued" }),
   };
+}
+
+function parseLoggedPayload(mock: { mock: { calls: unknown[][] } }): Record<string, unknown> {
+  const payload = mock.mock.calls[0]?.[0];
+  if (typeof payload !== "string") {
+    throw new Error("Expected a serialized log payload.");
+  }
+
+  return JSON.parse(payload) as Record<string, unknown>;
 }
 
 function makeBackupUploadRequestFixture(): BackupUploadRequest {
