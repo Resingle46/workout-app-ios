@@ -163,6 +163,8 @@ private struct ProfileSettingsView: View {
                 CoachBackendSettingsCard()
 
                 BackupControlsCard()
+
+                DeveloperMenuSettingsCard()
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 20)

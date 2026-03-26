@@ -39,10 +39,11 @@ final class AppStore {
     @ObservationIgnored private let backupCoordinator: BackupCoordinator
     @ObservationIgnored private var backupDebounceTask: Task<Void, Never>?
     @ObservationIgnored private let defaults: UserDefaults
+    @ObservationIgnored private let debugRecorder: any DebugEventRecording
     private var hasPersistedSnapshot: Bool
     private var localSnapshotModifiedAt: Date?
 
-    init() {
+    init(debugRecorder: any DebugEventRecording = NoopDebugEventRecorder()) {
         let seed = SeedData.make()
         let storedSnapshot = persistence.loadStoredSnapshot()
         let baseSnapshot = storedSnapshot?.snapshot ?? AppSnapshot(
@@ -66,8 +67,9 @@ final class AppStore {
             snapshot.coachAnalysisSettings,
             availablePrograms: snapshot.programs
         )
+        self.debugRecorder = debugRecorder
         self.defaults = .standard
-        self.backupCoordinator = BackupCoordinator()
+        self.backupCoordinator = BackupCoordinator(debugRecorder: debugRecorder)
         self.backupStatus = BackupStatus()
         self.hasPersistedSnapshot = hasStoredSnapshot
         self.localSnapshotModifiedAt = storedSnapshot?.modifiedAt
@@ -119,6 +121,14 @@ final class AppStore {
     func handleAppLaunch() async {
         await refreshBackupStatus()
         shouldPromptForBackupSetup = Self.shouldPromptForBackupSetup(defaults: defaults, backupStatus: backupStatus)
+        debugRecorder.log(
+            category: .appLifecycle,
+            message: "app_launch",
+            metadata: [
+                "backupAvailability": backupAvailabilityValue(backupStatus.availability),
+                "hasBackupFolder": backupStatus.hasSelectedFolder ? "true" : "false"
+            ]
+        )
         if !shouldPromptForBackupSetup {
             defaults.set(true, forKey: PreferenceKey.didCompleteFirstLaunch)
         }
@@ -127,6 +137,13 @@ final class AppStore {
     func handleSceneDidEnterBackground() async {
         backupDebounceTask?.cancel()
         backupDebounceTask = nil
+        debugRecorder.log(
+            category: .appLifecycle,
+            message: "scene_background",
+            metadata: [
+                "backupAvailability": backupAvailabilityValue(backupStatus.availability)
+            ]
+        )
         guard backupStatus.availability == .ready else {
             return
         }
@@ -140,6 +157,12 @@ final class AppStore {
     func backupNow() async {
         guard backupStatus.hasSelectedFolder else {
             backupStatus.lastErrorDescription = Bundle.main.localizedString(forKey: "backup.error.folder_not_selected", value: nil, table: nil)
+            debugRecorder.log(
+                category: .backup,
+                level: .warning,
+                message: "backup_failed",
+                metadata: ["reason": "folder_not_selected"]
+            )
             return
         }
 
@@ -155,6 +178,13 @@ final class AppStore {
             backupStatus.lastErrorDescription = nil
             backupStatus = try await backupCoordinator.selectBackupFolder(url)
             let hadExistingBackups = backupStatus.latestBackup != nil
+            debugRecorder.log(
+                category: .backup,
+                message: "backup_folder_selected",
+                metadata: [
+                    "hadExistingBackups": hadExistingBackups ? "true" : "false"
+                ]
+            )
             shouldPromptForBackupSetup = false
             defaults.set(true, forKey: PreferenceKey.didCompleteFirstLaunch)
             let shouldCreateImmediateBackup = hasPersistedSnapshot || backupStatus.latestBackup == nil
@@ -164,9 +194,16 @@ final class AppStore {
             }
             return hadExistingBackups
         } catch {
+            let description = (error as? LocalizedError)?.errorDescription ?? (error as NSError).localizedDescription
             backupStatus.lastErrorDescription = (error as? LocalizedError)?.errorDescription ?? (error as NSError).localizedDescription
             backupStatus = await backupCoordinator.refreshStatus()
             backupStatus.lastErrorDescription = (error as? LocalizedError)?.errorDescription ?? (error as NSError).localizedDescription
+            debugRecorder.log(
+                category: .backup,
+                level: .warning,
+                message: "backup_folder_selection_failed",
+                metadata: ["error": description]
+            )
             return false
         }
     }
@@ -181,13 +218,27 @@ final class AppStore {
         backupDebounceTask = nil
         backupStatus.isRestoreInProgress = true
         backupStatus.lastErrorDescription = nil
+        debugRecorder.log(category: .backup, message: "restore_started")
 
         do {
             let envelope = try await backupCoordinator.restoreLatestBackup()
             apply(snapshot: envelope.snapshot)
             backupStatus = await backupCoordinator.refreshStatus()
+            debugRecorder.log(
+                category: .backup,
+                message: "restore_succeeded",
+                metadata: ["schemaVersion": String(envelope.schemaVersion)]
+            )
         } catch {
             backupStatus.lastErrorDescription = (error as? LocalizedError)?.errorDescription ?? (error as NSError).localizedDescription
+            debugRecorder.log(
+                category: .backup,
+                level: .error,
+                message: "restore_failed",
+                metadata: [
+                    "error": (error as? LocalizedError)?.errorDescription ?? (error as NSError).localizedDescription
+                ]
+            )
         }
 
         backupStatus.isRestoreInProgress = false
@@ -198,13 +249,27 @@ final class AppStore {
         backupDebounceTask = nil
         backupStatus.isRestoreInProgress = true
         backupStatus.lastErrorDescription = nil
+        debugRecorder.log(category: .backup, message: "import_started")
 
         do {
             let envelope = try await backupCoordinator.importBackup(from: url)
             apply(snapshot: envelope.snapshot)
             backupStatus = await backupCoordinator.refreshStatus()
+            debugRecorder.log(
+                category: .backup,
+                message: "import_succeeded",
+                metadata: ["schemaVersion": String(envelope.schemaVersion)]
+            )
         } catch {
             backupStatus.lastErrorDescription = (error as? LocalizedError)?.errorDescription ?? (error as NSError).localizedDescription
+            debugRecorder.log(
+                category: .backup,
+                level: .error,
+                message: "import_failed",
+                metadata: [
+                    "error": (error as? LocalizedError)?.errorDescription ?? (error as NSError).localizedDescription
+                ]
+            )
         }
 
         backupStatus.isRestoreInProgress = false
@@ -1262,12 +1327,28 @@ final class AppStore {
         if showErrors {
             backupStatus.lastErrorDescription = nil
         }
+        debugRecorder.log(
+            category: .backup,
+            message: "backup_started",
+            metadata: ["interactive": showErrors ? "true" : "false"]
+        )
 
         let status = await backupCoordinator.backupNow(snapshot: currentSnapshot())
         backupStatus = status
 
         if !showErrors, backupStatus.availability == .notConfigured {
             backupStatus.lastErrorDescription = nil
+        }
+    }
+
+    private func backupAvailabilityValue(_ availability: BackupStatus.Availability) -> String {
+        switch availability {
+        case .notConfigured:
+            return "not_configured"
+        case .ready:
+            return "ready"
+        case .accessLost:
+            return "access_lost"
         }
     }
 

@@ -354,7 +354,7 @@ enum CoachClientError: LocalizedError, Equatable {
     case missingAuthToken
     case invalidResponse
     case httpStatus(Int)
-    case api(statusCode: Int, code: String, message: String, jobID: String?)
+    case api(statusCode: Int, code: String, message: String, requestID: String?, jobID: String?)
 
     var errorDescription: String? {
         switch self {
@@ -371,14 +371,14 @@ enum CoachClientError: LocalizedError, Equatable {
                 format: coachLocalizedString("coach.error.http_status"),
                 code
             )
-        case .api(_, _, let message, _):
+        case .api(_, _, let message, _, _):
             return message.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
                 ?? coachLocalizedString("coach.error.invalid_response")
         }
     }
 
     var activeChatJobID: String? {
-        guard case .api(_, let code, _, let jobID) = self,
+        guard case .api(_, let code, _, _, let jobID) = self,
               code == "chat_job_in_progress" else {
             return nil
         }
@@ -386,11 +386,19 @@ enum CoachClientError: LocalizedError, Equatable {
         return jobID
     }
 
+    var requestID: String? {
+        guard case .api(_, _, _, let requestID, _) = self else {
+            return nil
+        }
+
+        return requestID
+    }
+
     var isTransientPollingFailure: Bool {
         switch self {
         case .httpStatus(let statusCode):
             return statusCode == 408 || statusCode == 425 || statusCode == 429 || statusCode >= 500
-        case .api(let statusCode, let code, _, _):
+        case .api(let statusCode, let code, _, _, _):
             return statusCode == 408 ||
             statusCode == 425 ||
             statusCode == 429 ||
@@ -955,12 +963,14 @@ struct CoachAPIHTTPClient: CoachAPIClient {
     private let standardSession: URLSession
     private let profileInsightsSession: URLSession
     private let chatSession: URLSession
+    private let debugRecorder: any DebugEventRecording
 
     init(
         configuration: CoachRuntimeConfiguration,
         session: URLSession? = nil,
         profileInsightsSession: URLSession? = nil,
-        chatSession: URLSession? = nil
+        chatSession: URLSession? = nil,
+        debugRecorder: any DebugEventRecording = NoopDebugEventRecorder()
     ) {
         self.configuration = configuration
         self.standardSession = session ?? Self.makeSession(
@@ -975,6 +985,7 @@ struct CoachAPIHTTPClient: CoachAPIClient {
             requestTimeoutInterval: Self.chatRequestTimeoutInterval,
             resourceTimeoutInterval: Self.chatResourceTimeoutInterval
         )
+        self.debugRecorder = debugRecorder
     }
 
     func syncSnapshot(_ request: CoachSnapshotSyncRequest) async throws -> CoachSnapshotSyncResponse {
@@ -984,6 +995,7 @@ struct CoachAPIHTTPClient: CoachAPIClient {
             body: request,
             session: standardSession,
             timeoutInterval: Self.standardRequestTimeoutInterval,
+            clientRequestID: nil,
             responseType: CoachSnapshotSyncResponse.self
         )
     }
@@ -995,6 +1007,7 @@ struct CoachAPIHTTPClient: CoachAPIClient {
             body: request,
             session: standardSession,
             timeoutInterval: Self.standardRequestTimeoutInterval,
+            clientRequestID: nil,
             responseType: CloudBackupReconcileResponse.self
         )
     }
@@ -1006,6 +1019,7 @@ struct CoachAPIHTTPClient: CoachAPIClient {
             body: request,
             session: standardSession,
             timeoutInterval: Self.standardRequestTimeoutInterval,
+            clientRequestID: nil,
             responseType: CloudBackupHead.self
         )
     }
@@ -1040,22 +1054,65 @@ struct CoachAPIHTTPClient: CoachAPIClient {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("Bearer \(internalBearerToken)", forHTTPHeaderField: "Authorization")
 
-        let (data, response) = try await standardSession.data(for: request)
+        let (data, response, startedAt) = try await tracedData(
+            for: request,
+            session: standardSession,
+            tracePath: "v1/backup/download",
+            clientRequestID: nil
+        )
 
         guard let httpResponse = response as? HTTPURLResponse else {
+            recordNetworkTrace(
+                method: request.httpMethod,
+                path: "v1/backup/download",
+                statusCode: nil,
+                startedAt: startedAt,
+                requestID: nil,
+                clientRequestID: nil,
+                errorDescription: CoachClientError.invalidResponse.errorDescription
+            )
             throw CoachClientError.invalidResponse
         }
 
         guard (200...299).contains(httpResponse.statusCode) else {
-            throw Self.parseAPIErrorResponse(
+            let clientError = Self.parseAPIErrorResponse(
                 data: data,
                 statusCode: httpResponse.statusCode
             )
+            recordNetworkTrace(
+                method: request.httpMethod,
+                path: "v1/backup/download",
+                statusCode: httpResponse.statusCode,
+                startedAt: startedAt,
+                requestID: clientError.requestID,
+                clientRequestID: nil,
+                errorDescription: clientError.errorDescription
+            )
+            throw clientError
         }
 
         do {
-            return try Self.decoder.decode(CloudBackupDownloadResponse.self, from: data)
+            let decoded = try Self.decoder.decode(CloudBackupDownloadResponse.self, from: data)
+            recordNetworkTrace(
+                method: request.httpMethod,
+                path: "v1/backup/download",
+                statusCode: httpResponse.statusCode,
+                startedAt: startedAt,
+                requestID: nil,
+                clientRequestID: nil,
+                errorDescription: nil
+            )
+            return decoded
         } catch {
+            recordNetworkTrace(
+                method: request.httpMethod,
+                path: "v1/backup/download",
+                statusCode: httpResponse.statusCode,
+                startedAt: startedAt,
+                requestID: nil,
+                clientRequestID: nil,
+                errorDescription: CoachClientError.invalidResponse.errorDescription
+            )
             throw CoachClientError.invalidResponse
         }
     }
@@ -1067,6 +1124,7 @@ struct CoachAPIHTTPClient: CoachAPIClient {
             body: request,
             session: standardSession,
             timeoutInterval: Self.standardRequestTimeoutInterval,
+            clientRequestID: nil,
             responseType: CloudCoachPreferencesUpdateResponse.self
         )
     }
@@ -1093,6 +1151,7 @@ struct CoachAPIHTTPClient: CoachAPIClient {
             ),
             session: profileInsightsSession,
             timeoutInterval: Self.profileInsightsRequestTimeoutInterval,
+            clientRequestID: nil,
             responseType: CoachProfileInsights.self
         )
     }
@@ -1123,6 +1182,7 @@ struct CoachAPIHTTPClient: CoachAPIClient {
             ),
             session: standardSession,
             timeoutInterval: Self.standardRequestTimeoutInterval,
+            clientRequestID: clientRequestID,
             responseType: CoachChatJobCreateResponse.self
         )
     }
@@ -1159,22 +1219,65 @@ struct CoachAPIHTTPClient: CoachAPIClient {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("Bearer \(internalBearerToken)", forHTTPHeaderField: "Authorization")
 
-        let (data, response) = try await standardSession.data(for: request)
+        let (data, response, startedAt) = try await tracedData(
+            for: request,
+            session: standardSession,
+            tracePath: "v2/coach/chat-jobs/\(jobID)",
+            clientRequestID: nil
+        )
 
         guard let httpResponse = response as? HTTPURLResponse else {
+            recordNetworkTrace(
+                method: request.httpMethod,
+                path: "v2/coach/chat-jobs/\(jobID)",
+                statusCode: nil,
+                startedAt: startedAt,
+                requestID: nil,
+                clientRequestID: nil,
+                errorDescription: CoachClientError.invalidResponse.errorDescription
+            )
             throw CoachClientError.invalidResponse
         }
 
         guard (200...299).contains(httpResponse.statusCode) else {
-            throw Self.parseAPIErrorResponse(
+            let clientError = Self.parseAPIErrorResponse(
                 data: data,
                 statusCode: httpResponse.statusCode
             )
+            recordNetworkTrace(
+                method: request.httpMethod,
+                path: "v2/coach/chat-jobs/\(jobID)",
+                statusCode: httpResponse.statusCode,
+                startedAt: startedAt,
+                requestID: clientError.requestID,
+                clientRequestID: nil,
+                errorDescription: clientError.errorDescription
+            )
+            throw clientError
         }
 
         do {
-            return try Self.decoder.decode(CoachChatJobStatusResponse.self, from: data)
+            let decoded = try Self.decoder.decode(CoachChatJobStatusResponse.self, from: data)
+            recordNetworkTrace(
+                method: request.httpMethod,
+                path: "v2/coach/chat-jobs/\(jobID)",
+                statusCode: httpResponse.statusCode,
+                startedAt: startedAt,
+                requestID: nil,
+                clientRequestID: nil,
+                errorDescription: nil
+            )
+            return decoded
         } catch {
+            recordNetworkTrace(
+                method: request.httpMethod,
+                path: "v2/coach/chat-jobs/\(jobID)",
+                statusCode: httpResponse.statusCode,
+                startedAt: startedAt,
+                requestID: nil,
+                clientRequestID: nil,
+                errorDescription: CoachClientError.invalidResponse.errorDescription
+            )
             throw CoachClientError.invalidResponse
         }
     }
@@ -1188,6 +1291,7 @@ struct CoachAPIHTTPClient: CoachAPIClient {
             body: request,
             session: standardSession,
             timeoutInterval: Self.standardRequestTimeoutInterval,
+            clientRequestID: request.clientRequestID,
             responseType: WorkoutSummaryJobCreateResponse.self
         )
     }
@@ -1224,22 +1328,65 @@ struct CoachAPIHTTPClient: CoachAPIClient {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("Bearer \(internalBearerToken)", forHTTPHeaderField: "Authorization")
 
-        let (data, response) = try await standardSession.data(for: request)
+        let (data, response, startedAt) = try await tracedData(
+            for: request,
+            session: standardSession,
+            tracePath: "v2/coach/workout-summary-jobs/\(jobID)",
+            clientRequestID: nil
+        )
 
         guard let httpResponse = response as? HTTPURLResponse else {
+            recordNetworkTrace(
+                method: request.httpMethod,
+                path: "v2/coach/workout-summary-jobs/\(jobID)",
+                statusCode: nil,
+                startedAt: startedAt,
+                requestID: nil,
+                clientRequestID: nil,
+                errorDescription: CoachClientError.invalidResponse.errorDescription
+            )
             throw CoachClientError.invalidResponse
         }
 
         guard (200...299).contains(httpResponse.statusCode) else {
-            throw Self.parseAPIErrorResponse(
+            let clientError = Self.parseAPIErrorResponse(
                 data: data,
                 statusCode: httpResponse.statusCode
             )
+            recordNetworkTrace(
+                method: request.httpMethod,
+                path: "v2/coach/workout-summary-jobs/\(jobID)",
+                statusCode: httpResponse.statusCode,
+                startedAt: startedAt,
+                requestID: clientError.requestID,
+                clientRequestID: nil,
+                errorDescription: clientError.errorDescription
+            )
+            throw clientError
         }
 
         do {
-            return try Self.decoder.decode(WorkoutSummaryJobStatusResponse.self, from: data)
+            let decoded = try Self.decoder.decode(WorkoutSummaryJobStatusResponse.self, from: data)
+            recordNetworkTrace(
+                method: request.httpMethod,
+                path: "v2/coach/workout-summary-jobs/\(jobID)",
+                statusCode: httpResponse.statusCode,
+                startedAt: startedAt,
+                requestID: nil,
+                clientRequestID: nil,
+                errorDescription: nil
+            )
+            return decoded
         } catch {
+            recordNetworkTrace(
+                method: request.httpMethod,
+                path: "v2/coach/workout-summary-jobs/\(jobID)",
+                statusCode: httpResponse.statusCode,
+                startedAt: startedAt,
+                requestID: nil,
+                clientRequestID: nil,
+                errorDescription: CoachClientError.invalidResponse.errorDescription
+            )
             throw CoachClientError.invalidResponse
         }
     }
@@ -1268,6 +1415,7 @@ struct CoachAPIHTTPClient: CoachAPIClient {
             ),
             session: chatSession,
             timeoutInterval: Self.chatRequestTimeoutInterval,
+            clientRequestID: nil,
             responseType: CoachChatResponse.self
         )
     }
@@ -1283,6 +1431,7 @@ struct CoachAPIHTTPClient: CoachAPIClient {
             body: DeleteRequest(installID: installID),
             session: standardSession,
             timeoutInterval: Self.standardRequestTimeoutInterval,
+            clientRequestID: nil,
             responseType: EmptyCoachResponse.self
         )
     }
@@ -1293,8 +1442,10 @@ struct CoachAPIHTTPClient: CoachAPIClient {
         body: RequestBody,
         session: URLSession,
         timeoutInterval: TimeInterval,
+        clientRequestID: String?,
         responseType: ResponseBody.Type
     ) async throws -> ResponseBody {
+        _ = responseType
         guard configuration.isFeatureEnabled else {
             throw CoachClientError.featureDisabled
         }
@@ -1313,24 +1464,115 @@ struct CoachAPIHTTPClient: CoachAPIClient {
         request.setValue("Bearer \(internalBearerToken)", forHTTPHeaderField: "Authorization")
         request.httpBody = try Self.encoder.encode(body)
 
-        let (data, response) = try await session.data(for: request)
+        let (data, response, startedAt) = try await tracedData(
+            for: request,
+            session: session,
+            tracePath: path,
+            clientRequestID: clientRequestID
+        )
 
         guard let httpResponse = response as? HTTPURLResponse else {
+            recordNetworkTrace(
+                method: request.httpMethod,
+                path: path,
+                statusCode: nil,
+                startedAt: startedAt,
+                requestID: nil,
+                clientRequestID: clientRequestID,
+                errorDescription: CoachClientError.invalidResponse.errorDescription
+            )
             throw CoachClientError.invalidResponse
         }
 
         guard (200...299).contains(httpResponse.statusCode) else {
-            throw Self.parseAPIErrorResponse(
+            let clientError = Self.parseAPIErrorResponse(
                 data: data,
                 statusCode: httpResponse.statusCode
             )
+            recordNetworkTrace(
+                method: request.httpMethod,
+                path: path,
+                statusCode: httpResponse.statusCode,
+                startedAt: startedAt,
+                requestID: clientError.requestID,
+                clientRequestID: clientRequestID,
+                errorDescription: clientError.errorDescription
+            )
+            throw clientError
         }
 
         do {
-            return try Self.decoder.decode(ResponseBody.self, from: data)
+            let decoded = try Self.decoder.decode(ResponseBody.self, from: data)
+            recordNetworkTrace(
+                method: request.httpMethod,
+                path: path,
+                statusCode: httpResponse.statusCode,
+                startedAt: startedAt,
+                requestID: nil,
+                clientRequestID: clientRequestID,
+                errorDescription: nil
+            )
+            return decoded
         } catch {
+            recordNetworkTrace(
+                method: request.httpMethod,
+                path: path,
+                statusCode: httpResponse.statusCode,
+                startedAt: startedAt,
+                requestID: nil,
+                clientRequestID: clientRequestID,
+                errorDescription: CoachClientError.invalidResponse.errorDescription
+            )
             throw CoachClientError.invalidResponse
         }
+    }
+
+    private func tracedData(
+        for request: URLRequest,
+        session: URLSession,
+        tracePath: String,
+        clientRequestID: String?
+    ) async throws -> (Data, URLResponse, Date) {
+        let startedAt = Date()
+
+        do {
+            let (data, response) = try await session.data(for: request)
+            return (data, response, startedAt)
+        } catch {
+            let requestID = (error as? CoachClientError)?.requestID
+            let description = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            recordNetworkTrace(
+                method: request.httpMethod,
+                path: tracePath,
+                statusCode: nil,
+                startedAt: startedAt,
+                requestID: requestID,
+                clientRequestID: clientRequestID,
+                errorDescription: description
+            )
+            throw error
+        }
+    }
+
+    private func recordNetworkTrace(
+        method: String?,
+        path: String,
+        statusCode: Int?,
+        startedAt: Date,
+        requestID: String?,
+        clientRequestID: String?,
+        errorDescription: String?
+    ) {
+        debugRecorder.traceNetwork(
+            method: method ?? "GET",
+            path: path,
+            statusCode: statusCode,
+            durationMs: Int(Date().timeIntervalSince(startedAt) * 1_000),
+            startedAt: startedAt,
+            requestID: requestID,
+            clientRequestID: clientRequestID,
+            errorDescription: errorDescription
+        )
     }
 
     private static var encoder: JSONEncoder {
@@ -1354,6 +1596,7 @@ struct CoachAPIHTTPClient: CoachAPIClient {
                 statusCode: statusCode,
                 code: payload.error.code,
                 message: payload.error.message,
+                requestID: payload.error.requestID,
                 jobID: payload.jobID
             )
         }
@@ -1748,23 +1991,29 @@ final class CloudSyncStore {
     @ObservationIgnored private var client: any CoachAPIClient
     @ObservationIgnored private let localStateStore: CloudSyncLocalStateStore
     @ObservationIgnored private let installID: String
+    @ObservationIgnored private let debugRecorder: any DebugEventRecording
     private var configuration: CoachRuntimeConfiguration
 
     init(
         client: any CoachAPIClient,
         configuration: CoachRuntimeConfiguration,
         installID: String,
-        localStateStore: CloudSyncLocalStateStore = CloudSyncLocalStateStore()
+        localStateStore: CloudSyncLocalStateStore = CloudSyncLocalStateStore(),
+        debugRecorder: any DebugEventRecording = NoopDebugEventRecorder()
     ) {
         self.client = client
         self.configuration = configuration
         self.installID = installID
         self.localStateStore = localStateStore
+        self.debugRecorder = debugRecorder
     }
 
     func updateConfiguration(_ configuration: CoachRuntimeConfiguration) {
         self.configuration = configuration
-        client = CoachAPIHTTPClient(configuration: configuration)
+        client = CoachAPIHTTPClient(
+            configuration: configuration,
+            debugRecorder: debugRecorder
+        )
         pendingRemoteRestore = nil
         lastSyncErrorDescription = nil
         localStateStore.resetSyncState()
@@ -1787,9 +2036,22 @@ final class CloudSyncStore {
             return false
         }
         guard !isSyncInProgress else {
+            debugRecorder.log(
+                category: .cloudSync,
+                message: "sync_skipped",
+                metadata: ["reason": "already_in_progress"]
+            )
             return false
         }
 
+        debugRecorder.log(
+            category: .cloudSync,
+            message: "sync_started",
+            metadata: [
+                "allowUserPrompt": allowUserPrompt ? "true" : "false",
+                "localStateKind": appStore.cloudLocalStateKind.rawValue
+            ]
+        )
         isSyncInProgress = true
         defer { isSyncInProgress = false }
 
@@ -1799,6 +2061,11 @@ final class CloudSyncStore {
             if pendingRemoteRestore == nil,
                localStateStore.canUseServerSideContext(for: localBackupHash) {
                 lastSyncErrorDescription = nil
+                debugRecorder.log(
+                    category: .cloudSync,
+                    message: "sync_skipped",
+                    metadata: ["reason": "server_context_ready"]
+                )
                 return true
             }
             let reconcileResponse = try await client.reconcileBackup(
@@ -1820,11 +2087,25 @@ final class CloudSyncStore {
                     localStateStore.markSynced(remote: remote)
                     pendingRemoteRestore = nil
                     lastSyncErrorDescription = nil
+                    debugRecorder.log(
+                        category: .cloudSync,
+                        message: "reconcile_noop",
+                        metadata: [
+                            "remoteVersion": String(remote.backupVersion)
+                        ]
+                    )
                     return true
                 }
                 return false
 
             case .upload:
+                debugRecorder.log(
+                    category: .cloudSync,
+                    message: "upload_started",
+                    metadata: [
+                        "hasRemoteVersion": reconcileResponse.remote?.backupVersion != nil ? "true" : "false"
+                    ]
+                )
                 let uploaded = try await client.uploadBackup(
                     CloudBackupUploadRequest(
                         installID: installID,
@@ -1839,6 +2120,11 @@ final class CloudSyncStore {
                 localStateStore.markSynced(remote: uploaded)
                 pendingRemoteRestore = nil
                 lastSyncErrorDescription = nil
+                debugRecorder.log(
+                    category: .cloudSync,
+                    message: "upload_succeeded",
+                    metadata: ["remoteVersion": String(uploaded.backupVersion)]
+                )
                 return true
 
             case .download, .conflict:
@@ -1846,9 +2132,19 @@ final class CloudSyncStore {
                     return false
                 }
                 guard allowUserPrompt else {
+                    debugRecorder.log(
+                        category: .cloudSync,
+                        message: "sync_skipped",
+                        metadata: ["reason": "prompt_not_allowed"]
+                    )
                     return false
                 }
                 guard localStateStore.lastIgnoredRemoteVersion != remote.backupVersion else {
+                    debugRecorder.log(
+                        category: .cloudSync,
+                        message: "sync_skipped",
+                        metadata: ["reason": "remote_version_ignored"]
+                    )
                     return false
                 }
 
@@ -1858,10 +2154,26 @@ final class CloudSyncStore {
                     response: download
                 )
                 lastSyncErrorDescription = nil
+                debugRecorder.log(
+                    category: .cloudSync,
+                    message: "download_prompted",
+                    metadata: [
+                        "mode": reconcileResponse.action == .conflict ? "conflict" : "restore",
+                        "remoteVersion": String(download.remote.backupVersion)
+                    ]
+                )
                 return false
             }
         } catch {
             lastSyncErrorDescription = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            debugRecorder.log(
+                category: .cloudSync,
+                level: .error,
+                message: "sync_failed",
+                metadata: [
+                    "error": (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                ]
+            )
             return false
         }
     }
@@ -1880,6 +2192,14 @@ final class CloudSyncStore {
         )
         self.pendingRemoteRestore = nil
         lastSyncErrorDescription = nil
+        debugRecorder.log(
+            category: .cloudSync,
+            message: "restore_confirmed",
+            metadata: [
+                "mode": pendingRemoteRestore.mode == .conflict ? "conflict" : "restore",
+                "remoteVersion": String(pendingRemoteRestore.response.remote.backupVersion)
+            ]
+        )
     }
 
     func dismissPendingRemoteRestore() {
@@ -1889,6 +2209,14 @@ final class CloudSyncStore {
 
         localStateStore.markIgnored(remoteVersion: pendingRemoteRestore.response.remote.backupVersion)
         self.pendingRemoteRestore = nil
+        debugRecorder.log(
+            category: .cloudSync,
+            message: "restore_dismissed",
+            metadata: [
+                "mode": pendingRemoteRestore.mode == .conflict ? "conflict" : "restore",
+                "remoteVersion": String(pendingRemoteRestore.response.remote.backupVersion)
+            ]
+        )
     }
 
     func canUseServerSideContext(using appStore: AppStore) -> Bool {
@@ -1932,6 +2260,7 @@ final class CoachStore {
     @ObservationIgnored private var activeChatNextPollAfterMs = CoachStore.initialChatPollAfterMs
     @ObservationIgnored private var hasHydratedAnalysisSettingsDrafts = false
     @ObservationIgnored private let maxChatPollingDuration: TimeInterval
+    @ObservationIgnored private let debugRecorder: any DebugEventRecording
     private var configuration: CoachRuntimeConfiguration
     @ObservationIgnored private let capabilityScope: CoachCapabilityScope
 
@@ -1942,16 +2271,19 @@ final class CoachStore {
         cloudSyncStore: CloudSyncStore? = nil,
         contextBuilder: CoachContextBuilder = CoachContextBuilder(),
         capabilityScope: CoachCapabilityScope = .draftChanges,
-        maxChatPollingDuration: TimeInterval = CoachStore.defaultMaxChatPollingDuration
+        maxChatPollingDuration: TimeInterval = CoachStore.defaultMaxChatPollingDuration,
+        debugRecorder: any DebugEventRecording = NoopDebugEventRecorder()
     ) {
         self.client = client
         self.configuration = configuration
         self.localStateStore = localStateStore
+        self.debugRecorder = debugRecorder
         self.cloudSyncStore = cloudSyncStore ?? CloudSyncStore(
             client: client,
             configuration: configuration,
             installID: localStateStore.installID,
-            localStateStore: CloudSyncLocalStateStore(defaults: localStateStore.userDefaults)
+            localStateStore: CloudSyncLocalStateStore(defaults: localStateStore.userDefaults),
+            debugRecorder: debugRecorder
         )
         self.contextBuilder = contextBuilder
         self.capabilityScope = capabilityScope
@@ -1974,7 +2306,10 @@ final class CoachStore {
 
     func updateConfiguration(_ configuration: CoachRuntimeConfiguration) {
         self.configuration = configuration
-        client = CoachAPIHTTPClient(configuration: configuration)
+        client = CoachAPIHTTPClient(
+            configuration: configuration,
+            debugRecorder: debugRecorder
+        )
         cloudSyncStore.updateConfiguration(configuration)
         localStateStore.resetSnapshotAcknowledgement()
         hasHydratedAnalysisSettingsDrafts = false
@@ -2044,11 +2379,21 @@ final class CoachStore {
         defer { isLoadingProfileInsights = false }
 
         let fallbackInsights = CoachFallbackInsightsFactory.make(from: appStore)
+        debugRecorder.log(
+            category: .coach,
+            message: "insights_refresh_started",
+            metadata: ["forceRefresh": forceRefresh ? "true" : "false"]
+        )
 
         guard configuration.canUseRemoteCoach else {
             profileInsights = fallbackInsights
             profileInsightsOrigin = .fallback
             lastInsightsErrorDescription = nil
+            debugRecorder.log(
+                category: .coach,
+                message: "insights_refresh_fallback",
+                metadata: ["reason": "remote_coach_unavailable"]
+            )
             return
         }
 
@@ -2074,10 +2419,27 @@ final class CoachStore {
             profileInsightsOrigin = remoteInsights.resolvedInsightSource
             lastInsightsErrorDescription = nil
             markSnapshotAsAcceptedIfNeeded(snapshotPackage)
+            debugRecorder.log(
+                category: .coach,
+                message: "insights_refresh_succeeded",
+                metadata: [
+                    "source": remoteInsights.resolvedInsightSource.rawValue,
+                    "usedServerSideContext": canUseServerSideContext ? "true" : "false",
+                    "includedInlineSnapshot": snapshotPackage.includedInlineSnapshot ? "true" : "false"
+                ]
+            )
         } catch {
             profileInsights = fallbackInsights
             profileInsightsOrigin = .fallback
             lastInsightsErrorDescription = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            debugRecorder.log(
+                category: .coach,
+                level: .error,
+                message: "insights_refresh_failed",
+                metadata: [
+                    "error": (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                ]
+            )
         }
     }
 
@@ -2097,6 +2459,14 @@ final class CoachStore {
         let selectedProgramID = selectedProgramIDDraft.flatMap { programID in
             appStore.program(for: programID) != nil ? programID : nil
         }
+        debugRecorder.log(
+            category: .coach,
+            message: "analysis_settings_saved",
+            metadata: [
+                "hasSelectedProgram": selectedProgramID != nil ? "true" : "false",
+                "hasProgramComment": normalizedComment.isEmpty ? "false" : "true"
+            ]
+        )
 
         appStore.updateCoachAnalysisSettings { settings in
             settings.selectedProgramID = selectedProgramID
@@ -2195,6 +2565,12 @@ final class CoachStore {
                 )
             )
             lastChatErrorDescription = message
+            debugRecorder.log(
+                category: .coach,
+                level: .warning,
+                message: "chat_job_failed",
+                metadata: ["reason": "remote_coach_unavailable"]
+            )
             return
         }
 
@@ -2230,6 +2606,16 @@ final class CoachStore {
                     initialPollAfterMs: createResponse.pollAfterMs,
                     resetPollingStart: true
                 )
+                debugRecorder.log(
+                    category: .coach,
+                    message: "chat_job_created",
+                    metadata: [
+                        "hasQuestion": "true",
+                        "recentTurnsCount": String(priorConversation.count),
+                        "usedServerSideContext": canUseServerSideContext ? "true" : "false",
+                        "includedInlineSnapshot": snapshotPackage.includedInlineSnapshot ? "true" : "false"
+                    ]
+                )
             } catch let error as CoachClientError {
                 if let existingJobID = error.activeChatJobID {
                     removeMessage(id: userMessageID)
@@ -2241,6 +2627,14 @@ final class CoachStore {
                         placeholderID: recoveredPlaceholderID,
                         initialPollAfterMs: CoachStore.initialChatPollAfterMs,
                         resetPollingStart: activeChatPollingStartedAt == nil
+                    )
+                    debugRecorder.log(
+                        category: .coach,
+                        message: "chat_job_resumed",
+                        metadata: [
+                            "reason": "existing_job_in_progress",
+                            "recentTurnsCount": String(priorConversation.count)
+                        ]
                     )
                     await resumePendingChatJobIfNeeded(using: appStore)
                     return
@@ -2269,6 +2663,12 @@ final class CoachStore {
             clearActiveChatJob()
             let description = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             lastChatErrorDescription = description
+            debugRecorder.log(
+                category: .coach,
+                level: .error,
+                message: "chat_job_failed",
+                metadata: ["error": description]
+            )
             replaceMessage(
                 id: placeholderID,
                 with: CoachChatMessage(
@@ -2288,6 +2688,7 @@ final class CoachStore {
         }
 
         isSendingMessage = true
+        let wasAwaitingResume = activeChatAwaitingResume
         activeChatAwaitingResume = false
         lastChatErrorDescription = nil
         ensureActiveChatPlaceholder(
@@ -2298,6 +2699,13 @@ final class CoachStore {
         defer {
             isSendingMessage = false
         }
+        debugRecorder.log(
+            category: .coach,
+            message: "chat_job_resumed",
+            metadata: [
+                "awaitingResume": wasAwaitingResume ? "true" : "false"
+            ]
+        )
 
         do {
             if let jobResponse = try await awaitTerminalChatJob(
@@ -2324,6 +2732,12 @@ final class CoachStore {
             clearActiveChatJob()
             let description = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             lastChatErrorDescription = description
+            debugRecorder.log(
+                category: .coach,
+                level: .error,
+                message: "chat_job_failed",
+                metadata: ["error": description]
+            )
             replaceMessage(
                 id: activeChatContext.placeholderID,
                 with: CoachChatMessage(
@@ -2544,6 +2958,15 @@ final class CoachStore {
         guard let response = completedChatResponse(from: jobResponse) else {
             let description = chatJobFailureDescription(from: jobResponse)
             lastChatErrorDescription = description
+            debugRecorder.log(
+                category: .coach,
+                level: .error,
+                message: "chat_job_failed",
+                metadata: [
+                    "status": jobResponse.status.rawValue,
+                    "errorCode": jobResponse.error?.code ?? "none"
+                ]
+            )
             replaceMessage(
                 id: placeholderID,
                 with: CoachChatMessage(
@@ -2557,6 +2980,14 @@ final class CoachStore {
         }
 
         lastChatErrorDescription = nil
+        debugRecorder.log(
+            category: .coach,
+            message: "chat_job_completed",
+            metadata: [
+                "followUpsCount": String(response.followUps.count),
+                "generationStatus": response.generationStatus?.rawValue ?? "none"
+            ]
+        )
         replaceMessage(
             id: placeholderID,
             with: CoachChatMessage(
@@ -2622,6 +3053,11 @@ final class CoachStore {
         activeChatPlaceholderID = placeholderID
         activeChatAwaitingResume = true
         activeChatNextPollAfterMs = max(nextPollAfterMs, CoachStore.initialChatPollAfterMs)
+        debugRecorder.log(
+            category: .coach,
+            message: "chat_job_suspended",
+            metadata: ["nextPollAfterMs": String(activeChatNextPollAfterMs)]
+        )
         ensureActiveChatPlaceholder(
             id: placeholderID,
             content: coachLocalizedString("coach.loading.response_delayed"),

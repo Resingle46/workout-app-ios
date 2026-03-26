@@ -458,6 +458,7 @@ final class WorkoutSummaryStore {
     @ObservationIgnored private let maxPollingDuration: TimeInterval
     @ObservationIgnored private let pollIntervalProvider: @Sendable (Int) -> Int
     @ObservationIgnored private let logger: Logger
+    @ObservationIgnored private let debugRecorder: any DebugEventRecording
     @ObservationIgnored private var prewarmTasks: [UUID: Task<Void, Never>] = [:]
     @ObservationIgnored private var pollTasks: [UUID: Task<Void, Never>] = [:]
     @ObservationIgnored private var pollTaskJobIDs: [UUID: String] = [:]
@@ -469,6 +470,7 @@ final class WorkoutSummaryStore {
         prewarmDebounceDuration: Duration = workoutSummaryDefaultPrewarmDebounceDuration,
         maxPollingDuration: TimeInterval = workoutSummaryDefaultMaxPollingDuration,
         pollIntervalProvider: @escaping @Sendable (Int) -> Int = workoutSummaryDefaultPollIntervalMs,
+        debugRecorder: any DebugEventRecording = NoopDebugEventRecorder(),
         logger: Logger = Logger(
             subsystem: Bundle.main.bundleIdentifier ?? "WorkoutApp",
             category: "WorkoutSummary"
@@ -480,6 +482,7 @@ final class WorkoutSummaryStore {
         self.prewarmDebounceDuration = prewarmDebounceDuration
         self.maxPollingDuration = maxPollingDuration
         self.pollIntervalProvider = pollIntervalProvider
+        self.debugRecorder = debugRecorder
         self.logger = logger
     }
 
@@ -489,7 +492,10 @@ final class WorkoutSummaryStore {
 
     func updateConfiguration(_ configuration: CoachRuntimeConfiguration) {
         self.configuration = configuration
-        client = CoachAPIHTTPClient(configuration: configuration)
+        client = CoachAPIHTTPClient(
+            configuration: configuration,
+            debugRecorder: debugRecorder
+        )
         cancelAllTasks()
         sessionStates.removeAll()
     }

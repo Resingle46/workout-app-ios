@@ -95,15 +95,18 @@ actor BackupCoordinator {
     private let fileManager: FileManager
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
+    private let debugRecorder: any DebugEventRecording
 
     init(
         defaults: UserDefaults = .standard,
         now: @escaping @Sendable () -> Date = { Date() },
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        debugRecorder: any DebugEventRecording = NoopDebugEventRecorder()
     ) {
         self.defaults = defaults
         self.now = now
         self.fileManager = fileManager
+        self.debugRecorder = debugRecorder
 
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -188,6 +191,11 @@ actor BackupCoordinator {
             let envelope = try BackupEnvelope.make(snapshot: snapshot, createdAt: now())
             if envelope.snapshotHash == cachedLastSuccessfulSnapshotHash {
                 status.lastErrorDescription = nil
+                debugRecorder.log(
+                    category: .backup,
+                    message: "backup_skipped_unchanged",
+                    metadata: [:]
+                )
                 return status
             }
 
@@ -203,11 +211,25 @@ actor BackupCoordinator {
             status.latestBackup = metadata
             status.lastSuccessfulBackupAt = metadata.createdAt
             status.lastErrorDescription = nil
+            debugRecorder.log(
+                category: .backup,
+                message: "backup_succeeded",
+                metadata: [
+                    "schemaVersion": String(metadata.schemaVersion),
+                    "fileName": metadata.fileName
+                ]
+            )
             return status
         } catch {
             markFolderAccessLostIfNeeded(error)
             status = await refreshStatus()
             status.lastErrorDescription = userFacingError(error)
+            debugRecorder.log(
+                category: .backup,
+                level: .error,
+                message: "backup_failed",
+                metadata: ["error": userFacingError(error)]
+            )
             return status
         }
     }
