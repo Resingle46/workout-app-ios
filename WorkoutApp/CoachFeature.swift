@@ -3265,8 +3265,8 @@ final class CoachStore {
                 role: .assistant,
                 content: response.answerMarkdown,
                 followUps: response.followUps,
-                provider: response.provider ?? jobResponse.metadata?.provider ?? activeChatProvider,
-                generationStatus: response.generationStatus
+                generationStatus: response.generationStatus,
+                provider: response.provider ?? jobResponse.metadata?.provider ?? activeChatProvider
             )
         )
     }

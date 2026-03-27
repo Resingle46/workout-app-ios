@@ -769,7 +769,7 @@ final class WorkoutSummaryStore {
             sessionStates[session.id] = state
 
             logger.notice(
-                "summary_retry_requested session=\(session.id.uuidString, privacy: .public) fingerprint=\(preparedRequest.fingerprint, privacy: .public) provider=\(configuration.provider.rawValue, privacy: .public)"
+                "summary_retry_requested session=\(session.id.uuidString, privacy: .public) fingerprint=\(preparedRequest.fingerprint, privacy: .public) provider=\(self.configuration.provider.rawValue, privacy: .public)"
             )
 
             await createOrReuseJob(preparedRequest)
