@@ -44,16 +44,15 @@ struct WorkoutAppApp: App {
             debugRecorder: debugRecorder
         )
         _coachStore = State(initialValue: coachStore)
-        _workoutSummaryStore = State(
-            initialValue: WorkoutSummaryStore(
-                client: client,
-                configuration: configuration,
-                localStateStore: localStateStore,
-                debugRecorder: debugRecorder
-            )
+        let workoutSummaryStore = WorkoutSummaryStore(
+            client: client,
+            configuration: configuration,
+            localStateStore: localStateStore,
+            debugRecorder: debugRecorder
         )
+        _workoutSummaryStore = State(initialValue: workoutSummaryStore)
 
-        let runtimeConfigurationProvider = {
+        let runtimeConfigurationProvider: @Sendable () -> CoachRuntimeConfiguration = {
             CoachRuntimeConfigurationStore(bundle: .main).runtimeConfiguration
         }
         let reportBuilder = DebugDiagnosticsReportBuilder(
