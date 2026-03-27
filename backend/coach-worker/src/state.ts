@@ -49,6 +49,7 @@ import type {
 const LEGACY_SNAPSHOT_TTL_SECONDS = 30 * 24 * 60 * 60;
 const CHAT_MEMORY_TTL_SECONDS = 7 * 24 * 60 * 60;
 const INSIGHTS_CACHE_TTL_SECONDS = 6 * 60 * 60;
+const DEGRADED_INSIGHTS_CACHE_TTL_SECONDS = 10 * 60;
 const CHAT_MEMORY_MAX_TURNS = 12;
 const CHAT_MEMORY_MAX_CONTENT_LENGTH = 800;
 const CHAT_MEMORY_MAX_TOTAL_CHARACTERS = 4_800;
@@ -305,10 +306,23 @@ export interface CoachStateStore {
     installID: string,
     key: ContextStorageKeyInput
   ): Promise<CoachProfileInsightsResponse | null>;
+  getDegradedInsightsCache(
+    installID: string,
+    key: ContextStorageKeyInput
+  ): Promise<CoachProfileInsightsResponse | null>;
   storeInsightsCache(
     installID: string,
     key: ContextStorageKeyInput,
     response: CoachProfileInsightsResponse
+  ): Promise<void>;
+  storeDegradedInsightsCache(
+    installID: string,
+    key: ContextStorageKeyInput,
+    response: CoachProfileInsightsResponse
+  ): Promise<void>;
+  deleteDegradedInsightsCache(
+    installID: string,
+    key: ContextStorageKeyInput
   ): Promise<void>;
   getChatMemory(
     installID: string,
@@ -657,6 +671,29 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
     );
   }
 
+  async getDegradedInsightsCache(
+    installID: string,
+    key: ContextStorageKeyInput
+  ): Promise<CoachProfileInsightsResponse | null> {
+    const resolvedPromptVersion = key.promptVersion ?? this.promptVersion;
+    const resolvedModel = key.model ?? this.model;
+    const resolvedRoutingVersion =
+      key.routingVersion ?? DEFAULT_MODEL_ROUTING_VERSION;
+    return this.kv.get<CoachProfileInsightsResponse>(
+      degradedInsightsCacheKey(
+        installID,
+        key.contextHash,
+        key.contextProfile,
+        key.contextVersion,
+        key.analyticsVersion,
+        resolvedPromptVersion,
+        resolvedRoutingVersion,
+        resolvedModel
+      ),
+      "json"
+    );
+  }
+
   async storeInsightsCache(
     installID: string,
     key: ContextStorageKeyInput,
@@ -679,6 +716,53 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
       ),
       JSON.stringify(response),
       { expirationTtl: INSIGHTS_CACHE_TTL_SECONDS }
+    );
+  }
+
+  async storeDegradedInsightsCache(
+    installID: string,
+    key: ContextStorageKeyInput,
+    response: CoachProfileInsightsResponse
+  ): Promise<void> {
+    const resolvedPromptVersion = key.promptVersion ?? this.promptVersion;
+    const resolvedModel = key.model ?? this.model;
+    const resolvedRoutingVersion =
+      key.routingVersion ?? DEFAULT_MODEL_ROUTING_VERSION;
+    await this.kv.put(
+      degradedInsightsCacheKey(
+        installID,
+        key.contextHash,
+        key.contextProfile,
+        key.contextVersion,
+        key.analyticsVersion,
+        resolvedPromptVersion,
+        resolvedRoutingVersion,
+        resolvedModel
+      ),
+      JSON.stringify(response),
+      { expirationTtl: DEGRADED_INSIGHTS_CACHE_TTL_SECONDS }
+    );
+  }
+
+  async deleteDegradedInsightsCache(
+    installID: string,
+    key: ContextStorageKeyInput
+  ): Promise<void> {
+    const resolvedPromptVersion = key.promptVersion ?? this.promptVersion;
+    const resolvedModel = key.model ?? this.model;
+    const resolvedRoutingVersion =
+      key.routingVersion ?? DEFAULT_MODEL_ROUTING_VERSION;
+    await this.kv.delete(
+      degradedInsightsCacheKey(
+        installID,
+        key.contextHash,
+        key.contextProfile,
+        key.contextVersion,
+        key.analyticsVersion,
+        resolvedPromptVersion,
+        resolvedRoutingVersion,
+        resolvedModel
+      )
     );
   }
 
@@ -1752,6 +1836,10 @@ export class InMemoryCoachStateRepository implements CoachStateStore {
   private readonly backupHeads = new Map<string, BackupHead>();
   private readonly backups = new Map<string, Map<number, BackupEnvelopeV2>>();
   private readonly insightsCache = new Map<string, CoachProfileInsightsResponse>();
+  private readonly degradedInsightsCache = new Map<
+    string,
+    { response: CoachProfileInsightsResponse; expiresAt: number }
+  >();
   private readonly chatMemory = new Map<string, StoredChatMemory>();
   private readonly chatJobs = new Map<string, CoachChatJobRecord>();
   private readonly workoutSummaryJobs = new Map<string, CoachWorkoutSummaryJobRecord>();
@@ -1895,6 +1983,31 @@ export class InMemoryCoachStateRepository implements CoachStateStore {
     );
   }
 
+  async getDegradedInsightsCache(
+    installID: string,
+    key: ContextStorageKeyInput
+  ): Promise<CoachProfileInsightsResponse | null> {
+    const cacheKey = degradedInsightsCacheKey(
+      installID,
+      key.contextHash,
+      key.contextProfile,
+      key.contextVersion,
+      key.analyticsVersion,
+      key.promptVersion ?? this.promptVersion,
+      key.routingVersion ?? DEFAULT_MODEL_ROUTING_VERSION,
+      key.model ?? this.model
+    );
+    const entry = this.degradedInsightsCache.get(cacheKey);
+    if (!entry) {
+      return null;
+    }
+    if (entry.expiresAt <= this.now().getTime()) {
+      this.degradedInsightsCache.delete(cacheKey);
+      return null;
+    }
+    return entry.response;
+  }
+
   async storeInsightsCache(
     installID: string,
     key: ContextStorageKeyInput,
@@ -1912,6 +2025,48 @@ export class InMemoryCoachStateRepository implements CoachStateStore {
         key.model ?? this.model
       ),
       response
+    );
+  }
+
+  async storeDegradedInsightsCache(
+    installID: string,
+    key: ContextStorageKeyInput,
+    response: CoachProfileInsightsResponse
+  ): Promise<void> {
+    this.degradedInsightsCache.set(
+      degradedInsightsCacheKey(
+        installID,
+        key.contextHash,
+        key.contextProfile,
+        key.contextVersion,
+        key.analyticsVersion,
+        key.promptVersion ?? this.promptVersion,
+        key.routingVersion ?? DEFAULT_MODEL_ROUTING_VERSION,
+        key.model ?? this.model
+      ),
+      {
+        response,
+        expiresAt:
+          this.now().getTime() + DEGRADED_INSIGHTS_CACHE_TTL_SECONDS * 1_000,
+      }
+    );
+  }
+
+  async deleteDegradedInsightsCache(
+    installID: string,
+    key: ContextStorageKeyInput
+  ): Promise<void> {
+    this.degradedInsightsCache.delete(
+      degradedInsightsCacheKey(
+        installID,
+        key.contextHash,
+        key.contextProfile,
+        key.contextVersion,
+        key.analyticsVersion,
+        key.promptVersion ?? this.promptVersion,
+        key.routingVersion ?? DEFAULT_MODEL_ROUTING_VERSION,
+        key.model ?? this.model
+      )
     );
   }
 
@@ -2685,6 +2840,28 @@ function legacyInsightsCacheKey(
   model: string
 ): string {
   return `${installID}:insights:${contextHash}:${contextProfile}:${contextVersion}:${analyticsVersion}:${promptVersion}:${model}`;
+}
+
+function degradedInsightsCacheKey(
+  installID: string,
+  contextHash: string,
+  contextProfile: CoachContextProfile,
+  contextVersion: string,
+  analyticsVersion: string,
+  promptVersion: string,
+  routingVersion: string,
+  model: string
+): string {
+  return `${insightsCacheKey(
+    installID,
+    contextHash,
+    contextProfile,
+    contextVersion,
+    analyticsVersion,
+    promptVersion,
+    routingVersion,
+    model
+  )}:degraded`;
 }
 
 function chatMemoryKey(

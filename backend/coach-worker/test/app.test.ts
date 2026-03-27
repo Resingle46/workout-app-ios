@@ -19,6 +19,11 @@ import {
   InMemoryCoachStateRepository,
   storageKeyFromMetadata,
 } from "../src/state";
+import {
+  buildProfileInsightsRoutingAttempts,
+  buildProfileInsightsRoutingDecision,
+  resolveModelForRole,
+} from "../src/routing";
 import type {
   AppSnapshotPayload,
   BackupUploadRequest,
@@ -650,6 +655,400 @@ describe("coach worker app", () => {
       summary: "Fresh remote summary",
       generationStatus: "model",
       insightSource: "fresh_model",
+    });
+  });
+
+  it("reuses degraded profile insights sidecar responses on the next startup request", async () => {
+    const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
+    let inferenceCalls = 0;
+    const app = createApp({
+      createInferenceService: () => ({
+        async generateProfileInsights() {
+          inferenceCalls += 1;
+          return {
+            data: {
+              summary: "Fallback sidecar summary",
+              recommendations: ["Fallback sidecar recommendation"],
+              generationStatus: "fallback",
+              insightSource: "fallback",
+            },
+            model: DEFAULT_AI_MODEL,
+            mode: "local_fallback",
+          };
+        },
+        async generateWorkoutSummary() {
+          throw new Error("not used");
+        },
+        async generateChat() {
+          throw new Error("not used");
+        },
+      }),
+      createStateRepository: () => repository,
+    });
+    const body = makeProfileInsightsRequestFixture();
+
+    const firstResponse = await app.fetch(
+      authedRequest("https://coach.example.workers.dev/v1/coach/profile-insights", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+      makeEnv()
+    );
+    const secondResponse = await app.fetch(
+      authedRequest("https://coach.example.workers.dev/v1/coach/profile-insights", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+      makeEnv()
+    );
+
+    expect(firstResponse.status).toBe(200);
+    expect(secondResponse.status).toBe(200);
+    expect(inferenceCalls).toBe(1);
+    await expect(secondResponse.json()).resolves.toMatchObject({
+      summary: "Fallback sidecar summary",
+      generationStatus: "fallback",
+      insightSource: "fallback",
+    });
+  });
+
+  it("prefers model cache over degraded sidecar cache for the same insights key", async () => {
+    const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
+    const body = makeProfileInsightsRequestFixture();
+    const context = await repository.resolveCoachContext(body);
+    const key = storageKeyFromMetadata(
+      context.contextHash,
+      {
+        contextProfile: "compact_sync_v2",
+        contextVersion: context.contextVersion,
+        analyticsVersion: context.analyticsVersion,
+        promptProfile: "profile_compact_context_v2",
+        memoryProfile: "compact_v1",
+      },
+      "test.v1",
+      DEFAULT_AI_MODEL
+    );
+    await repository.storeInsightsCache(body.installID, key, {
+      summary: "Cached model summary",
+      recommendations: ["Cached model recommendation"],
+      generationStatus: "model",
+      insightSource: "fresh_model",
+    });
+    await repository.storeDegradedInsightsCache(body.installID, key, {
+      summary: "Cached degraded summary",
+      recommendations: ["Cached degraded recommendation"],
+      generationStatus: "fallback",
+      insightSource: "fallback",
+    });
+
+    const app = createApp({
+      createInferenceService: () => stubInferenceService(),
+      createStateRepository: () => repository,
+    });
+
+    const response = await app.fetch(
+      authedRequest("https://coach.example.workers.dev/v1/coach/profile-insights", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+      makeEnv()
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      summary: "Cached model summary",
+      generationStatus: "model",
+      insightSource: "cached_model",
+    });
+  });
+
+  it("bypasses degraded sidecar cache on force refresh", async () => {
+    const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
+    let inferenceCalls = 0;
+    const body = makeProfileInsightsRequestFixture();
+    const context = await repository.resolveCoachContext(body);
+    const key = storageKeyFromMetadata(
+      context.contextHash,
+      {
+        contextProfile: "compact_sync_v2",
+        contextVersion: context.contextVersion,
+        analyticsVersion: context.analyticsVersion,
+        promptProfile: "profile_compact_context_v2",
+        memoryProfile: "compact_v1",
+      },
+      "test.v1",
+      DEFAULT_AI_MODEL
+    );
+    await repository.storeDegradedInsightsCache(body.installID, key, {
+      summary: "Cached degraded summary",
+      recommendations: ["Cached degraded recommendation"],
+      generationStatus: "fallback",
+      insightSource: "fallback",
+    });
+
+    const app = createApp({
+      createInferenceService: () => ({
+        async generateProfileInsights() {
+          inferenceCalls += 1;
+          return {
+            data: {
+              summary: "Force refreshed summary",
+              recommendations: ["Force refreshed recommendation"],
+              generationStatus: "model",
+              insightSource: "fresh_model",
+            },
+            model: DEFAULT_AI_MODEL,
+            mode: "structured",
+          };
+        },
+        async generateWorkoutSummary() {
+          throw new Error("not used");
+        },
+        async generateChat() {
+          throw new Error("not used");
+        },
+      }),
+      createStateRepository: () => repository,
+    });
+
+    const response = await app.fetch(
+      authedRequest("https://coach.example.workers.dev/v1/coach/profile-insights", {
+        method: "POST",
+        body: JSON.stringify({
+          ...body,
+          forceRefresh: true,
+        }),
+      }),
+      makeEnv()
+    );
+
+    expect(response.status).toBe(200);
+    expect(inferenceCalls).toBe(1);
+    await expect(response.json()).resolves.toMatchObject({
+      summary: "Force refreshed summary",
+      generationStatus: "model",
+      insightSource: "fresh_model",
+    });
+  });
+
+  it("does not reuse degraded sidecar cache after the insights fingerprint changes", async () => {
+    const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
+    let inferenceCalls = 0;
+    const originalBody = makeProfileInsightsRequestFixture();
+    const originalContext = await repository.resolveCoachContext(originalBody);
+    const originalKey = storageKeyFromMetadata(
+      originalContext.contextHash,
+      {
+        contextProfile: "compact_sync_v2",
+        contextVersion: originalContext.contextVersion,
+        analyticsVersion: originalContext.analyticsVersion,
+        promptProfile: "profile_compact_context_v2",
+        memoryProfile: "compact_v1",
+      },
+      "test.v1",
+      DEFAULT_AI_MODEL
+    );
+    await repository.storeDegradedInsightsCache(originalBody.installID, originalKey, {
+      summary: "Old degraded summary",
+      recommendations: ["Old degraded recommendation"],
+      generationStatus: "fallback",
+      insightSource: "fallback",
+    });
+
+    const changedBody = makeProfileInsightsRequestFixture();
+    const changedSnapshot = changedBody.snapshot!;
+    changedBody.snapshotHash = "different-snapshot-hash";
+    changedBody.snapshot = {
+      ...changedSnapshot,
+      analytics: {
+        ...changedSnapshot.analytics,
+        consistency: {
+          ...changedSnapshot.analytics.consistency,
+          workoutsThisWeek: changedSnapshot.analytics.consistency.workoutsThisWeek + 1,
+        },
+      },
+    };
+
+    const app = createApp({
+      createInferenceService: () => ({
+        async generateProfileInsights() {
+          inferenceCalls += 1;
+          return {
+            data: {
+              summary: "Fresh after fingerprint change",
+              recommendations: ["Fresh recommendation"],
+              generationStatus: "model",
+              insightSource: "fresh_model",
+            },
+            model: DEFAULT_AI_MODEL,
+            mode: "structured",
+          };
+        },
+        async generateWorkoutSummary() {
+          throw new Error("not used");
+        },
+        async generateChat() {
+          throw new Error("not used");
+        },
+      }),
+      createStateRepository: () => repository,
+    });
+
+    const response = await app.fetch(
+      authedRequest("https://coach.example.workers.dev/v1/coach/profile-insights", {
+        method: "POST",
+        body: JSON.stringify(changedBody),
+      }),
+      makeEnv()
+    );
+
+    expect(response.status).toBe(200);
+    expect(inferenceCalls).toBe(1);
+    await expect(response.json()).resolves.toMatchObject({
+      summary: "Fresh after fingerprint change",
+      generationStatus: "model",
+      insightSource: "fresh_model",
+    });
+  });
+
+  it("clears only the matching degraded sidecar entry after a successful model refresh", async () => {
+    const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
+    const body = makeProfileInsightsRequestFixture();
+    const context = await repository.resolveCoachContext(body);
+    const matchingKey = storageKeyFromMetadata(
+      context.contextHash,
+      {
+        contextProfile: "compact_sync_v2",
+        contextVersion: context.contextVersion,
+        analyticsVersion: context.analyticsVersion,
+        promptProfile: "profile_compact_context_v2",
+        memoryProfile: "compact_v1",
+      },
+      "test.v1",
+      DEFAULT_AI_MODEL
+    );
+    const otherKey = {
+      ...matchingKey,
+      contextHash: "ctx_hash_other",
+    };
+    await repository.storeDegradedInsightsCache(body.installID, matchingKey, {
+      summary: "Matching degraded summary",
+      recommendations: ["Matching degraded recommendation"],
+      generationStatus: "fallback",
+      insightSource: "fallback",
+    });
+    await repository.storeDegradedInsightsCache(body.installID, otherKey, {
+      summary: "Other degraded summary",
+      recommendations: ["Other degraded recommendation"],
+      generationStatus: "fallback",
+      insightSource: "fallback",
+    });
+
+    const app = createApp({
+      createInferenceService: () => ({
+        async generateProfileInsights() {
+          return {
+            data: {
+              summary: "Fresh structured summary",
+              recommendations: ["Fresh structured recommendation"],
+              generationStatus: "model",
+              insightSource: "fresh_model",
+            },
+            model: DEFAULT_AI_MODEL,
+            mode: "structured",
+          };
+        },
+        async generateWorkoutSummary() {
+          throw new Error("not used");
+        },
+        async generateChat() {
+          throw new Error("not used");
+        },
+      }),
+      createStateRepository: () => repository,
+    });
+
+    const response = await app.fetch(
+      authedRequest("https://coach.example.workers.dev/v1/coach/profile-insights", {
+        method: "POST",
+        body: JSON.stringify({
+          ...body,
+          forceRefresh: true,
+        }),
+      }),
+      makeEnv()
+    );
+
+    expect(response.status).toBe(200);
+    await expect(
+      repository.getDegradedInsightsCache(body.installID, matchingKey)
+    ).resolves.toBeNull();
+    await expect(
+      repository.getDegradedInsightsCache(body.installID, otherKey)
+    ).resolves.toMatchObject({
+      summary: "Other degraded summary",
+      generationStatus: "fallback",
+    });
+  });
+
+  it("stores live fallback results only in the degraded sidecar cache", async () => {
+    const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
+    const body = makeProfileInsightsRequestFixture();
+    const context = await repository.resolveCoachContext(body);
+    const key = storageKeyFromMetadata(
+      context.contextHash,
+      {
+        contextProfile: "compact_sync_v2",
+        contextVersion: context.contextVersion,
+        analyticsVersion: context.analyticsVersion,
+        promptProfile: "profile_compact_context_v2",
+        memoryProfile: "compact_v1",
+      },
+      "test.v1",
+      DEFAULT_AI_MODEL
+    );
+    const app = createApp({
+      createInferenceService: () => ({
+        async generateProfileInsights() {
+          return {
+            data: {
+              summary: "Local fallback summary",
+              recommendations: ["Local fallback recommendation"],
+              generationStatus: "fallback",
+              insightSource: "fallback",
+            },
+            model: DEFAULT_AI_MODEL,
+            mode: "local_fallback",
+          };
+        },
+        async generateWorkoutSummary() {
+          throw new Error("not used");
+        },
+        async generateChat() {
+          throw new Error("not used");
+        },
+      }),
+      createStateRepository: () => repository,
+    });
+
+    const response = await app.fetch(
+      authedRequest("https://coach.example.workers.dev/v1/coach/profile-insights", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+      makeEnv()
+    );
+
+    expect(response.status).toBe(200);
+    await expect(
+      repository.getInsightsCache(body.installID, key)
+    ).resolves.toBeNull();
+    await expect(
+      repository.getDegradedInsightsCache(body.installID, key)
+    ).resolves.toMatchObject({
+      summary: "Local fallback summary",
+      generationStatus: "fallback",
+      insightSource: "fallback",
     });
   });
 
@@ -1980,6 +2379,106 @@ describe("coach worker app", () => {
   });
 });
 
+describe("profile insights routing", () => {
+  it("resolves the insights_fast role from INSIGHTS_FAST_MODEL before chat fast defaults", () => {
+    const env = makeEnv({
+      MODEL_ROUTING_ENABLED: "true",
+      INSIGHTS_FAST_MODEL: "@cf/test/profile-fast",
+    });
+
+    expect(resolveModelForRole(env, "insights_fast")).toBe("@cf/test/profile-fast");
+  });
+
+  it("builds profile insights attempts in fast -> balanced -> quality -> plain-text order", () => {
+    const env = makeEnv({
+      MODEL_ROUTING_ENABLED: "true",
+      INSIGHTS_FAST_MODEL: "@cf/test/profile-fast",
+      INSIGHTS_BALANCED_MODEL: "@cf/test/profile-balanced",
+      QUALITY_ESCALATION_ENABLED: "true",
+      QUALITY_ESCALATION_MODEL: "@cf/test/profile-quality",
+      SYNC_FALLBACK_MODEL: "@cf/test/profile-fallback",
+    });
+
+    const decision = buildProfileInsightsRoutingDecision(
+      env,
+      makeProfileInsightsRequestFixture()
+    );
+    const attempts = buildProfileInsightsRoutingAttempts(env, decision);
+
+    expect(attempts.map((attempt) => [attempt.modelRole, attempt.mode])).toEqual([
+      ["insights_fast", "structured"],
+      ["insights_balanced", "structured"],
+      ["quality_escalation", "structured"],
+      ["sync_fallback", "plain_text_fallback"],
+    ]);
+    expect(attempts.map((attempt) => attempt.selectedModel)).toEqual([
+      "@cf/test/profile-fast",
+      "@cf/test/profile-balanced",
+      "@cf/test/profile-quality",
+      "@cf/test/profile-fallback",
+    ]);
+    expect(attempts.map((attempt) => attempt.fallbackHopCount)).toEqual([0, 1, 2, 3]);
+  });
+
+  it("dedupes profile insights attempts by effective model and mode", () => {
+    const env = makeEnv({
+      MODEL_ROUTING_ENABLED: "true",
+      INSIGHTS_FAST_MODEL: "@cf/test/shared",
+      INSIGHTS_BALANCED_MODEL: "@cf/test/shared",
+      QUALITY_ESCALATION_ENABLED: "true",
+      QUALITY_ESCALATION_MODEL: "@cf/test/shared",
+      SYNC_FALLBACK_MODEL: "@cf/test/shared",
+    });
+
+    const decision = buildProfileInsightsRoutingDecision(
+      env,
+      makeProfileInsightsRequestFixture()
+    );
+    const attempts = buildProfileInsightsRoutingAttempts(env, decision);
+
+    expect(attempts.map((attempt) => [attempt.selectedModel, attempt.mode])).toEqual([
+      ["@cf/test/shared", "structured"],
+      ["@cf/test/shared", "plain_text_fallback"],
+    ]);
+  });
+
+  it("omits quality escalation when the feature is disabled", () => {
+    const env = makeEnv({
+      MODEL_ROUTING_ENABLED: "true",
+      QUALITY_ESCALATION_ENABLED: "false",
+    });
+
+    const decision = buildProfileInsightsRoutingDecision(
+      env,
+      makeProfileInsightsRequestFixture()
+    );
+    const attempts = buildProfileInsightsRoutingAttempts(env, decision);
+
+    expect(attempts.some((attempt) => attempt.modelRole === "quality_escalation")).toBe(
+      false
+    );
+  });
+
+  it("skips quality escalation when it resolves to the same model as insights_balanced", () => {
+    const env = makeEnv({
+      MODEL_ROUTING_ENABLED: "true",
+      INSIGHTS_BALANCED_MODEL: "@cf/test/profile-balanced",
+      QUALITY_ESCALATION_ENABLED: "true",
+      QUALITY_ESCALATION_MODEL: "@cf/test/profile-balanced",
+    });
+
+    const decision = buildProfileInsightsRoutingDecision(
+      env,
+      makeProfileInsightsRequestFixture()
+    );
+    const attempts = buildProfileInsightsRoutingAttempts(env, decision);
+
+    expect(attempts.some((attempt) => attempt.modelRole === "quality_escalation")).toBe(
+      false
+    );
+  });
+});
+
 describe("WorkersAICoachService", () => {
   it("replays recent conversation turns and ignores previousResponseID", async () => {
     const aiRun = vi.fn().mockResolvedValue({
@@ -2321,6 +2820,137 @@ describe("WorkersAICoachService", () => {
     ]);
   });
 
+  it("retries profile insights on balanced structured routing after a fast structured failure", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const aiRun = vi
+      .fn()
+      .mockResolvedValueOnce({
+        response: "not valid json",
+      })
+      .mockResolvedValueOnce({
+        response: {
+          summary: "Balanced route succeeded.",
+          recommendations: ["Keep the current weekly load stable."],
+        },
+      });
+
+    try {
+      const service = new WorkersAICoachService(
+        makeEnv({
+          AI: { run: aiRun },
+          MODEL_ROUTING_ENABLED: "true",
+          QUALITY_ESCALATION_ENABLED: "false",
+        })
+      );
+
+      const result = await service.generateProfileInsights(
+        makeProfileInsightsRequestFixture()
+      );
+
+      expect(aiRun.mock.calls.map(([model]) => model)).toEqual([
+        "@cf/zai-org/glm-4.7-flash",
+        DEFAULT_AI_MODEL,
+      ]);
+      expect(result.mode).toBe("structured");
+      expect(result.model).toBe(DEFAULT_AI_MODEL);
+      expect(result.modelRole).toBe("insights_balanced");
+      expect(result.fallbackHopCount).toBe(1);
+      expect(result.data.summary).toBe("Balanced route succeeded.");
+
+      const warnEvents = parseLoggedPayloads(warnSpy).map((payload) => payload.event);
+      const logPayloads = parseLoggedPayloads(logSpy);
+      expect(warnEvents).toContain("coach_profile_attempt_failed");
+      expect(logPayloads).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            event: "coach_profile_attempt_succeeded",
+            selectedModel: DEFAULT_AI_MODEL,
+            modelRole: "insights_balanced",
+            fallbackHopCount: 1,
+          }),
+        ])
+      );
+    } finally {
+      logSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("falls back to sync_fallback plain text after structured profile insights failures", async () => {
+    const aiRun = vi
+      .fn()
+      .mockResolvedValueOnce({
+        response: "not valid json",
+      })
+      .mockResolvedValueOnce({
+        response: "still not valid json",
+      })
+      .mockResolvedValueOnce({
+        response: [
+          "Summary: Sync fallback kept the response moving.",
+          "",
+          "- Hold volume steady for one more week.",
+        ].join("\n"),
+      });
+
+    const service = new WorkersAICoachService(
+      makeEnv({
+        AI: { run: aiRun },
+        MODEL_ROUTING_ENABLED: "true",
+        QUALITY_ESCALATION_ENABLED: "false",
+      })
+    );
+    const result = await service.generateProfileInsights(
+      makeProfileInsightsRequestFixture()
+    );
+
+    expect(aiRun.mock.calls.map(([model]) => model)).toEqual([
+      "@cf/zai-org/glm-4.7-flash",
+      DEFAULT_AI_MODEL,
+      "@cf/meta/llama-3.1-8b-instruct-fast",
+    ]);
+    expect(result.mode).toBe("plain_text_fallback");
+    expect(result.model).toBe("@cf/meta/llama-3.1-8b-instruct-fast");
+    expect(result.modelRole).toBe("sync_fallback");
+    expect(result.data.summary).toBe("Sync fallback kept the response moving.");
+    expect(result.data.recommendations).toEqual([
+      "Hold volume steady for one more week.",
+    ]);
+  });
+
+  it("drops to local fallback when the reserved plain-text budget is no longer available", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-27T00:00:00.000Z"));
+    const aiRun = vi.fn().mockImplementation(() => {
+      vi.setSystemTime(new Date("2026-03-27T00:00:22.600Z"));
+      return Promise.reject(new Error("Request timed out"));
+    });
+
+    try {
+      const service = new WorkersAICoachService(
+        makeEnv({
+          AI: { run: aiRun },
+          MODEL_ROUTING_ENABLED: "true",
+          QUALITY_ESCALATION_ENABLED: "true",
+          QUALITY_ESCALATION_MODEL: "@cf/test/profile-quality",
+        })
+      );
+
+      const result = await service.generateProfileInsights(
+        makeProfileInsightsRequestFixture()
+      );
+
+      expect(aiRun).toHaveBeenCalledTimes(1);
+      expect(result.mode).toBe("local_fallback");
+      expect(result.fallbackReason).toBe("sync_budget_exhausted");
+      expect(result.data.generationStatus).toBe("fallback");
+      expect(result.data.insightSource).toBe("fallback");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("falls back to neutral local profile insights when inference fails", async () => {
     const aiRun = vi
       .fn()
@@ -2560,6 +3190,7 @@ function makeEnv(overrides: Partial<Env> = {}): Env {
     SUMMARY_FAST_MODEL: "@cf/zai-org/glm-4.7-flash",
     SUMMARY_BALANCED_MODEL: DEFAULT_AI_MODEL,
     SYNC_FALLBACK_MODEL: "@cf/meta/llama-3.1-8b-instruct-fast",
+    INSIGHTS_FAST_MODEL: "@cf/zai-org/glm-4.7-flash",
     INSIGHTS_BALANCED_MODEL: DEFAULT_AI_MODEL,
     QUALITY_ESCALATION_ENABLED: "false",
     ...overrides,
@@ -2589,6 +3220,13 @@ function parseLoggedPayload(mock: { mock: { calls: unknown[][] } }): Record<stri
   }
 
   return JSON.parse(payload) as Record<string, unknown>;
+}
+
+function parseLoggedPayloads(mock: { mock: { calls: unknown[][] } }): Record<string, unknown>[] {
+  return mock.mock.calls
+    .map((call) => call[0])
+    .filter((payload): payload is string => typeof payload === "string")
+    .map((payload) => JSON.parse(payload) as Record<string, unknown>);
 }
 
 function makeBackupUploadRequestFixture(): BackupUploadRequest {

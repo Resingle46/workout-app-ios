@@ -291,10 +291,20 @@ export function createApp(
                 storageKey
               )
             : null;
+          const degradedCachedResponse = !body.forceRefresh && context.cacheAllowed
+            ? await stateRepository.getDegradedInsightsCache(
+                body.installID,
+                storageKey
+              )
+            : null;
           const cacheLookupMs = deps.now() - cacheLookupStartedAt;
           const reusableCachedResponse = normalizeReusableProfileInsightsCacheEntry(
             cachedResponse
           );
+          const reusableDegradedCachedResponse =
+            normalizeReusableDegradedProfileInsightsCacheEntry(
+              degradedCachedResponse
+            );
 
           if (reusableCachedResponse) {
             logRequest({
@@ -312,6 +322,9 @@ export function createApp(
               contextResolveMs,
               insightSource: reusableCachedResponse.insightSource,
               modelInferenceExecuted: false,
+              responseSource: "model_cache",
+              cacheSource: "model_cache",
+              fallbackSource: "none",
               useCase: routingDecision.useCase,
               modelRole: routingDecision.modelRole,
               selectedModel: routingDecision.selectedModel,
@@ -324,6 +337,42 @@ export function createApp(
               preferredProgramWorkoutCount,
             });
             return json(reusableCachedResponse, 200);
+          }
+
+          if (reusableDegradedCachedResponse) {
+            logRequest({
+              requestID,
+              route: pathname,
+              method: request.method,
+              status: 200,
+              durationMs: deps.now() - startedAt,
+              installID: body.installID,
+              contextSource: context.source,
+              profileContextVariant: executionMetadata.promptProfile,
+              forceRefresh: body.forceRefresh,
+              insightsCacheHit: true,
+              cacheLookupMs,
+              contextResolveMs,
+              insightSource: reusableDegradedCachedResponse.insightSource,
+              modelInferenceExecuted: false,
+              responseSource: "degraded_sidecar",
+              cacheSource: "degraded_sidecar",
+              fallbackSource:
+                reusableDegradedCachedResponse.generationStatus === "fallback"
+                  ? "local_fallback"
+                  : "none",
+              useCase: routingDecision.useCase,
+              modelRole: routingDecision.modelRole,
+              selectedModel: routingDecision.selectedModel,
+              routingVersion: routingDecision.routingVersion,
+              routingReasonTags: routingDecision.routingReasonTags,
+              snapshotBytes,
+              programCommentChars,
+              recentPrCount,
+              relativeStrengthCount,
+              preferredProgramWorkoutCount,
+            });
+            return json(reusableDegradedCachedResponse, 200);
           }
 
           const inferenceStartedAt = deps.now();
@@ -345,16 +394,36 @@ export function createApp(
             body.forceRefresh,
             context.cacheAllowed
           );
+          const liveResponseSource = isLiveProfileInsightsFallbackMode(result.mode)
+            ? "live_fallback"
+            : "live_model";
+          const fallbackSource =
+            result.mode === "local_fallback" ? "local_fallback" : "none";
+          const cacheSource = body.forceRefresh
+            ? "bypassed_force_refresh"
+            : "miss";
 
-          if (
-            context.cacheAllowed &&
-            result.data.generationStatus === "model"
-          ) {
-            await stateRepository.storeInsightsCache(
-              body.installID,
-              storageKey,
-              result.data
-            );
+          if (context.cacheAllowed) {
+            if (
+              (!result.mode || result.mode === "structured") &&
+              result.data.generationStatus === "model"
+            ) {
+              await stateRepository.storeInsightsCache(
+                body.installID,
+                storageKey,
+                result.data
+              );
+              await stateRepository.deleteDegradedInsightsCache(
+                body.installID,
+                storageKey
+              );
+            } else if (isLiveProfileInsightsFallbackMode(result.mode)) {
+              await stateRepository.storeDegradedInsightsCache(
+                body.installID,
+                storageKey,
+                result.data
+              );
+            }
           }
           cacheStoreMs = deps.now() - cacheStoreStartedAt;
 
@@ -387,6 +456,9 @@ export function createApp(
             contextResolveMs,
             insightSource: result.data.insightSource,
             modelInferenceExecuted: true,
+            responseSource: liveResponseSource,
+            cacheSource,
+            fallbackSource,
             snapshotBytes,
             programCommentChars,
             recentPrCount,
@@ -394,6 +466,8 @@ export function createApp(
             preferredProgramWorkoutCount,
             promptBytes: result.promptBytes,
             modelDurationMs,
+            fallbackPromptBytes: result.fallbackPromptBytes,
+            fallbackModelDurationMs: result.fallbackModelDurationMs,
           });
           return json(result.data, 200);
         }
@@ -1903,4 +1977,14 @@ function normalizeReusableProfileInsightsCacheEntry(
     ...response,
     insightSource: "cached_model",
   };
+}
+
+function normalizeReusableDegradedProfileInsightsCacheEntry(
+  response: CoachProfileInsightsResponse | null
+): CoachProfileInsightsResponse | null {
+  return response;
+}
+
+function isLiveProfileInsightsFallbackMode(mode: string | undefined): boolean {
+  return mode === "plain_text_fallback" || mode === "local_fallback";
 }

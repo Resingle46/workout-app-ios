@@ -34,6 +34,7 @@ import {
   DEFAULT_AI_MODEL,
   buildChatRoutingAttempts,
   buildChatRoutingDecision,
+  buildProfileInsightsRoutingAttempts,
   buildProfileInsightsRoutingDecision,
   buildWorkoutSummaryRoutingAttempts,
   buildWorkoutSummaryRoutingDecision,
@@ -41,6 +42,7 @@ import {
   type CoachModelRole,
   type CoachPayloadTier,
   type CoachRoutingUseCase,
+  type ProfileInsightsRoutingAttempt,
   type StructuredAdapter,
   type WorkoutSummaryRoutingAttempt,
 } from "./routing";
@@ -64,6 +66,8 @@ const PROFILE_INSIGHTS_TIMEOUTS = {
   fallbackTimeoutMs: 5_000,
   fallbackMinTimeoutMs: 3_000,
 } as const;
+const PROFILE_INSIGHTS_STRUCTURED_MIN_TIMEOUT_MS = 1_500;
+const PROFILE_INSIGHTS_STRUCTURED_SAFETY_BUFFER_MS = 750;
 const ASYNC_LONG_TIMEOUTS = {
   totalBudgetMs: 570_000,
   structuredTimeoutMs: 510_000,
@@ -216,6 +220,7 @@ export class WorkersAICoachService implements CoachInferenceService {
     const timeouts =
       timeoutProfile === "async_job" ? ASYNC_LONG_TIMEOUTS : PROFILE_INSIGHTS_TIMEOUTS;
     const routingDecision = buildProfileInsightsRoutingDecision(this.env, request);
+    const attempts = buildProfileInsightsRoutingAttempts(this.env, routingDecision);
     const promptExecution = resolvePromptExecution(
       request,
       options,
@@ -231,6 +236,10 @@ export class WorkersAICoachService implements CoachInferenceService {
       promptExecution.derivedAnalytics
     );
     const startedAt = Date.now();
+    const stats = createAttemptAccumulator();
+    const errors: CoachInferenceServiceError[] = [];
+    let degradedReason: string | undefined;
+    let lastAttempt: ProfileInsightsRoutingAttempt | undefined;
     const sharedDetails = {
       promptVariant: promptExecution.promptProfile,
       contextProfile: promptExecution.contextProfile,
@@ -247,221 +256,191 @@ export class WorkersAICoachService implements CoachInferenceService {
     const fallbackMaxTokens = isRichContextProfile(promptExecution.contextProfile)
       ? PROFILE_INSIGHTS_ASYNC_PLAIN_TEXT_MAX_TOKENS
       : PROFILE_INSIGHTS_PLAIN_TEXT_MAX_TOKENS;
-    const routingTelemetry = {
-      useCase: routingDecision.useCase,
-      modelRole: routingDecision.modelRole,
-      routingVersion: routingDecision.routingVersion,
-      routingReasonTags: routingDecision.routingReasonTags,
-    };
-
-    try {
-      logInferenceAttempt("coach_profile_attempt_started", {
-        operation,
-        selectedModel: routingDecision.selectedModel,
-        contextProfile: promptExecution.contextProfile,
-        mode: "structured",
-        fallbackHopCount: 0,
-        attemptReason: "primary_selected_route",
-        ...routingTelemetry,
-      });
-      const invocation = await this.runStructured({
-        selectedModel: routingDecision.selectedModel,
-        structuredAdapter: routingDecision.structuredAdapter,
-        operation,
-        messages: buildProfileInsightsMessages(request, promptExecution),
-        schema: profileInsightsResponseJsonSchema,
-        maxTokens: structuredMaxTokens,
-        timeoutMs: timeouts.structuredTimeoutMs,
-        extraDetails: {
-          ...sharedDetails,
-          useCase: routingDecision.useCase,
-          modelRole: routingDecision.modelRole,
-          routingVersion: routingDecision.routingVersion,
-        },
-      });
-      const parsed = normalizeProfileInsightsResponse(
-        parseStructuredOutput(
-          invocation.rawResponse,
-          profileInsightsModelOutputSchema,
-          "profile insights",
-          {
-            operation,
-            model: routingDecision.selectedModel,
-          }
-        )
-      );
-      const guardedResponse = applyProfileInsightsGuardrails(
-        request,
-        {
-          ...parsed,
-          generationStatus: "model",
-          insightSource: "fresh_model",
-        },
-        localFallback,
-        promptExecution.derivedAnalytics
-      );
-      const fallbackReason = hasProfileGuardrailEmptiedResponse(
-        guardedResponse,
-        localFallback
-      )
-        ? "guardrail_empty"
-        : undefined;
-
-      logInferenceAttempt("coach_profile_attempt_succeeded", {
-        operation,
-        selectedModel: routingDecision.selectedModel,
-        contextProfile: promptExecution.contextProfile,
-        mode: "structured",
-        fallbackHopCount: 0,
-        fallbackReason,
-        attemptReason: "primary_selected_route",
-        modelDurationMs: invocation.modelDurationMs,
-        promptBytes: invocation.promptBytes,
-        ...routingTelemetry,
-      });
-
-      return {
-        data: guardedResponse,
-        model: routingDecision.selectedModel,
-        selectedModel: routingDecision.selectedModel,
-        modelRole: routingDecision.modelRole,
-        useCase: routingDecision.useCase,
-        routingVersion: routingDecision.routingVersion,
-        payloadTier: routingDecision.payloadTier,
-        contextProfile: promptExecution.contextProfile,
-        memoryCompatibilityKey: routingDecision.memoryCompatibilityKey,
-        routingReasonTags: routingDecision.routingReasonTags,
-        fallbackHopCount: 0,
-        fallbackReason,
-        mode: "structured",
-        usage: extractUsage(invocation.rawResponse),
-        promptBytes: invocation.promptBytes,
-        modelDurationMs: invocation.modelDurationMs,
-      };
-    } catch (error) {
-      if (!(error instanceof CoachInferenceServiceError)) {
-        throw error;
-      }
-
-      if (!shouldAttemptProfilePlainTextFallback(error)) {
-        const fallbackReason = resolveProfileFallbackReasonFromError(
-          error,
-          timeoutProfile
-        );
-        console.warn(
-          JSON.stringify({
-            event: "coach_profile_local_fallback",
-            operation,
-            model: routingDecision.selectedModel,
-            promptVariant: sharedDetails.promptVariant,
-            fallbackReason,
-            reasonCode: error.code,
-            reasonDetails: error.details,
-            ...routingTelemetry,
-          })
-        );
-
-        return {
-          data: localFallback,
-          model: routingDecision.selectedModel,
-          selectedModel: routingDecision.selectedModel,
-          modelRole: routingDecision.modelRole,
-          useCase: routingDecision.useCase,
-          routingVersion: routingDecision.routingVersion,
-          payloadTier: routingDecision.payloadTier,
-          contextProfile: promptExecution.contextProfile,
-          memoryCompatibilityKey: routingDecision.memoryCompatibilityKey,
-          routingReasonTags: routingDecision.routingReasonTags,
-          fallbackHopCount: 1,
-          fallbackReason,
-          mode: "local_fallback",
-        };
-      }
-
+    for (const attempt of attempts) {
+      lastAttempt = attempt;
       const remainingBudgetMs = remainingProfileInsightsBudgetMs(
         startedAt,
         timeouts.totalBudgetMs
       );
-      const structuredFallbackReason = resolveProfileFallbackReasonFromError(
-        error,
+      const timeoutMs = resolveProfileInsightsAttemptTimeoutMs(
+        attempt,
+        remainingBudgetMs,
+        timeouts,
         timeoutProfile
       );
+      const priorFallbackReason =
+        attempt.fallbackHopCount > 0
+          ? resolveProfileFallbackReasonFromError(errors.at(-1), timeoutProfile)
+          : undefined;
 
-      console.warn(
-        JSON.stringify({
-          event: "coach_profile_structured_fallback",
-          operation,
-          model: routingDecision.selectedModel,
-          promptVariant: sharedDetails.promptVariant,
-          fallbackReason: structuredFallbackReason,
-          reasonCode: error.code,
-          reasonDetails: error.details,
-          remainingBudgetMs,
-          ...routingTelemetry,
-        })
-      );
-
-      if (remainingBudgetMs < timeouts.fallbackMinTimeoutMs) {
-        const fallbackReason =
+      if (
+        attempt.mode === "structured" &&
+        timeoutMs < PROFILE_INSIGHTS_STRUCTURED_MIN_TIMEOUT_MS
+      ) {
+        degradedReason =
           timeoutProfile === "async_job"
             ? "async_budget_exhausted"
             : "sync_budget_exhausted";
         console.warn(
           JSON.stringify({
-            event: "coach_profile_local_fallback",
+            event: "coach_profile_structured_fallback",
             operation,
-            model: routingDecision.selectedModel,
-            promptVariant: sharedDetails.promptVariant,
-            fallbackReason,
-            reasonCode: error.code,
-            reasonDetails: error.details,
-            degradedReason: "insufficient_fallback_budget",
+            selectedModel: attempt.selectedModel,
+            modelRole: attempt.modelRole,
+            useCase: attempt.useCase,
+            routingVersion: attempt.routingVersion,
+            routingReasonTags: attempt.routingReasonTags,
+            contextProfile: attempt.contextProfile,
+            fallbackHopCount: attempt.fallbackHopCount,
+            fallbackReason: degradedReason,
+            attemptReason: attempt.attemptReason,
+            fallbackStage: attempt.fallbackStage,
+            mode: attempt.mode,
+            reasonCode: "insufficient_budget_for_structured_attempt",
+            promptBytes: undefined,
+            modelDurationMs: undefined,
             remainingBudgetMs,
-            ...routingTelemetry,
           })
         );
-
-        return {
-          data: localFallback,
-          model: routingDecision.selectedModel,
-          selectedModel: routingDecision.selectedModel,
-          modelRole: routingDecision.modelRole,
-          useCase: routingDecision.useCase,
-          routingVersion: routingDecision.routingVersion,
-          payloadTier: routingDecision.payloadTier,
-          contextProfile: promptExecution.contextProfile,
-          memoryCompatibilityKey: routingDecision.memoryCompatibilityKey,
-          routingReasonTags: routingDecision.routingReasonTags,
-          fallbackHopCount: 1,
-          fallbackReason,
-          mode: "local_fallback",
-        };
+        continue;
       }
+
+      if (
+        attempt.mode === "plain_text_fallback" &&
+        timeoutMs < timeouts.fallbackMinTimeoutMs
+      ) {
+        degradedReason =
+          timeoutProfile === "async_job"
+            ? "async_budget_exhausted"
+            : "sync_budget_exhausted";
+        break;
+      }
+
+      const attemptExecution = {
+        ...promptExecution,
+        contextProfile: attempt.contextProfile,
+        promptProfile: attempt.promptProfile,
+      };
 
       try {
         logInferenceAttempt("coach_profile_attempt_started", {
           operation,
-          selectedModel: routingDecision.selectedModel,
-          contextProfile: promptExecution.contextProfile,
-          mode: "plain_text_fallback",
-          fallbackHopCount: 1,
-          fallbackReason: structuredFallbackReason,
-          attemptReason: "plain_text_after_structured_failure",
-          ...routingTelemetry,
+          selectedModel: attempt.selectedModel,
+          modelRole: attempt.modelRole,
+          useCase: attempt.useCase,
+          routingVersion: attempt.routingVersion,
+          routingReasonTags: attempt.routingReasonTags,
+          contextProfile: attempt.contextProfile,
+          fallbackHopCount: attempt.fallbackHopCount,
+          fallbackReason: priorFallbackReason,
+          attemptReason: attempt.attemptReason,
+          fallbackStage: attempt.fallbackStage,
+          mode: attempt.mode,
+          remainingBudgetMs,
         });
+
+        if (attempt.mode === "structured") {
+          const invocation = await this.runStructured({
+            selectedModel: attempt.selectedModel,
+            structuredAdapter: attempt.structuredAdapter,
+            operation,
+            messages: buildProfileInsightsMessages(request, attemptExecution),
+            schema: profileInsightsResponseJsonSchema,
+            maxTokens: structuredMaxTokens,
+            timeoutMs,
+            extraDetails: buildProfileInsightsAttemptDetails(
+              request,
+              attempt,
+              remainingBudgetMs,
+              sharedDetails
+            ),
+          });
+          stats.structuredPromptBytes += invocation.promptBytes;
+          stats.structuredModelDurationMs += invocation.modelDurationMs;
+          const parsed = normalizeProfileInsightsResponse(
+            parseStructuredOutput(
+              invocation.rawResponse,
+              profileInsightsModelOutputSchema,
+              "profile insights",
+              {
+                operation,
+                model: attempt.selectedModel,
+              }
+            )
+          );
+          const guardedResponse = applyProfileInsightsGuardrails(
+            request,
+            {
+              ...parsed,
+              generationStatus: "model",
+              insightSource: "fresh_model",
+            },
+            localFallback,
+            attemptExecution.derivedAnalytics
+          );
+          const fallbackReason = hasProfileGuardrailEmptiedResponse(
+            guardedResponse,
+            localFallback
+          )
+            ? "guardrail_empty"
+            : priorFallbackReason;
+
+          logInferenceAttempt("coach_profile_attempt_succeeded", {
+            operation,
+            selectedModel: attempt.selectedModel,
+            modelRole: attempt.modelRole,
+            useCase: attempt.useCase,
+            routingVersion: attempt.routingVersion,
+            routingReasonTags: attempt.routingReasonTags,
+            contextProfile: attempt.contextProfile,
+            fallbackHopCount: attempt.fallbackHopCount,
+            fallbackReason,
+            attemptReason: attempt.attemptReason,
+            fallbackStage: attempt.fallbackStage,
+            mode: attempt.mode,
+            modelDurationMs: invocation.modelDurationMs,
+            promptBytes: invocation.promptBytes,
+          });
+
+          return {
+            data: guardedResponse,
+            model: attempt.selectedModel,
+            selectedModel: attempt.selectedModel,
+            modelRole: attempt.modelRole,
+            useCase: attempt.useCase,
+            routingVersion: attempt.routingVersion,
+            payloadTier: attempt.payloadTier,
+            contextProfile: attempt.contextProfile,
+            memoryCompatibilityKey: attempt.memoryCompatibilityKey,
+            routingReasonTags: attempt.routingReasonTags,
+            fallbackHopCount: attempt.fallbackHopCount,
+            fallbackReason,
+            mode: "structured",
+            usage: extractUsage(invocation.rawResponse),
+            promptBytes: stats.structuredPromptBytes,
+            modelDurationMs: stats.structuredModelDurationMs,
+          };
+        }
+
         const fallbackInvocation = await this.runPlainText({
-          selectedModel: routingDecision.selectedModel,
+          selectedModel: attempt.selectedModel,
           operation,
-          messages: buildFallbackProfileInsightsMessages(request, promptExecution),
+          messages: buildFallbackProfileInsightsMessages(request, attemptExecution),
           maxTokens: fallbackMaxTokens,
-          timeoutMs: Math.min(timeouts.fallbackTimeoutMs, remainingBudgetMs),
+          timeoutMs,
           includeFallbackNotice: false,
           extraDetails: {
-            ...sharedDetails,
-            fallbackTrigger: error.code,
-            remainingBudgetMs,
+            ...buildProfileInsightsAttemptDetails(
+              request,
+              attempt,
+              remainingBudgetMs,
+              sharedDetails
+            ),
+            fallbackTrigger: errors.at(-1)?.code,
           },
         });
+        stats.fallbackPromptBytes = fallbackInvocation.promptBytes;
+        stats.fallbackModelDurationMs = fallbackInvocation.modelDurationMs;
         const guardedResponse = applyProfileInsightsGuardrails(
           request,
           {
@@ -472,88 +451,194 @@ export class WorkersAICoachService implements CoachInferenceService {
             insightSource: "fresh_model",
           },
           localFallback,
-          promptExecution.derivedAnalytics
+          attemptExecution.derivedAnalytics
         );
         const fallbackReason = hasProfileGuardrailEmptiedResponse(
           guardedResponse,
           localFallback
         )
           ? "guardrail_empty"
-          : structuredFallbackReason;
+          : priorFallbackReason;
 
         logInferenceAttempt("coach_profile_attempt_succeeded", {
           operation,
-          selectedModel: routingDecision.selectedModel,
-          contextProfile: promptExecution.contextProfile,
-          mode: "plain_text_fallback",
-          fallbackHopCount: 1,
+          selectedModel: attempt.selectedModel,
+          modelRole: attempt.modelRole,
+          useCase: attempt.useCase,
+          routingVersion: attempt.routingVersion,
+          routingReasonTags: attempt.routingReasonTags,
+          contextProfile: attempt.contextProfile,
+          fallbackHopCount: attempt.fallbackHopCount,
           fallbackReason,
-          attemptReason: "plain_text_after_structured_failure",
+          attemptReason: attempt.attemptReason,
+          fallbackStage: attempt.fallbackStage,
+          mode: attempt.mode,
           modelDurationMs: fallbackInvocation.modelDurationMs,
           promptBytes: fallbackInvocation.promptBytes,
-          ...routingTelemetry,
         });
 
         return {
           data: guardedResponse,
-          model: routingDecision.selectedModel,
-          selectedModel: routingDecision.selectedModel,
-          modelRole: routingDecision.modelRole,
-          useCase: routingDecision.useCase,
-          routingVersion: routingDecision.routingVersion,
-          payloadTier: routingDecision.payloadTier,
-          contextProfile: promptExecution.contextProfile,
-          memoryCompatibilityKey: routingDecision.memoryCompatibilityKey,
-          routingReasonTags: routingDecision.routingReasonTags,
-          fallbackHopCount: 1,
+          model: attempt.selectedModel,
+          selectedModel: attempt.selectedModel,
+          modelRole: attempt.modelRole,
+          useCase: attempt.useCase,
+          routingVersion: attempt.routingVersion,
+          payloadTier: attempt.payloadTier,
+          contextProfile: attempt.contextProfile,
+          memoryCompatibilityKey: attempt.memoryCompatibilityKey,
+          routingReasonTags: attempt.routingReasonTags,
+          fallbackHopCount: attempt.fallbackHopCount,
           fallbackReason,
           mode: "plain_text_fallback",
           usage: extractUsage(fallbackInvocation.rawResponse),
-          promptBytes: fallbackInvocation.promptBytes,
-          modelDurationMs: Date.now() - startedAt,
+          promptBytes: stats.structuredPromptBytes || undefined,
+          fallbackPromptBytes: stats.fallbackPromptBytes,
+          modelDurationMs: stats.structuredModelDurationMs || undefined,
+          fallbackModelDurationMs: stats.fallbackModelDurationMs,
         };
-      } catch (fallbackError) {
-        if (!(fallbackError instanceof CoachInferenceServiceError)) {
-          throw fallbackError;
+      } catch (error) {
+        if (!(error instanceof CoachInferenceServiceError)) {
+          throw error;
         }
+
         const fallbackReason = resolveProfileFallbackReasonFromError(
-          fallbackError,
+          error,
           timeoutProfile
         );
+        const promptBytes = resolvePromptBytes(error.details);
+        const modelDurationMs = resolveModelDurationMs(error.details);
+
+        if (attempt.mode === "structured") {
+          stats.structuredPromptBytes += promptBytes ?? 0;
+          stats.structuredModelDurationMs += modelDurationMs ?? 0;
+        } else {
+          stats.fallbackPromptBytes = promptBytes;
+          stats.fallbackModelDurationMs = modelDurationMs;
+        }
 
         console.warn(
           JSON.stringify({
-            event: "coach_profile_local_fallback",
+            event: "coach_profile_attempt_failed",
             operation,
-            model: routingDecision.selectedModel,
-            promptVariant: sharedDetails.promptVariant,
-            remainingBudgetMs,
+            selectedModel: attempt.selectedModel,
+            modelRole: attempt.modelRole,
+            useCase: attempt.useCase,
+            routingVersion: attempt.routingVersion,
+            routingReasonTags: attempt.routingReasonTags,
+            contextProfile: attempt.contextProfile,
+            fallbackHopCount: attempt.fallbackHopCount,
             fallbackReason,
-            structuredReasonCode: error.code,
-            structuredReasonDetails: error.details,
-            reasonCode: fallbackError.code,
-            reasonDetails: fallbackError.details,
-            ...routingTelemetry,
+            attemptReason: attempt.attemptReason,
+            fallbackStage: attempt.fallbackStage,
+            mode: attempt.mode,
+            reasonCode: error.code,
+            reasonDetails: error.details,
+            promptBytes,
+            modelDurationMs,
+            remainingBudgetMs,
           })
         );
 
-        return {
-          data: localFallback,
-          model: routingDecision.selectedModel,
-          selectedModel: routingDecision.selectedModel,
-          modelRole: routingDecision.modelRole,
-          useCase: routingDecision.useCase,
-          routingVersion: routingDecision.routingVersion,
-          payloadTier: routingDecision.payloadTier,
-          contextProfile: promptExecution.contextProfile,
-          memoryCompatibilityKey: routingDecision.memoryCompatibilityKey,
-          routingReasonTags: routingDecision.routingReasonTags,
-          fallbackHopCount: 2,
-          fallbackReason,
-          mode: "local_fallback",
-        };
+        errors.push(error);
+
+        if (!shouldAttemptProfileModelFallback(error)) {
+          degradedReason = fallbackReason;
+          break;
+        }
+
+        if (attempt.mode === "structured") {
+          const remainingAfterFailure = remainingProfileInsightsBudgetMs(
+            startedAt,
+            timeouts.totalBudgetMs
+          );
+          console.warn(
+            JSON.stringify({
+              event: "coach_profile_structured_fallback",
+              operation,
+              selectedModel: attempt.selectedModel,
+              modelRole: attempt.modelRole,
+              useCase: attempt.useCase,
+              routingVersion: attempt.routingVersion,
+              routingReasonTags: attempt.routingReasonTags,
+              contextProfile: attempt.contextProfile,
+              fallbackHopCount: attempt.fallbackHopCount,
+              fallbackReason,
+              attemptReason: attempt.attemptReason,
+              fallbackStage: attempt.fallbackStage,
+              mode: attempt.mode,
+              reasonCode: error.code,
+              reasonDetails: error.details,
+              promptBytes,
+              modelDurationMs,
+              remainingBudgetMs: remainingAfterFailure,
+            })
+          );
+          continue;
+        }
+
+        degradedReason = fallbackReason;
+        break;
       }
     }
+
+    const fallbackReason =
+      degradedReason ??
+      resolveProfileFallbackReasonFromError(errors.at(-1), timeoutProfile);
+    const finalAttempt = lastAttempt;
+    const selectedModel =
+      (errors.at(-1)?.details?.model as string | undefined) ??
+      finalAttempt?.selectedModel ??
+      routingDecision.selectedModel;
+    const modelRole = finalAttempt?.modelRole ?? routingDecision.modelRole;
+    const contextProfile = finalAttempt?.contextProfile ?? promptExecution.contextProfile;
+    const fallbackHopCount =
+      finalAttempt?.fallbackHopCount ?? Math.max(errors.length, 1);
+
+    console.warn(
+      JSON.stringify({
+        event: "coach_profile_local_fallback",
+        operation,
+        selectedModel,
+        modelRole,
+        useCase: finalAttempt?.useCase ?? routingDecision.useCase,
+        routingVersion: routingDecision.routingVersion,
+        routingReasonTags: routingDecision.routingReasonTags,
+        contextProfile,
+        fallbackHopCount,
+        fallbackReason,
+        attemptReason: finalAttempt?.attemptReason ?? "local_fallback",
+        fallbackStage: finalAttempt?.fallbackStage ?? "primary",
+        reasonCode: errors.at(-1)?.code,
+        reasonDetails: errors.at(-1)?.details,
+        promptBytes:
+          stats.fallbackPromptBytes ??
+          (stats.structuredPromptBytes || undefined),
+        modelDurationMs:
+          stats.fallbackModelDurationMs ??
+          (stats.structuredModelDurationMs || undefined),
+      })
+    );
+
+    return {
+      data: localFallback,
+      model: selectedModel,
+      selectedModel,
+      modelRole,
+      useCase: routingDecision.useCase,
+      routingVersion: routingDecision.routingVersion,
+      payloadTier: routingDecision.payloadTier,
+      contextProfile,
+      memoryCompatibilityKey: routingDecision.memoryCompatibilityKey,
+      routingReasonTags: routingDecision.routingReasonTags,
+      fallbackHopCount,
+      fallbackReason,
+      mode: "local_fallback",
+      promptBytes: stats.structuredPromptBytes || undefined,
+      fallbackPromptBytes: stats.fallbackPromptBytes,
+      modelDurationMs: stats.structuredModelDurationMs || undefined,
+      fallbackModelDurationMs: stats.fallbackModelDurationMs,
+    };
   }
 
   async generateWorkoutSummary(
@@ -1285,6 +1370,30 @@ function buildChatAttemptDetails(
   };
 }
 
+function buildProfileInsightsAttemptDetails(
+  request: CoachProfileInsightsRequest,
+  attempt: ProfileInsightsRoutingAttempt,
+  remainingBudgetMs: number,
+  sharedDetails: Record<string, unknown>
+): Record<string, unknown> {
+  return {
+    promptVariant: attempt.promptProfile,
+    contextProfile: attempt.contextProfile,
+    modelRole: attempt.modelRole,
+    useCase: attempt.useCase,
+    routingVersion: attempt.routingVersion,
+    routingReasonTags: attempt.routingReasonTags,
+    fallbackStage: attempt.fallbackStage,
+    fallbackHopCount: attempt.fallbackHopCount,
+    attemptReason: attempt.attemptReason,
+    payloadTier: attempt.payloadTier,
+    installID: request.installID,
+    capabilityScope: request.capabilityScope,
+    remainingBudgetMs,
+    ...sharedDetails,
+  };
+}
+
 function buildWorkoutSummaryAttemptDetails(
   request: CoachWorkoutSummaryJobCreateRequest,
   attempt: WorkoutSummaryRoutingAttempt,
@@ -1364,6 +1473,45 @@ function resolveChatAttemptTimeoutMs(
   return Math.max(Math.min(stageBudget, remainingBudgetMs), 0);
 }
 
+function resolveProfileInsightsAttemptTimeoutMs(
+  attempt: ProfileInsightsRoutingAttempt,
+  remainingBudgetMs: number,
+  timeouts:
+    | typeof PROFILE_INSIGHTS_TIMEOUTS
+    | typeof ASYNC_LONG_TIMEOUTS,
+  timeoutProfile: "sync" | "async_job"
+): number {
+  const preferred =
+    timeoutProfile === "async_job"
+      ? {
+          primary: 120_000,
+          insights_balanced_structured: 90_000,
+          quality_escalation_structured: 60_000,
+          sync_fallback_plain_text: timeouts.fallbackTimeoutMs,
+        }
+      : {
+          primary: 8_000,
+          insights_balanced_structured: 7_000,
+          quality_escalation_structured: 4_000,
+          sync_fallback_plain_text: timeouts.fallbackTimeoutMs,
+        };
+
+  if (attempt.mode === "plain_text_fallback") {
+    return Math.max(
+      Math.min(preferred.sync_fallback_plain_text, remainingBudgetMs),
+      0
+    );
+  }
+
+  const reservedBudget =
+    timeouts.fallbackMinTimeoutMs + PROFILE_INSIGHTS_STRUCTURED_SAFETY_BUFFER_MS;
+  const stageBudget = preferred[attempt.fallbackStage];
+  return Math.max(
+    Math.min(stageBudget, Math.max(remainingBudgetMs - reservedBudget, 0)),
+    0
+  );
+}
+
 function resolveWorkoutSummaryAttemptTimeoutMs(
   attempt: WorkoutSummaryRoutingAttempt,
   remainingBudgetMs: number
@@ -1385,7 +1533,7 @@ function shouldAttemptPlainTextFallback(
   return error.code !== "upstream_timeout";
 }
 
-function shouldAttemptProfilePlainTextFallback(
+function shouldAttemptProfileModelFallback(
   error: CoachInferenceServiceError
 ): boolean {
   return error.code.startsWith("upstream_");

@@ -64,7 +64,8 @@
     "SUMMARY_FAST_MODEL": "@cf/zai-org/glm-4.7-flash",
     "SUMMARY_BALANCED_MODEL": "@cf/mistralai/mistral-small-3.1-24b-instruct",
     "SYNC_FALLBACK_MODEL": "@cf/meta/llama-3.1-8b-instruct-fast",
+    "INSIGHTS_FAST_MODEL": "@cf/zai-org/glm-4.7-flash",
     "INSIGHTS_BALANCED_MODEL": "@cf/mistralai/mistral-small-3.1-24b-instruct",
-    "QUALITY_ESCALATION_ENABLED": "false"
+    "QUALITY_ESCALATION_ENABLED": "true"
   }
 }
