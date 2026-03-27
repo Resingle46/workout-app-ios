@@ -3406,7 +3406,7 @@ describe("WorkersAICoachService", () => {
     }
   });
 
-  it("allows longer sync structured Gemini profile insights before falling back", async () => {
+  it("allows a slower sync structured Gemini profile insights response before falling back", async () => {
     vi.useFakeTimers();
     const fetchSpy = vi.fn().mockImplementation(() =>
       new Promise((resolve) => {
@@ -3434,7 +3434,7 @@ describe("WorkersAICoachService", () => {
                 ],
               }),
           });
-        }, 9_000);
+        }, 18_000);
       })
     );
     vi.stubGlobal("fetch", fetchSpy);
@@ -3451,7 +3451,7 @@ describe("WorkersAICoachService", () => {
         ...makeProfileInsightsRequestFixture(),
         provider: "gemini",
       });
-      await vi.advanceTimersByTimeAsync(9_100);
+      await vi.advanceTimersByTimeAsync(18_100);
       const result = await requestPromise;
 
       expect(fetchSpy).toHaveBeenCalledTimes(1);

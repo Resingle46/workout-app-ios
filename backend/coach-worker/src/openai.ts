@@ -66,12 +66,25 @@ const WORKOUT_SUMMARY_ASYNC_PLAIN_TEXT_MAX_TOKENS = 520;
 const GEMINI_MAX_RATE_LIMIT_RETRIES = 2;
 const GEMINI_BASE_RETRY_DELAY_MS = 1_250;
 const GEMINI_MAX_RETRY_DELAY_MS = 6_000;
-const PROFILE_INSIGHTS_TIMEOUTS = {
+type ProfileInsightsTimeoutBudget = {
+  totalBudgetMs: number;
+  structuredTimeoutMs: number;
+  fallbackTimeoutMs: number;
+  fallbackMinTimeoutMs: number;
+};
+
+const PROFILE_INSIGHTS_TIMEOUTS: ProfileInsightsTimeoutBudget = {
   totalBudgetMs: 25_000,
   structuredTimeoutMs: 18_000,
   fallbackTimeoutMs: 5_000,
   fallbackMinTimeoutMs: 3_000,
-} as const;
+};
+const GEMINI_PROFILE_INSIGHTS_TIMEOUTS: ProfileInsightsTimeoutBudget = {
+  totalBudgetMs: 30_000,
+  structuredTimeoutMs: 24_000,
+  fallbackTimeoutMs: 6_000,
+  fallbackMinTimeoutMs: 3_000,
+};
 const PROFILE_INSIGHTS_STRUCTURED_MIN_TIMEOUT_MS = 1_500;
 const PROFILE_INSIGHTS_STRUCTURED_SAFETY_BUFFER_MS = 750;
 const ASYNC_LONG_TIMEOUTS = {
@@ -249,9 +262,13 @@ export class WorkersAICoachService implements CoachInferenceService {
   ): Promise<InferenceResult<CoachProfileInsightsResponse>> {
     const operation = "profile_insights";
     const timeoutProfile = options.timeoutProfile ?? "sync";
-    const timeouts =
-      timeoutProfile === "async_job" ? ASYNC_LONG_TIMEOUTS : PROFILE_INSIGHTS_TIMEOUTS;
     const routingDecision = buildProfileInsightsRoutingDecision(this.env, request);
+    const timeouts =
+      timeoutProfile === "async_job"
+        ? ASYNC_LONG_TIMEOUTS
+        : routingDecision.provider === "gemini"
+          ? GEMINI_PROFILE_INSIGHTS_TIMEOUTS
+          : PROFILE_INSIGHTS_TIMEOUTS;
     const attempts = buildProfileInsightsRoutingAttempts(this.env, routingDecision);
     const promptExecution = resolvePromptExecution(
       request,
@@ -1546,9 +1563,9 @@ function resolveProfileInsightsAttemptTimeoutMs(
         }
       : attempt.provider === "gemini"
         ? {
-            primary: 16_000,
-            insights_balanced_structured: 14_000,
-            quality_escalation_structured: 10_000,
+            primary: 22_000,
+            insights_balanced_structured: 18_000,
+            quality_escalation_structured: 14_000,
             sync_fallback_plain_text: timeouts.fallbackTimeoutMs,
           }
         : {
