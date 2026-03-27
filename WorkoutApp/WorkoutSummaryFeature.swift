@@ -526,6 +526,19 @@ final class WorkoutSummaryStore {
         sessionStates.values.first(where: { $0.activeJobID != nil })?.activeProvider?.rawValue
     }
 
+    private func logSummaryDebug(
+        _ message: String,
+        level: DebugLogLevel = .info,
+        metadata: [String: String] = [:]
+    ) {
+        debugRecorder.log(
+            category: .coach,
+            level: level,
+            message: message,
+            metadata: metadata
+        )
+    }
+
     func updateConfiguration(_ configuration: CoachRuntimeConfiguration) {
         let providerChanged = self.configuration.provider != configuration.provider
         self.configuration = configuration
@@ -578,6 +591,15 @@ final class WorkoutSummaryStore {
         using appStore: AppStore
     ) async {
         guard configuration.canUseRemoteCoach else {
+            logSummaryDebug(
+                "summary_create_skipped",
+                metadata: [
+                    "sessionID": session.id.uuidString,
+                    "provider": configuration.provider.rawValue,
+                    "requestMode": WorkoutSummaryRequestMode.prewarm.rawValue,
+                    "reason": "remote_coach_unavailable"
+                ]
+            )
             return
         }
 
@@ -589,8 +611,28 @@ final class WorkoutSummaryStore {
                 provider: configuration.provider
             ) else {
                 cancelPrewarmTask(for: session.id)
+                logSummaryDebug(
+                    "summary_create_skipped",
+                    metadata: [
+                        "sessionID": session.id.uuidString,
+                        "provider": configuration.provider.rawValue,
+                        "requestMode": WorkoutSummaryRequestMode.prewarm.rawValue,
+                        "reason": "request_builder_returned_nil"
+                    ]
+                )
                 return
             }
+
+            logSummaryDebug(
+                "summary_create_requested",
+                metadata: [
+                    "sessionID": session.id.uuidString,
+                    "fingerprint": preparedRequest.fingerprint,
+                    "provider": configuration.provider.rawValue,
+                    "requestMode": preparedRequest.request.requestMode.rawValue,
+                    "trigger": preparedRequest.request.trigger.rawValue
+                ]
+            )
 
             var state = sessionState(for: session.id)
             state.latestFingerprint = preparedRequest.fingerprint
@@ -602,6 +644,16 @@ final class WorkoutSummaryStore {
             sessionStates[session.id] = state
 
             if state.resultByFingerprint[preparedRequest.fingerprint] != nil {
+                logSummaryDebug(
+                    "summary_create_skipped",
+                    metadata: [
+                        "sessionID": session.id.uuidString,
+                        "fingerprint": preparedRequest.fingerprint,
+                        "provider": configuration.provider.rawValue,
+                        "requestMode": preparedRequest.request.requestMode.rawValue,
+                        "reason": "cached_result_available"
+                    ]
+                )
                 logger.notice(
                     "prewarm_skipped_same_fingerprint session=\(session.id.uuidString, privacy: .public) fingerprint=\(preparedRequest.fingerprint, privacy: .public)"
                 )
@@ -610,6 +662,16 @@ final class WorkoutSummaryStore {
 
             if state.activeJobFingerprint == preparedRequest.fingerprint,
                isPending(state.status) {
+                logSummaryDebug(
+                    "summary_create_skipped",
+                    metadata: [
+                        "sessionID": session.id.uuidString,
+                        "fingerprint": preparedRequest.fingerprint,
+                        "provider": configuration.provider.rawValue,
+                        "requestMode": preparedRequest.request.requestMode.rawValue,
+                        "reason": "matching_job_already_pending"
+                    ]
+                )
                 logger.notice(
                     "prewarm_skipped_running_job session=\(session.id.uuidString, privacy: .public) fingerprint=\(preparedRequest.fingerprint, privacy: .public)"
                 )
@@ -637,6 +699,17 @@ final class WorkoutSummaryStore {
                 "prewarm_triggered session=\(session.id.uuidString, privacy: .public) fingerprint=\(preparedRequest.fingerprint, privacy: .public) trigger=\(preparedRequest.request.trigger.rawValue, privacy: .public)"
             )
         } catch {
+            logSummaryDebug(
+                "summary_create_skipped",
+                level: .error,
+                metadata: [
+                    "sessionID": session.id.uuidString,
+                    "provider": configuration.provider.rawValue,
+                    "requestMode": WorkoutSummaryRequestMode.prewarm.rawValue,
+                    "reason": "request_build_failed",
+                    "error": error.localizedDescription
+                ]
+            )
             logger.error(
                 "prewarm_request_build_failed session=\(session.id.uuidString, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
             )
@@ -651,6 +724,15 @@ final class WorkoutSummaryStore {
         cancelDeferredResumeTask(for: session.id)
 
         guard configuration.canUseRemoteCoach else {
+            logSummaryDebug(
+                "summary_create_skipped",
+                metadata: [
+                    "sessionID": session.id.uuidString,
+                    "provider": configuration.provider.rawValue,
+                    "requestMode": WorkoutSummaryRequestMode.final.rawValue,
+                    "reason": "remote_coach_unavailable"
+                ]
+            )
             return
         }
 
@@ -660,6 +742,16 @@ final class WorkoutSummaryStore {
                 using: appStore,
                 installID: installID,
                 provider: configuration.provider
+            )
+            logSummaryDebug(
+                "summary_create_requested",
+                metadata: [
+                    "sessionID": session.id.uuidString,
+                    "fingerprint": preparedRequest.fingerprint,
+                    "provider": configuration.provider.rawValue,
+                    "requestMode": preparedRequest.request.requestMode.rawValue,
+                    "trigger": preparedRequest.request.trigger.rawValue
+                ]
             )
             let previousState = sessionState(for: session.id)
             let previousFingerprint = previousState.latestFingerprint
@@ -680,6 +772,16 @@ final class WorkoutSummaryStore {
                 : .now
 
             if hasCachedResult {
+                logSummaryDebug(
+                    "summary_create_skipped",
+                    metadata: [
+                        "sessionID": session.id.uuidString,
+                        "fingerprint": preparedRequest.fingerprint,
+                        "provider": configuration.provider.rawValue,
+                        "requestMode": preparedRequest.request.requestMode.rawValue,
+                        "reason": "cached_result_available"
+                    ]
+                )
                 nextState.reusedPreparedResult = previousState.hadPrewarm
                 nextState.status = .completed
                 nextState.activeJobID = nil
@@ -699,6 +801,17 @@ final class WorkoutSummaryStore {
             }
 
             if shouldResumeRunningJob, let activeJobID = previousState.activeJobID {
+                logSummaryDebug(
+                    "summary_create_skipped",
+                    metadata: [
+                        "sessionID": session.id.uuidString,
+                        "fingerprint": preparedRequest.fingerprint,
+                        "jobID": activeJobID,
+                        "provider": configuration.provider.rawValue,
+                        "requestMode": preparedRequest.request.requestMode.rawValue,
+                        "reason": "matching_job_already_pending"
+                    ]
+                )
                 sessionStates[session.id] = nextState
                 logger.notice(
                     "running_job_reused session=\(session.id.uuidString, privacy: .public) fingerprint=\(preparedRequest.fingerprint, privacy: .public) jobID=\(activeJobID, privacy: .public)"
@@ -729,6 +842,17 @@ final class WorkoutSummaryStore {
 
             await createOrReuseJob(preparedRequest)
         } catch {
+            logSummaryDebug(
+                "summary_create_skipped",
+                level: .error,
+                metadata: [
+                    "sessionID": session.id.uuidString,
+                    "provider": configuration.provider.rawValue,
+                    "requestMode": WorkoutSummaryRequestMode.final.rawValue,
+                    "reason": "request_build_failed",
+                    "error": error.localizedDescription
+                ]
+            )
             logger.error(
                 "final_request_build_failed session=\(session.id.uuidString, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
             )
@@ -744,6 +868,15 @@ final class WorkoutSummaryStore {
         cancelDeferredResumeTask(for: session.id)
 
         guard configuration.canUseRemoteCoach else {
+            logSummaryDebug(
+                "summary_create_skipped",
+                metadata: [
+                    "sessionID": session.id.uuidString,
+                    "provider": configuration.provider.rawValue,
+                    "requestMode": WorkoutSummaryRequestMode.final.rawValue,
+                    "reason": "remote_coach_unavailable"
+                ]
+            )
             return
         }
 
@@ -753,6 +886,16 @@ final class WorkoutSummaryStore {
                 using: appStore,
                 installID: installID,
                 provider: configuration.provider
+            )
+            logSummaryDebug(
+                "summary_create_requested",
+                metadata: [
+                    "sessionID": session.id.uuidString,
+                    "fingerprint": preparedRequest.fingerprint,
+                    "provider": configuration.provider.rawValue,
+                    "requestMode": preparedRequest.request.requestMode.rawValue,
+                    "trigger": preparedRequest.request.trigger.rawValue
+                ]
             )
             var state = sessionState(for: session.id)
             state.latestFingerprint = preparedRequest.fingerprint
@@ -774,6 +917,17 @@ final class WorkoutSummaryStore {
 
             await createOrReuseJob(preparedRequest)
         } catch {
+            logSummaryDebug(
+                "summary_create_skipped",
+                level: .error,
+                metadata: [
+                    "sessionID": session.id.uuidString,
+                    "provider": configuration.provider.rawValue,
+                    "requestMode": WorkoutSummaryRequestMode.final.rawValue,
+                    "reason": "request_build_failed",
+                    "error": error.localizedDescription
+                ]
+            )
             logger.error(
                 "summary_retry_build_failed session=\(session.id.uuidString, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
             )
@@ -810,6 +964,16 @@ final class WorkoutSummaryStore {
         let state = sessionState(for: sessionID)
 
         guard state.latestFingerprint == fingerprint else {
+            logSummaryDebug(
+                "summary_create_skipped",
+                metadata: [
+                    "sessionID": sessionID.uuidString,
+                    "fingerprint": fingerprint,
+                    "provider": preparedRequest.request.provider.rawValue,
+                    "requestMode": preparedRequest.request.requestMode.rawValue,
+                    "reason": "stale_fingerprint"
+                ]
+            )
             return
         }
 
@@ -849,6 +1013,15 @@ final class WorkoutSummaryStore {
             debugRecorder.log(
                 category: .coach,
                 message: "workout_summary_job_created",
+                metadata: [
+                    "sessionID": sessionID.uuidString,
+                    "jobID": response.jobID,
+                    "provider": (response.metadata?.provider ?? configuration.provider).rawValue,
+                    "requestMode": preparedRequest.request.requestMode.rawValue
+                ]
+            )
+            logSummaryDebug(
+                "summary_job_created",
                 metadata: [
                     "sessionID": sessionID.uuidString,
                     "jobID": response.jobID,
@@ -1143,6 +1316,15 @@ final class WorkoutSummaryStore {
             category: .coach,
             level: .error,
             message: "workout_summary_job_failed",
+            metadata: [
+                "sessionID": sessionID.uuidString,
+                "provider": (state.activeProvider ?? configuration.provider).rawValue,
+                "error": state.error?.message ?? error.localizedDescription
+            ]
+        )
+        logSummaryDebug(
+            "summary_job_failed",
+            level: .error,
             metadata: [
                 "sessionID": sessionID.uuidString,
                 "provider": (state.activeProvider ?? configuration.provider).rawValue,

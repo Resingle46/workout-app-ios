@@ -272,6 +272,7 @@ export function createApp(
             context.snapshot.preferredProgram?.workouts.length ?? 0;
           routeDiagnostics = {
             installID: body.installID,
+            requestedProvider: body.provider,
             provider: routingDecision.provider,
             contextSource: context.source,
             profileContextVariant: executionMetadata.promptProfile,
@@ -477,6 +478,17 @@ export function createApp(
           validationRequestPreview = buildChatRequestPreview(rawBody);
           const body = chatJobCreateRequestSchema.parse(rawBody);
           assertProviderReadiness(env, body.provider);
+          console.log(
+            JSON.stringify({
+              event: "coach_chat_job_create_request_parsed",
+              requestID,
+              installID: body.installID,
+              clientRequestID: body.clientRequestID,
+              requestedProvider: body.provider,
+              recentTurnCount: body.clientRecentTurns.length,
+              hasInlineSnapshot: Boolean(body.snapshot),
+            })
+          );
           validationRequestPreview = undefined;
           const context = await stateRepository.resolveCoachContext(body);
           const routingDecision = buildChatRoutingDecision(
@@ -513,6 +525,22 @@ export function createApp(
             contextFamily: routingDecision.contextFamily,
             routingReasonTags: routingDecision.routingReasonTags,
           });
+          console.log(
+            JSON.stringify({
+              event: "coach_chat_job_create_prepared",
+              requestID,
+              installID: body.installID,
+              clientRequestID: body.clientRequestID,
+              requestedProvider: body.provider,
+              provider: routingDecision.provider,
+              contextHash: context.contextHash,
+              contextSource: context.source,
+              selectedModel: routingDecision.selectedModel,
+              routingVersion: routingDecision.routingVersion,
+              modelRole: routingDecision.modelRole,
+              useCase: routingDecision.useCase,
+            })
+          );
           const storageKey = storageKeyFromMetadata(
             context.contextHash,
             executionMetadata,
@@ -552,40 +580,104 @@ export function createApp(
             routingReasonTags: routingDecision.routingReasonTags,
           };
 
-          const job = await stateRepository.createChatJob({
-            jobID,
-            installID: body.installID,
-            clientRequestID: body.clientRequestID,
-            createdAt,
-            model: routingDecision.selectedModel,
-            provider: routingDecision.provider,
-            preparedRequest: {
-              ...body,
-              snapshotHash: context.contextHash,
-              snapshot: context.snapshot,
-              snapshotUpdatedAt:
-                context.backupHead?.uploadedAt ?? body.snapshotUpdatedAt,
-              clientRecentTurns: recentTurns,
-              responseID,
-              metadata: executionMetadata,
-            },
-            contextHash: context.contextHash,
-            contextSource: context.source,
-            chatMemoryHit,
-            snapshotBytes,
-            recentTurnCount,
-            recentTurnChars,
-            questionChars,
-          });
+          let job;
+          try {
+            job = await stateRepository.createChatJob({
+              jobID,
+              installID: body.installID,
+              clientRequestID: body.clientRequestID,
+              createdAt,
+              model: routingDecision.selectedModel,
+              provider: routingDecision.provider,
+              preparedRequest: {
+                ...body,
+                snapshotHash: context.contextHash,
+                snapshot: context.snapshot,
+                snapshotUpdatedAt:
+                  context.backupHead?.uploadedAt ?? body.snapshotUpdatedAt,
+                clientRecentTurns: recentTurns,
+                responseID,
+                metadata: executionMetadata,
+              },
+              contextHash: context.contextHash,
+              contextSource: context.source,
+              chatMemoryHit,
+              snapshotBytes,
+              recentTurnCount,
+              recentTurnChars,
+              questionChars,
+            });
+          } catch (error) {
+            console.error(
+              JSON.stringify({
+                event: "coach_chat_job_row_create_failed",
+                requestID,
+                installID: body.installID,
+                clientRequestID: body.clientRequestID,
+                requestedProvider: body.provider,
+                provider: routingDecision.provider,
+                contextHash: context.contextHash,
+                selectedModel: routingDecision.selectedModel,
+                errorMessage:
+                  error instanceof Error ? error.message.slice(0, 300) : "Unknown error",
+              })
+            );
+            throw error;
+          }
+          console.log(
+            JSON.stringify({
+              event: "coach_chat_job_row_ready",
+              requestID,
+              jobID: job.jobID,
+              installID: job.installID,
+              clientRequestID: job.clientRequestID,
+              requestedProvider: body.provider,
+              provider: job.provider ?? routingDecision.provider,
+              reused: job.jobID !== jobID,
+              status: job.status,
+            })
+          );
 
           if (job.jobID === jobID) {
             try {
               const chatWorkflow = mustGetChatWorkflow(env);
+              console.log(
+                JSON.stringify({
+                  event: "coach_chat_job_workflow_create_started",
+                  requestID,
+                  jobID: job.jobID,
+                  installID: job.installID,
+                  clientRequestID: job.clientRequestID,
+                  provider: job.provider ?? routingDecision.provider,
+                })
+              );
               await chatWorkflow.create({
                 id: job.jobID,
                 params: { jobID: job.jobID },
               });
+              console.log(
+                JSON.stringify({
+                  event: "coach_chat_job_workflow_create_succeeded",
+                  requestID,
+                  jobID: job.jobID,
+                  installID: job.installID,
+                  clientRequestID: job.clientRequestID,
+                  provider: job.provider ?? routingDecision.provider,
+                })
+              );
             } catch (error) {
+              console.error(
+                JSON.stringify({
+                  event: "coach_chat_job_workflow_create_failed",
+                  requestID,
+                  jobID: job.jobID,
+                  installID: job.installID,
+                  clientRequestID: job.clientRequestID,
+                  provider: job.provider ?? routingDecision.provider,
+                  errorMessage:
+                    error instanceof Error ? error.message.slice(0, 300) : "Unknown error",
+                })
+              );
               const failedAt = new Date(deps.now()).toISOString();
               try {
                 await stateRepository.failChatJob(job.jobID, {
@@ -691,6 +783,18 @@ export function createApp(
             await readJSON(request)
           );
           assertProviderReadiness(env, body.provider);
+          console.log(
+            JSON.stringify({
+              event: "workout_summary_job_create_request_parsed",
+              requestID,
+              installID: body.installID,
+              sessionID: body.sessionID,
+              clientRequestID: body.clientRequestID,
+              requestedProvider: body.provider,
+              requestMode: body.requestMode,
+              trigger: body.trigger,
+            })
+          );
           const routingDecision = buildWorkoutSummaryRoutingDecision(env, body);
           const executionMetadata = buildExecutionMetadata({
             provider: routingDecision.provider,
@@ -712,6 +816,21 @@ export function createApp(
             contextFamily: routingDecision.contextFamily,
             routingReasonTags: routingDecision.routingReasonTags,
           });
+          console.log(
+            JSON.stringify({
+              event: "workout_summary_job_create_prepared",
+              requestID,
+              installID: body.installID,
+              sessionID: body.sessionID,
+              clientRequestID: body.clientRequestID,
+              requestedProvider: body.provider,
+              provider: routingDecision.provider,
+              selectedModel: routingDecision.selectedModel,
+              routingVersion: routingDecision.routingVersion,
+              modelRole: routingDecision.modelRole,
+              useCase: routingDecision.useCase,
+            })
+          );
           const currentExerciseCount = body.currentWorkout.exerciseCount;
           const historyExerciseCount = body.recentExerciseHistory.length;
           const historySessionCount = totalWorkoutSummaryHistorySessionCount(
@@ -722,6 +841,7 @@ export function createApp(
 
           routeDiagnostics = {
             installID: body.installID,
+            requestedProvider: body.provider,
             provider: routingDecision.provider,
             sessionID: body.sessionID,
             fingerprint: body.fingerprint,
@@ -737,26 +857,45 @@ export function createApp(
             routingVersion: routingDecision.routingVersion,
           };
 
-          const job = await stateRepository.createWorkoutSummaryJob({
-            jobID,
-            installID: body.installID,
-            clientRequestID: body.clientRequestID,
-            sessionID: body.sessionID,
-            fingerprint: body.fingerprint,
-            createdAt,
-            model: routingDecision.selectedModel,
-            provider: routingDecision.provider,
-            preparedRequest: {
-              ...body,
-              metadata: executionMetadata,
-            },
-            requestMode: body.requestMode,
-            trigger: body.trigger,
-            inputMode: body.inputMode,
-            currentExerciseCount,
-            historyExerciseCount,
-            historySessionCount,
-          });
+          let job;
+          try {
+            job = await stateRepository.createWorkoutSummaryJob({
+              jobID,
+              installID: body.installID,
+              clientRequestID: body.clientRequestID,
+              sessionID: body.sessionID,
+              fingerprint: body.fingerprint,
+              createdAt,
+              model: routingDecision.selectedModel,
+              provider: routingDecision.provider,
+              preparedRequest: {
+                ...body,
+                metadata: executionMetadata,
+              },
+              requestMode: body.requestMode,
+              trigger: body.trigger,
+              inputMode: body.inputMode,
+              currentExerciseCount,
+              historyExerciseCount,
+              historySessionCount,
+            });
+          } catch (error) {
+            console.error(
+              JSON.stringify({
+                event: "workout_summary_job_row_create_failed",
+                requestID,
+                installID: body.installID,
+                sessionID: body.sessionID,
+                clientRequestID: body.clientRequestID,
+                requestedProvider: body.provider,
+                provider: routingDecision.provider,
+                selectedModel: routingDecision.selectedModel,
+                errorMessage:
+                  error instanceof Error ? error.message.slice(0, 300) : "Unknown error",
+              })
+            );
+            throw error;
+          }
           const reusedExistingJob = job.jobID !== jobID;
 
           if (!reusedExistingJob) {

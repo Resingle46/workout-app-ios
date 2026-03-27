@@ -495,6 +495,9 @@ interface InternalBackupRecord {
 }
 
 export class CloudflareCoachStateRepository implements CoachStateStore {
+  private chatJobProviderColumnSupport: boolean | undefined;
+  private workoutSummaryProviderColumnSupport: boolean | undefined;
+
   constructor(
     private readonly kv: CoachKVNamespace,
     private readonly r2: CoachR2Bucket,
@@ -880,48 +883,7 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
     }
 
     try {
-      await this.db
-        .prepare(
-          `
-            INSERT INTO coach_chat_jobs (
-              job_id,
-              install_id,
-              client_request_id,
-              status,
-              prepared_request_json,
-              created_at,
-              context_hash,
-              context_source,
-              chat_memory_hit,
-              snapshot_bytes,
-            recent_turn_count,
-            recent_turn_chars,
-            question_chars,
-            prompt_version,
-            model,
-            provider
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          `
-        )
-        .bind(
-          input.jobID,
-          input.installID,
-          input.clientRequestID,
-          "queued",
-          stableJSONStringify(input.preparedRequest),
-          input.createdAt,
-          input.contextHash,
-          input.contextSource,
-          input.chatMemoryHit ? 1 : 0,
-          input.snapshotBytes,
-          input.recentTurnCount,
-          input.recentTurnChars,
-          input.questionChars,
-          this.promptVersion,
-          input.model,
-          input.provider
-        )
-        .run();
+      await this.insertChatJobRow(input);
     } catch (error) {
       const duplicated = await this.getChatJobByClientRequestID(
         input.installID,
@@ -1160,51 +1122,8 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
     }
 
     try {
-      await this.db
-        .prepare(
-          `
-            INSERT INTO coach_workout_summary_jobs (
-              job_id,
-              install_id,
-              client_request_id,
-              session_id,
-              fingerprint,
-              status,
-              prepared_request_json,
-              created_at,
-              request_mode,
-              trigger,
-              input_mode,
-              current_exercise_count,
-              history_exercise_count,
-              history_session_count,
-              prompt_version,
-              model,
-              provider
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          `
-        )
-        .bind(
-          input.jobID,
-          input.installID,
-          input.clientRequestID,
-          input.sessionID,
-          input.fingerprint,
-          "queued",
-          stableJSONStringify(input.preparedRequest),
-          input.createdAt,
-          input.requestMode,
-          input.trigger,
-          input.inputMode,
-          input.currentExerciseCount,
-          input.historyExerciseCount,
-          input.historySessionCount,
-          this.promptVersion,
-          input.model,
-          input.provider
-        )
-        .run();
-    } catch {
+      await this.insertWorkoutSummaryJobRow(input);
+    } catch (error) {
       const duplicatedByClientRequestID =
         await this.getWorkoutSummaryJobByClientRequestID(
           input.installID,
@@ -1227,7 +1146,7 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
         return duplicatedByFingerprint;
       }
 
-      throw new Error("Failed to create workout summary job.");
+      throw error;
     }
 
     const created = await this.getWorkoutSummaryJob(input.jobID, input.installID);
@@ -1808,17 +1727,49 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
     clientRequestID: string,
     provider: CoachAIProvider
   ): Promise<CoachChatJobRecord | null> {
-    const row = await this.db
+    if (this.chatJobProviderColumnSupport !== false) {
+      try {
+        const row = await this.db
+          .prepare(
+            `
+              SELECT * FROM coach_chat_jobs
+              WHERE install_id = ? AND client_request_id = ? AND provider = ?
+              LIMIT 1
+            `
+          )
+          .bind(installID, clientRequestID, provider)
+          .first<CoachChatJobRow>();
+        this.chatJobProviderColumnSupport = true;
+        return row ? parseCoachChatJobRow(row) : null;
+      } catch (error) {
+        if (!isMissingProviderColumnError(error)) {
+          throw error;
+        }
+        this.markProviderColumnUnavailable("coach_chat_jobs", error);
+      }
+    }
+
+    const candidates = legacyProviderScopedClientRequestIDCandidates(
+      clientRequestID,
+      provider
+    );
+    const results = await this.db
       .prepare(
         `
           SELECT * FROM coach_chat_jobs
-          WHERE install_id = ? AND client_request_id = ? AND provider = ?
-          LIMIT 1
+          WHERE install_id = ?
+            AND (client_request_id = ? OR client_request_id = ?)
+          ORDER BY created_at DESC
+          LIMIT 5
         `
       )
-      .bind(installID, clientRequestID, provider)
-      .first<CoachChatJobRow>();
-    return row ? parseCoachChatJobRow(row) : null;
+      .bind(installID, candidates[0], candidates[1])
+      .all<CoachChatJobRow>();
+    return (
+      results.results
+        .map((row) => parseCoachChatJobRow(row))
+        .find((job) => job.provider === provider) ?? null
+    );
   }
 
   private async getWorkoutSummaryJobByClientRequestID(
@@ -1826,17 +1777,49 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
     clientRequestID: string,
     provider: CoachAIProvider
   ): Promise<CoachWorkoutSummaryJobRecord | null> {
-    const row = await this.db
+    if (this.workoutSummaryProviderColumnSupport !== false) {
+      try {
+        const row = await this.db
+          .prepare(
+            `
+              SELECT * FROM coach_workout_summary_jobs
+              WHERE install_id = ? AND client_request_id = ? AND provider = ?
+              LIMIT 1
+            `
+          )
+          .bind(installID, clientRequestID, provider)
+          .first<WorkoutSummaryJobRow>();
+        this.workoutSummaryProviderColumnSupport = true;
+        return row ? parseWorkoutSummaryJobRow(row) : null;
+      } catch (error) {
+        if (!isMissingProviderColumnError(error)) {
+          throw error;
+        }
+        this.markProviderColumnUnavailable("coach_workout_summary_jobs", error);
+      }
+    }
+
+    const candidates = legacyProviderScopedClientRequestIDCandidates(
+      clientRequestID,
+      provider
+    );
+    const results = await this.db
       .prepare(
         `
           SELECT * FROM coach_workout_summary_jobs
-          WHERE install_id = ? AND client_request_id = ? AND provider = ?
-          LIMIT 1
+          WHERE install_id = ?
+            AND (client_request_id = ? OR client_request_id = ?)
+          ORDER BY created_at DESC
+          LIMIT 5
         `
       )
-      .bind(installID, clientRequestID, provider)
-      .first<WorkoutSummaryJobRow>();
-    return row ? parseWorkoutSummaryJobRow(row) : null;
+      .bind(installID, candidates[0], candidates[1])
+      .all<WorkoutSummaryJobRow>();
+    return (
+      results.results
+        .map((row) => parseWorkoutSummaryJobRow(row))
+        .find((job) => job.provider === provider) ?? null
+    );
   }
 
   private async getWorkoutSummaryJobByFingerprint(
@@ -1847,7 +1830,36 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
     model: string,
     provider: CoachAIProvider
   ): Promise<CoachWorkoutSummaryJobRecord | null> {
-    const row = await this.db
+    if (this.workoutSummaryProviderColumnSupport !== false) {
+      try {
+        const row = await this.db
+          .prepare(
+            `
+              SELECT * FROM coach_workout_summary_jobs
+              WHERE install_id = ?
+                AND session_id = ?
+                AND fingerprint = ?
+                AND prompt_version = ?
+                AND model = ?
+                AND provider = ?
+                AND status IN ('queued', 'running', 'completed')
+              ORDER BY created_at DESC
+              LIMIT 1
+            `
+          )
+          .bind(installID, sessionID, fingerprint, promptVersion, model, provider)
+          .first<WorkoutSummaryJobRow>();
+        this.workoutSummaryProviderColumnSupport = true;
+        return row ? parseWorkoutSummaryJobRow(row) : null;
+      } catch (error) {
+        if (!isMissingProviderColumnError(error)) {
+          throw error;
+        }
+        this.markProviderColumnUnavailable("coach_workout_summary_jobs", error);
+      }
+    }
+
+    const results = await this.db
       .prepare(
         `
           SELECT * FROM coach_workout_summary_jobs
@@ -1856,15 +1868,247 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
             AND fingerprint = ?
             AND prompt_version = ?
             AND model = ?
-            AND provider = ?
             AND status IN ('queued', 'running', 'completed')
           ORDER BY created_at DESC
-          LIMIT 1
+          LIMIT 10
         `
       )
-      .bind(installID, sessionID, fingerprint, promptVersion, model, provider)
-      .first<WorkoutSummaryJobRow>();
-    return row ? parseWorkoutSummaryJobRow(row) : null;
+      .bind(installID, sessionID, fingerprint, promptVersion, model)
+      .all<WorkoutSummaryJobRow>();
+    return (
+      results.results
+        .map((row) => parseWorkoutSummaryJobRow(row))
+        .find((job) => job.provider === provider) ?? null
+    );
+  }
+
+  private async insertChatJobRow(input: CreateCoachChatJobInput): Promise<void> {
+    if (this.chatJobProviderColumnSupport !== false) {
+      try {
+        await this.db
+          .prepare(
+            `
+              INSERT INTO coach_chat_jobs (
+                job_id,
+                install_id,
+                client_request_id,
+                status,
+                prepared_request_json,
+                created_at,
+                context_hash,
+                context_source,
+                chat_memory_hit,
+                snapshot_bytes,
+                recent_turn_count,
+                recent_turn_chars,
+                question_chars,
+                prompt_version,
+                model,
+                provider
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `
+          )
+          .bind(
+            input.jobID,
+            input.installID,
+            input.clientRequestID,
+            "queued",
+            stableJSONStringify(input.preparedRequest),
+            input.createdAt,
+            input.contextHash,
+            input.contextSource,
+            input.chatMemoryHit ? 1 : 0,
+            input.snapshotBytes,
+            input.recentTurnCount,
+            input.recentTurnChars,
+            input.questionChars,
+            this.promptVersion,
+            input.model,
+            input.provider
+          )
+          .run();
+        this.chatJobProviderColumnSupport = true;
+        return;
+      } catch (error) {
+        if (!isMissingProviderColumnError(error)) {
+          throw error;
+        }
+        this.markProviderColumnUnavailable("coach_chat_jobs", error);
+      }
+    }
+
+    await this.db
+      .prepare(
+        `
+          INSERT INTO coach_chat_jobs (
+            job_id,
+            install_id,
+            client_request_id,
+            status,
+            prepared_request_json,
+            created_at,
+            context_hash,
+            context_source,
+            chat_memory_hit,
+            snapshot_bytes,
+            recent_turn_count,
+            recent_turn_chars,
+            question_chars,
+            prompt_version,
+            model
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `
+      )
+      .bind(
+        input.jobID,
+        input.installID,
+        encodeLegacyProviderScopedClientRequestID(
+          input.clientRequestID,
+          input.provider
+        ),
+        "queued",
+        stableJSONStringify(input.preparedRequest),
+        input.createdAt,
+        input.contextHash,
+        input.contextSource,
+        input.chatMemoryHit ? 1 : 0,
+        input.snapshotBytes,
+        input.recentTurnCount,
+        input.recentTurnChars,
+        input.questionChars,
+        this.promptVersion,
+        input.model
+      )
+      .run();
+  }
+
+  private async insertWorkoutSummaryJobRow(
+    input: CreateWorkoutSummaryJobInput
+  ): Promise<void> {
+    if (this.workoutSummaryProviderColumnSupport !== false) {
+      try {
+        await this.db
+          .prepare(
+            `
+              INSERT INTO coach_workout_summary_jobs (
+                job_id,
+                install_id,
+                client_request_id,
+                session_id,
+                fingerprint,
+                status,
+                prepared_request_json,
+                created_at,
+                request_mode,
+                trigger,
+                input_mode,
+                current_exercise_count,
+                history_exercise_count,
+                history_session_count,
+                prompt_version,
+                model,
+                provider
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `
+          )
+          .bind(
+            input.jobID,
+            input.installID,
+            input.clientRequestID,
+            input.sessionID,
+            input.fingerprint,
+            "queued",
+            stableJSONStringify(input.preparedRequest),
+            input.createdAt,
+            input.requestMode,
+            input.trigger,
+            input.inputMode,
+            input.currentExerciseCount,
+            input.historyExerciseCount,
+            input.historySessionCount,
+            this.promptVersion,
+            input.model,
+            input.provider
+          )
+          .run();
+        this.workoutSummaryProviderColumnSupport = true;
+        return;
+      } catch (error) {
+        if (!isMissingProviderColumnError(error)) {
+          throw error;
+        }
+        this.markProviderColumnUnavailable(
+          "coach_workout_summary_jobs",
+          error
+        );
+      }
+    }
+
+    await this.db
+      .prepare(
+        `
+          INSERT INTO coach_workout_summary_jobs (
+            job_id,
+            install_id,
+            client_request_id,
+            session_id,
+            fingerprint,
+            status,
+            prepared_request_json,
+            created_at,
+            request_mode,
+            trigger,
+            input_mode,
+            current_exercise_count,
+            history_exercise_count,
+            history_session_count,
+            prompt_version,
+            model
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `
+      )
+      .bind(
+        input.jobID,
+        input.installID,
+        encodeLegacyProviderScopedClientRequestID(
+          input.clientRequestID,
+          input.provider
+        ),
+        input.sessionID,
+        input.fingerprint,
+        "queued",
+        stableJSONStringify(input.preparedRequest),
+        input.createdAt,
+        input.requestMode,
+        input.trigger,
+        input.inputMode,
+        input.currentExerciseCount,
+        input.historyExerciseCount,
+        input.historySessionCount,
+        this.promptVersion,
+        input.model
+      )
+      .run();
+  }
+
+  private markProviderColumnUnavailable(
+    table: "coach_chat_jobs" | "coach_workout_summary_jobs",
+    error: unknown
+  ): void {
+    const message =
+      error instanceof Error ? error.message.slice(0, 300) : "Unknown error";
+    if (table === "coach_chat_jobs") {
+      this.chatJobProviderColumnSupport = false;
+    } else {
+      this.workoutSummaryProviderColumnSupport = false;
+    }
+    console.warn(
+      JSON.stringify({
+        event: "provider_column_compatibility_fallback_enabled",
+        table,
+        reason: message,
+      })
+    );
   }
 }
 
@@ -2759,7 +3003,10 @@ function parseCoachChatJobRow(row: CoachChatJobRow): CoachChatJobRecord {
   return {
     jobID: row.job_id,
     installID: row.install_id,
-    clientRequestID: row.client_request_id,
+    clientRequestID: decodeLegacyProviderScopedClientRequestID(
+      row.client_request_id,
+      provider
+    ),
     status: row.status,
     preparedRequest,
     result: row.response_json
@@ -2811,7 +3058,10 @@ function parseWorkoutSummaryJobRow(
   return {
     jobID: row.job_id,
     installID: row.install_id,
-    clientRequestID: row.client_request_id,
+    clientRequestID: decodeLegacyProviderScopedClientRequestID(
+      row.client_request_id,
+      provider
+    ),
     sessionID: row.session_id,
     fingerprint: row.fingerprint,
     status: row.status,
@@ -2851,6 +3101,45 @@ function parseWorkoutSummaryJobRow(
 
 function nullableNumber(value: number | null): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function isMissingProviderColumnError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("no such column: provider") ||
+    message.includes("has no column named provider")
+  );
+}
+
+function encodeLegacyProviderScopedClientRequestID(
+  clientRequestID: string,
+  provider: CoachAIProvider
+): string {
+  return `${provider}:${clientRequestID}`;
+}
+
+function legacyProviderScopedClientRequestIDCandidates(
+  clientRequestID: string,
+  provider: CoachAIProvider
+): [string, string] {
+  return [
+    encodeLegacyProviderScopedClientRequestID(clientRequestID, provider),
+    clientRequestID,
+  ];
+}
+
+function decodeLegacyProviderScopedClientRequestID(
+  storedClientRequestID: string,
+  provider: CoachAIProvider
+): string {
+  const prefix = `${provider}:`;
+  return storedClientRequestID.startsWith(prefix)
+    ? storedClientRequestID.slice(prefix.length)
+    : storedClientRequestID;
 }
 
 function d1Changes(result: unknown): number {

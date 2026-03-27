@@ -16,8 +16,13 @@ import {
   type Env,
 } from "../src/openai";
 import {
+  CloudflareCoachStateRepository,
   InMemoryCoachStateRepository,
   storageKeyFromMetadata,
+  type CoachD1Database,
+  type CoachD1PreparedStatement,
+  type CoachKVNamespace,
+  type CoachR2Bucket,
 } from "../src/state";
 import {
   buildProfileInsightsRoutingAttempts,
@@ -2416,6 +2421,96 @@ describe("coach worker app", () => {
   });
 });
 
+describe("legacy D1 provider-column compatibility", () => {
+  it("creates Gemini chat jobs when provider columns are missing", async () => {
+    const repository = new CloudflareCoachStateRepository(
+      makeNoopKV(),
+      makeNoopR2(),
+      new LegacyProviderlessJobDB(),
+      "test.v1",
+      DEFAULT_AI_MODEL
+    );
+    const request = {
+      ...makeChatJobCreateRequestFixture(),
+      provider: "gemini" as const,
+      clientRequestID: "gemini-chat-request-1",
+    };
+
+    const created = await repository.createChatJob({
+      jobID: "chatjob_legacy_gemini",
+      installID: request.installID,
+      clientRequestID: request.clientRequestID,
+      createdAt: "2026-03-27T18:00:00.000Z",
+      model: "gemini-2.5-flash",
+      provider: "gemini",
+      preparedRequest: {
+        ...request,
+        responseID: "response_legacy_gemini",
+        metadata: makeExecutionMetadata("gemini", "gemini-2.5-flash"),
+      },
+      contextHash: "context_hash_legacy_gemini",
+      contextSource: "inline_legacy",
+      chatMemoryHit: false,
+      snapshotBytes: 512,
+      recentTurnCount: request.clientRecentTurns.length,
+      recentTurnChars: request.clientRecentTurns.reduce(
+        (total, turn) => total + turn.content.length,
+        0
+      ),
+      questionChars: request.question.length,
+    });
+
+    expect(created.jobID).toBe("chatjob_legacy_gemini");
+    expect(created.provider).toBe("gemini");
+    expect(created.clientRequestID).toBe("gemini-chat-request-1");
+    expect(created.preparedRequest.metadata?.provider).toBe("gemini");
+  });
+
+  it("creates Gemini workout summary jobs when provider columns are missing", async () => {
+    const repository = new CloudflareCoachStateRepository(
+      makeNoopKV(),
+      makeNoopR2(),
+      new LegacyProviderlessJobDB(),
+      "test.v1",
+      DEFAULT_AI_MODEL
+    );
+    const request = {
+      ...makeWorkoutSummaryJobCreateRequestFixture(),
+      provider: "gemini" as const,
+      clientRequestID: "gemini-summary-request-1",
+    };
+
+    const created = await repository.createWorkoutSummaryJob({
+      jobID: "summaryjob_legacy_gemini",
+      installID: request.installID,
+      clientRequestID: request.clientRequestID,
+      sessionID: request.sessionID,
+      fingerprint: request.fingerprint,
+      createdAt: "2026-03-27T18:05:00.000Z",
+      model: "gemini-2.5-flash",
+      provider: "gemini",
+      preparedRequest: {
+        ...request,
+        metadata: makeExecutionMetadata("gemini", "gemini-2.5-flash"),
+      },
+      requestMode: request.requestMode,
+      trigger: request.trigger,
+      inputMode: request.inputMode,
+      currentExerciseCount: request.currentWorkout.exerciseCount,
+      historyExerciseCount: request.recentExerciseHistory.length,
+      historySessionCount: request.recentExerciseHistory.reduce(
+        (total, exercise) => total + exercise.sessions.length,
+        0
+      ),
+    });
+
+    expect(created.jobID).toBe("summaryjob_legacy_gemini");
+    expect(created.provider).toBe("gemini");
+    expect(created.clientRequestID).toBe("gemini-summary-request-1");
+    expect(created.preparedRequest.metadata?.provider).toBe("gemini");
+  });
+});
+
 describe("profile insights routing", () => {
   it("resolves the insights_fast role from INSIGHTS_FAST_MODEL before chat fast defaults", () => {
     const env = makeEnv({
@@ -3280,6 +3375,269 @@ function makeEnv(overrides: Partial<Env> = {}): Env {
     QUALITY_ESCALATION_ENABLED: "false",
     ...overrides,
   };
+}
+
+function makeNoopKV(): CoachKVNamespace {
+  return {
+    async get() {
+      return null;
+    },
+    async put() {},
+    async delete() {},
+  };
+}
+
+function makeNoopR2(): CoachR2Bucket {
+  return {
+    async get() {
+      return null;
+    },
+    async put() {},
+    async delete() {},
+  };
+}
+
+function makeExecutionMetadata(
+  provider: "workers_ai" | "gemini",
+  selectedModel: string
+) {
+  return {
+    provider,
+    contextProfile: "rich_async_v1" as const,
+    promptProfile: "chat_rich_async_v1",
+    contextVersion: "2026-03-27.context.v1",
+    analyticsVersion: "2026-03-27.analytics.v1",
+    memoryProfile: "rich_async_v1" as const,
+    selectedModel,
+    routingVersion: "phase1.v1",
+    memoryCompatibilityKey: `${provider}:${selectedModel}`,
+  };
+}
+
+class LegacyProviderlessJobDB implements CoachD1Database {
+  private readonly chatRows: Array<Record<string, unknown>> = [];
+  private readonly workoutSummaryRows: Array<Record<string, unknown>> = [];
+
+  prepare(query: string): CoachD1PreparedStatement {
+    let boundValues: unknown[] = [];
+    const normalized = normalizeLegacyDBQuery(query);
+    const db = this;
+
+    return {
+      bind(...values: unknown[]) {
+        boundValues = values;
+        return this;
+      },
+      async first<T = Record<string, unknown>>() {
+        const results = db.select(normalized, boundValues);
+        return (results[0] as T | undefined) ?? null;
+      },
+      async run() {
+        return db.run(normalized, boundValues);
+      },
+      async all<T = Record<string, unknown>>() {
+        return { results: db.select(normalized, boundValues) as T[] };
+      },
+    };
+  }
+
+  private run(query: string, values: unknown[]): unknown {
+    if (query.includes("insert into coach_chat_jobs") && query.includes("provider")) {
+      throw new Error("table coach_chat_jobs has no column named provider");
+    }
+    if (
+      query.includes("insert into coach_workout_summary_jobs") &&
+      query.includes("provider")
+    ) {
+      throw new Error("table coach_workout_summary_jobs has no column named provider");
+    }
+
+    if (query.includes("insert into coach_chat_jobs")) {
+      this.chatRows.push({
+        job_id: values[0],
+        install_id: values[1],
+        client_request_id: values[2],
+        status: values[3],
+        prepared_request_json: values[4],
+        response_json: null,
+        error_code: null,
+        error_message: null,
+        created_at: values[5],
+        started_at: null,
+        completed_at: null,
+        context_hash: values[6],
+        context_source: values[7],
+        chat_memory_hit: values[8],
+        snapshot_bytes: values[9],
+        recent_turn_count: values[10],
+        recent_turn_chars: values[11],
+        question_chars: values[12],
+        prompt_version: values[13],
+        model: values[14],
+        provider: null,
+        prompt_bytes: null,
+        fallback_prompt_bytes: null,
+        model_duration_ms: null,
+        fallback_model_duration_ms: null,
+        total_job_duration_ms: null,
+        inference_mode: null,
+        generation_status: null,
+        memory_committed_at: null,
+      });
+      return { meta: { changes: 1 } };
+    }
+
+    if (query.includes("insert into coach_workout_summary_jobs")) {
+      this.workoutSummaryRows.push({
+        job_id: values[0],
+        install_id: values[1],
+        client_request_id: values[2],
+        session_id: values[3],
+        fingerprint: values[4],
+        status: values[5],
+        prepared_request_json: values[6],
+        response_json: null,
+        error_code: null,
+        error_message: null,
+        created_at: values[7],
+        started_at: null,
+        completed_at: null,
+        request_mode: values[8],
+        trigger: values[9],
+        input_mode: values[10],
+        current_exercise_count: values[11],
+        history_exercise_count: values[12],
+        history_session_count: values[13],
+        prompt_version: values[14],
+        model: values[15],
+        provider: null,
+        prompt_bytes: null,
+        fallback_prompt_bytes: null,
+        model_duration_ms: null,
+        fallback_model_duration_ms: null,
+        total_job_duration_ms: null,
+        inference_mode: null,
+        generation_status: null,
+      });
+      return { meta: { changes: 1 } };
+    }
+
+    return { meta: { changes: 0 } };
+  }
+
+  private select(query: string, values: unknown[]): Array<Record<string, unknown>> {
+    if (query.includes("from coach_chat_jobs") && query.includes("provider = ?")) {
+      throw new Error("no such column: provider");
+    }
+    if (
+      query.includes("from coach_workout_summary_jobs") &&
+      query.includes("provider = ?")
+    ) {
+      throw new Error("no such column: provider");
+    }
+
+    if (query.includes("from coach_chat_jobs where job_id = ? and install_id = ?")) {
+      return this.chatRows.filter(
+        (row) => row.job_id === values[0] && row.install_id === values[1]
+      );
+    }
+
+    if (
+      query.includes(
+        "from coach_chat_jobs where install_id = ? and (client_request_id = ? or client_request_id = ?)"
+      )
+    ) {
+      return this.chatRows
+        .filter(
+          (row) =>
+            row.install_id === values[0] &&
+            (row.client_request_id === values[1] || row.client_request_id === values[2])
+        )
+        .sort((left, right) =>
+          String(right.created_at).localeCompare(String(left.created_at))
+        );
+    }
+
+    if (
+      query.includes(
+        "from coach_chat_jobs where install_id = ? and status in ('queued', 'running')"
+      )
+    ) {
+      return this.chatRows
+        .filter(
+          (row) =>
+            row.install_id === values[0] &&
+            (row.status === "queued" || row.status === "running")
+        )
+        .sort((left, right) =>
+          String(right.created_at).localeCompare(String(left.created_at))
+        );
+    }
+
+    if (
+      query.includes(
+        "from coach_workout_summary_jobs where install_id = ? and client_request_id = ?"
+      )
+    ) {
+      return this.workoutSummaryRows.filter(
+        (row) => row.install_id === values[0] && row.client_request_id === values[1]
+      );
+    }
+
+    if (
+      query.includes(
+        "from coach_workout_summary_jobs where install_id = ? and (client_request_id = ? or client_request_id = ?)"
+      )
+    ) {
+      return this.workoutSummaryRows
+        .filter(
+          (row) =>
+            row.install_id === values[0] &&
+            (row.client_request_id === values[1] || row.client_request_id === values[2])
+        )
+        .sort((left, right) =>
+          String(right.created_at).localeCompare(String(left.created_at))
+        );
+    }
+
+    if (
+      query.includes(
+        "from coach_workout_summary_jobs where install_id = ? and session_id = ? and fingerprint = ? and prompt_version = ? and model = ? and status in ('queued', 'running', 'completed')"
+      )
+    ) {
+      return this.workoutSummaryRows
+        .filter(
+          (row) =>
+            row.install_id === values[0] &&
+            row.session_id === values[1] &&
+            row.fingerprint === values[2] &&
+            row.prompt_version === values[3] &&
+            row.model === values[4] &&
+            (row.status === "queued" ||
+              row.status === "running" ||
+              row.status === "completed")
+        )
+        .sort((left, right) =>
+          String(right.created_at).localeCompare(String(left.created_at))
+        );
+    }
+
+    if (
+      query.includes(
+        "from coach_workout_summary_jobs where job_id = ? and install_id = ?"
+      )
+    ) {
+      return this.workoutSummaryRows.filter(
+        (row) => row.job_id === values[0] && row.install_id === values[1]
+      );
+    }
+
+    return [];
+  }
+}
+
+function normalizeLegacyDBQuery(query: string): string {
+  return query.replace(/\s+/g, " ").trim().toLowerCase();
 }
 
 function makeWorkflowBinding(create: unknown): NonNullable<Env["COACH_CHAT_WORKFLOW"]> {
