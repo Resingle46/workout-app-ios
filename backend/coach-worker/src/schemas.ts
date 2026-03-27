@@ -10,6 +10,7 @@ const optionalTrimmedStringSchema = z.string().trim().min(1).optional();
 const installIDSchema = z.string().trim().min(1).max(200);
 const snapshotHashSchema = z.string().trim().min(1).max(200);
 const workoutSummaryGroupKindSchema = z.enum(["regular", "superset"]);
+const COACH_CHAT_MARKDOWN_MAX_LENGTH = 6_000;
 
 const userProfileSchema = z
   .object({
@@ -290,7 +291,7 @@ export const snapshotEnvelopeSchema = z
 const coachConversationTurnSchema = z
   .object({
     role: z.enum(["user", "assistant"]),
-    content: nonEmptyStringSchema.max(1200),
+    content: nonEmptyStringSchema.max(COACH_CHAT_MARKDOWN_MAX_LENGTH),
   })
   .strict();
 
@@ -660,7 +661,7 @@ export const profileInsightsModelOutputSchema = z
 
 export const chatResponseSchema = z
   .object({
-    answerMarkdown: nonEmptyStringSchema.max(6000),
+    answerMarkdown: nonEmptyStringSchema.max(COACH_CHAT_MARKDOWN_MAX_LENGTH),
     responseID: nonEmptyStringSchema.max(200),
     followUps: z.array(nonEmptyStringSchema.max(160)).max(4),
     generationStatus: coachResponseGenerationStatusSchema.default("fallback"),
@@ -683,7 +684,7 @@ export const chatInferenceModeSchema = z.enum([
 
 export const chatJobResultSchema = z
   .object({
-    answerMarkdown: nonEmptyStringSchema.max(6000),
+    answerMarkdown: nonEmptyStringSchema.max(COACH_CHAT_MARKDOWN_MAX_LENGTH),
     responseID: nonEmptyStringSchema.max(200),
     followUps: z.array(nonEmptyStringSchema.max(160)).max(4),
     generationStatus: coachResponseGenerationStatusSchema.default("fallback"),
@@ -787,7 +788,7 @@ export const workoutSummaryJobStatusResponseSchema = z
 
 export const chatResponseModelOutputSchema = z
   .object({
-    answerMarkdown: nonEmptyStringSchema.max(6000),
+    answerMarkdown: nonEmptyStringSchema.max(COACH_CHAT_MARKDOWN_MAX_LENGTH),
     responseID: nonEmptyStringSchema.max(200).optional(),
     followUps: z.array(nonEmptyStringSchema.max(160)).max(4),
     suggestedChanges: z.array(z.unknown()).max(5).optional(),

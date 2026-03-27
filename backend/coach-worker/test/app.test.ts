@@ -846,6 +846,155 @@ describe("coach worker app", () => {
     });
   });
 
+  it("creates an async chat job with no recent turns", async () => {
+    const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
+    const workflowCreate = vi.fn().mockResolvedValue(makeWorkflowInstanceStub());
+    const app = createApp({
+      createInferenceService: () => stubInferenceService(),
+      createStateRepository: () => repository,
+    });
+    const env = makeEnv({
+      COACH_CHAT_WORKFLOW: makeWorkflowBinding(workflowCreate),
+    });
+    const request = {
+      ...makeChatJobCreateRequestFixture(),
+      clientRecentTurns: [],
+    };
+
+    const response = await app.fetch(
+      authedRequest("https://coach.example.workers.dev/v2/coach/chat-jobs", {
+        method: "POST",
+        body: JSON.stringify(request),
+      }),
+      env
+    );
+
+    expect(response.status).toBe(202);
+    const created = await response.json();
+    const storedJob = await repository.getChatJob(created.jobID, request.installID);
+    expect(storedJob?.preparedRequest.clientRecentTurns).toEqual([]);
+    expect(workflowCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it("creates an async follow-up chat job with populated recent turns", async () => {
+    const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
+    const workflowCreate = vi.fn().mockResolvedValue(makeWorkflowInstanceStub());
+    const app = createApp({
+      createInferenceService: () => stubInferenceService(),
+      createStateRepository: () => repository,
+    });
+    const env = makeEnv({
+      COACH_CHAT_WORKFLOW: makeWorkflowBinding(workflowCreate),
+    });
+    const request = {
+      ...makeChatJobCreateRequestFixture(),
+      clientRecentTurns: [
+        {
+          role: "user" as const,
+          content: "Can you help me plan the next progression step?",
+        },
+        {
+          role: "assistant" as const,
+          content: "A".repeat(1_800),
+        },
+      ],
+    };
+
+    const response = await app.fetch(
+      authedRequest("https://coach.example.workers.dev/v2/coach/chat-jobs", {
+        method: "POST",
+        body: JSON.stringify(request),
+      }),
+      env
+    );
+
+    expect(response.status).toBe(202);
+    const created = await response.json();
+    const storedJob = await repository.getChatJob(created.jobID, request.installID);
+    expect(storedJob?.preparedRequest.clientRecentTurns).toEqual([
+      {
+        role: "user",
+        content: "Can you help me plan the next progression step?",
+      },
+      {
+        role: "assistant",
+        content: "A".repeat(800),
+      },
+    ]);
+  });
+
+  it("rejects malformed async chat recent turns and logs the failing schema path", async () => {
+    const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
+    const app = createApp({
+      createInferenceService: () => stubInferenceService(),
+      createStateRepository: () => repository,
+    });
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const request = {
+      ...makeChatJobCreateRequestFixture(),
+      clientRecentTurns: [
+        {
+          role: "assistant",
+          content: { markdown: "not a string" },
+        },
+      ],
+    };
+
+    try {
+      const response = await app.fetch(
+        authedRequest("https://coach.example.workers.dev/v2/coach/chat-jobs", {
+          method: "POST",
+          body: JSON.stringify(request),
+        }),
+        makeEnv()
+      );
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toMatchObject({
+        error: {
+          code: "invalid_request",
+        },
+      });
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(errorSpy).not.toHaveBeenCalled();
+      expect(logSpy).not.toHaveBeenCalled();
+
+      const logged = parseLoggedPayload(warnSpy);
+      expect(logged).toMatchObject({
+        route: "/v2/coach/chat-jobs",
+        method: "POST",
+        status: 400,
+        errorCode: "invalid_request",
+        errorDetails: {
+          requestPreview: {
+            clientRecentTurnsCount: 1,
+            clientRecentTurns: [
+              {
+                index: 0,
+                role: "assistant",
+                contentType: "object",
+              },
+            ],
+          },
+        },
+        validationIssues: expect.arrayContaining([
+          expect.objectContaining({
+            code: "invalid_type",
+            path: ["clientRecentTurns", 0, "content"],
+            expected: "string",
+            received: "object",
+          }),
+        ]),
+      });
+    } finally {
+      warnSpy.mockRestore();
+      errorSpy.mockRestore();
+      logSpy.mockRestore();
+    }
+  });
+
   it("returns the existing async chat job for duplicate clientRequestID", async () => {
     const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
     const workflowCreate = vi.fn().mockResolvedValue(makeWorkflowInstanceStub());

@@ -78,6 +78,7 @@ export function createApp(
       const startedAt = deps.now();
       const pathname = new URL(request.url).pathname;
       let routeDiagnostics: Record<string, unknown> | undefined;
+      let validationRequestPreview: Record<string, unknown> | undefined;
 
       try {
         if (pathname === "/health" && request.method === "GET") {
@@ -353,7 +354,10 @@ export function createApp(
         }
 
         if (pathname === "/v2/coach/chat-jobs" && request.method === "POST") {
-          const body = chatJobCreateRequestSchema.parse(await readJSON(request));
+          const rawBody = await readJSON(request);
+          validationRequestPreview = buildChatRequestPreview(rawBody);
+          const body = chatJobCreateRequestSchema.parse(rawBody);
+          validationRequestPreview = undefined;
           const context = await stateRepository.resolveCoachContext(body);
           const executionMetadata = buildExecutionMetadata({
             contextProfile: "rich_async_analytics_v1",
@@ -521,7 +525,10 @@ export function createApp(
         }
 
         if (pathname === "/v1/coach/chat" && request.method === "POST") {
-          const body = chatRequestSchema.parse(await readJSON(request));
+          const rawBody = await readJSON(request);
+          validationRequestPreview = buildChatRequestPreview(rawBody);
+          const body = chatRequestSchema.parse(rawBody);
+          validationRequestPreview = undefined;
           const context = await stateRepository.resolveCoachContext(body);
           const executionMetadata = buildExecutionMetadata({
             contextProfile: "compact_sync_v2",
@@ -859,6 +866,12 @@ export function createApp(
                 : undefined;
         const errorDetails = mergeErrorDetails(routeDiagnostics, rawErrorDetails);
         const validationIssues = extractValidationIssues(error);
+        const loggedErrorDetails =
+          validationIssues && validationRequestPreview
+            ? mergeErrorDetails(errorDetails, {
+                requestPreview: validationRequestPreview,
+              })
+            : errorDetails;
 
         logRequest({
           requestID,
@@ -867,7 +880,7 @@ export function createApp(
           status: mapped.status,
           durationMs: deps.now() - startedAt,
           errorCode: extractMappedErrorCode(mapped.body),
-          errorDetails,
+          errorDetails: loggedErrorDetails,
           validationIssues,
         });
         return json(mapped.body, mapped.status);
@@ -1512,12 +1525,100 @@ function totalWorkoutSummaryHistorySessionCount(
   return history.reduce((total, exerciseHistory) => total + exerciseHistory.sessions.length, 0);
 }
 
+function buildChatRequestPreview(rawBody: unknown): Record<string, unknown> {
+  if (!isRecord(rawBody)) {
+    return {
+      bodyType: describeValueType(rawBody),
+    };
+  }
+
+  const allowedKeys = new Set([
+    "locale",
+    "question",
+    "installID",
+    "snapshotHash",
+    "snapshot",
+    "snapshotUpdatedAt",
+    "runtimeContextDelta",
+    "clientRecentTurns",
+    "capabilityScope",
+    "clientRequestID",
+  ]);
+  const question = typeof rawBody.question === "string" ? rawBody.question : undefined;
+  const turns = Array.isArray(rawBody.clientRecentTurns)
+    ? rawBody.clientRecentTurns.slice(0, 4).map((turn, index) => {
+        if (!isRecord(turn)) {
+          return {
+            index,
+            turnType: describeValueType(turn),
+          };
+        }
+
+        const content =
+          typeof turn.content === "string" ? turn.content : undefined;
+        return {
+          index,
+          role:
+            typeof turn.role === "string" ? turn.role : undefined,
+          roleType: describeValueType(turn.role),
+          contentType: describeValueType(turn.content),
+          ...(content
+            ? {
+                contentChars: content.length,
+                contentPreview: sanitizeTextPreview(content, 120),
+              }
+            : {}),
+        };
+      })
+    : undefined;
+
+  return {
+    installID: readNonEmptyString(rawBody.installID),
+    installIDType: describeValueType(rawBody.installID),
+    clientRequestID: readNonEmptyString(rawBody.clientRequestID),
+    clientRequestIDType: describeValueType(rawBody.clientRequestID),
+    localeType: describeValueType(rawBody.locale),
+    capabilityScopeType: describeValueType(rawBody.capabilityScope),
+    questionType: describeValueType(rawBody.question),
+    ...(question
+      ? {
+          questionChars: question.length,
+          questionPreview: sanitizeTextPreview(question, 160),
+        }
+      : {}),
+    clientRecentTurnsType: describeValueType(rawBody.clientRecentTurns),
+    ...(Array.isArray(rawBody.clientRecentTurns)
+      ? {
+          clientRecentTurnsCount: rawBody.clientRecentTurns.length,
+          clientRecentTurns: turns,
+        }
+      : {}),
+    hasSnapshot: hasOwn(rawBody, "snapshot"),
+    hasRuntimeContextDelta: hasOwn(rawBody, "runtimeContextDelta"),
+    extraKeys: Object.keys(rawBody).filter((key) => !allowedKeys.has(key)).slice(0, 8),
+  };
+}
+
 function resolvePromptVersion(env: Env): string {
   return env.COACH_PROMPT_VERSION?.trim() || "2026-03-25.v1";
 }
 
 function resolveModel(env: Env): string {
   return env.AI_MODEL?.trim() || DEFAULT_AI_MODEL;
+}
+
+function describeValueType(value: unknown): string {
+  if (value === null) {
+    return "null";
+  }
+  if (Array.isArray(value)) {
+    return "array";
+  }
+  return typeof value;
+}
+
+function sanitizeTextPreview(value: string, maxLength: number): string {
+  return value.replace(/\s+/g, " ").trim().slice(0, maxLength);
 }
 
 function mergeRecentTurns(
