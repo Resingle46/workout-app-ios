@@ -714,6 +714,11 @@ describe("coach worker app", () => {
 
   it("prefers model cache over degraded sidecar cache for the same insights key", async () => {
     const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
+    const getInsightsCacheSpy = vi.spyOn(repository, "getInsightsCache");
+    const getDegradedInsightsCacheSpy = vi.spyOn(
+      repository,
+      "getDegradedInsightsCache"
+    );
     const body = makeProfileInsightsRequestFixture();
     const context = await repository.resolveCoachContext(body);
     const key = storageKeyFromMetadata(
@@ -755,6 +760,8 @@ describe("coach worker app", () => {
     );
 
     expect(response.status).toBe(200);
+    expect(getInsightsCacheSpy).toHaveBeenCalledTimes(1);
+    expect(getDegradedInsightsCacheSpy).not.toHaveBeenCalled();
     await expect(response.json()).resolves.toMatchObject({
       summary: "Cached model summary",
       generationStatus: "model",
@@ -764,6 +771,11 @@ describe("coach worker app", () => {
 
   it("bypasses degraded sidecar cache on force refresh", async () => {
     const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
+    const getInsightsCacheSpy = vi.spyOn(repository, "getInsightsCache");
+    const getDegradedInsightsCacheSpy = vi.spyOn(
+      repository,
+      "getDegradedInsightsCache"
+    );
     let inferenceCalls = 0;
     const body = makeProfileInsightsRequestFixture();
     const context = await repository.resolveCoachContext(body);
@@ -824,6 +836,8 @@ describe("coach worker app", () => {
 
     expect(response.status).toBe(200);
     expect(inferenceCalls).toBe(1);
+    expect(getInsightsCacheSpy).not.toHaveBeenCalled();
+    expect(getDegradedInsightsCacheSpy).not.toHaveBeenCalled();
     await expect(response.json()).resolves.toMatchObject({
       summary: "Force refreshed summary",
       generationStatus: "model",
@@ -993,6 +1007,7 @@ describe("coach worker app", () => {
 
   it("stores live fallback results only in the degraded sidecar cache", async () => {
     const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
     const body = makeProfileInsightsRequestFixture();
     const context = await repository.resolveCoachContext(body);
     const key = storageKeyFromMetadata(
@@ -1039,17 +1054,104 @@ describe("coach worker app", () => {
       makeEnv()
     );
 
-    expect(response.status).toBe(200);
-    await expect(
-      repository.getInsightsCache(body.installID, key)
-    ).resolves.toBeNull();
-    await expect(
-      repository.getDegradedInsightsCache(body.installID, key)
-    ).resolves.toMatchObject({
-      summary: "Local fallback summary",
-      generationStatus: "fallback",
-      insightSource: "fallback",
+    try {
+      expect(response.status).toBe(200);
+      await expect(
+        repository.getInsightsCache(body.installID, key)
+      ).resolves.toBeNull();
+      await expect(
+        repository.getDegradedInsightsCache(body.installID, key)
+      ).resolves.toMatchObject({
+        summary: "Local fallback summary",
+        generationStatus: "fallback",
+        insightSource: "fallback",
+      });
+      expect(parseLoggedPayload(logSpy)).toMatchObject({
+        responseSource: "local_fallback",
+        fallbackSource: "local_fallback",
+        cacheSource: "miss",
+      });
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it("stores live plain-text fallback only in the degraded sidecar cache with degraded semantics", async () => {
+    const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const body = makeProfileInsightsRequestFixture();
+    const context = await repository.resolveCoachContext(body);
+    const key = storageKeyFromMetadata(
+      context.contextHash,
+      {
+        contextProfile: "compact_sync_v2",
+        contextVersion: context.contextVersion,
+        analyticsVersion: context.analyticsVersion,
+        promptProfile: "profile_compact_context_v2",
+        memoryProfile: "compact_v1",
+      },
+      "test.v1",
+      DEFAULT_AI_MODEL
+    );
+    const app = createApp({
+      createInferenceService: () => ({
+        async generateProfileInsights() {
+          return {
+            data: {
+              summary: "Plain text fallback summary",
+              recommendations: ["Plain text fallback recommendation"],
+              generationStatus: "fallback",
+              insightSource: "fallback",
+            },
+            model: "@cf/meta/llama-3.1-8b-instruct-fast",
+            selectedModel: "@cf/meta/llama-3.1-8b-instruct-fast",
+            modelRole: "sync_fallback",
+            mode: "plain_text_fallback",
+          };
+        },
+        async generateWorkoutSummary() {
+          throw new Error("not used");
+        },
+        async generateChat() {
+          throw new Error("not used");
+        },
+      }),
+      createStateRepository: () => repository,
     });
+
+    const response = await app.fetch(
+      authedRequest("https://coach.example.workers.dev/v1/coach/profile-insights", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+      makeEnv()
+    );
+
+    try {
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toMatchObject({
+        summary: "Plain text fallback summary",
+        generationStatus: "fallback",
+        insightSource: "fallback",
+      });
+      await expect(
+        repository.getInsightsCache(body.installID, key)
+      ).resolves.toBeNull();
+      await expect(
+        repository.getDegradedInsightsCache(body.installID, key)
+      ).resolves.toMatchObject({
+        summary: "Plain text fallback summary",
+        generationStatus: "fallback",
+        insightSource: "fallback",
+      });
+      expect(parseLoggedPayload(logSpy)).toMatchObject({
+        responseSource: "live_fallback",
+        fallbackSource: "none",
+        cacheSource: "miss",
+      });
+    } finally {
+      logSpy.mockRestore();
+    }
   });
 
   it("does not mark rolling rotation as program frequency mismatch", () => {
@@ -2818,6 +2920,8 @@ describe("WorkersAICoachService", () => {
     expect(result.data.recommendations).toEqual([
       "Keep volume stable this week.",
     ]);
+    expect(result.data.generationStatus).toBe("fallback");
+    expect(result.data.insightSource).toBe("fallback");
   });
 
   it("retries profile insights on balanced structured routing after a fast structured failure", async () => {
@@ -2917,6 +3021,8 @@ describe("WorkersAICoachService", () => {
     expect(result.data.recommendations).toEqual([
       "Hold volume steady for one more week.",
     ]);
+    expect(result.data.generationStatus).toBe("fallback");
+    expect(result.data.insightSource).toBe("fallback");
   });
 
   it("drops to local fallback when the reserved plain-text budget is no longer available", async () => {
@@ -2993,8 +3099,52 @@ describe("WorkersAICoachService", () => {
     expect(result.data.recommendations).toEqual([
       "Keep weekly load stable for one more week.",
     ]);
-    expect(result.data.generationStatus).toBe("model");
-    expect(result.data.insightSource).toBe("fresh_model");
+    expect(result.data.generationStatus).toBe("fallback");
+    expect(result.data.insightSource).toBe("fallback");
+  });
+
+  it("keeps actual attempt-specific prompt and routing metadata in profile failure logs", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const service = new WorkersAICoachService(
+      makeEnv({
+        AI: {
+          run: vi.fn().mockRejectedValue(new Error("Request timed out")),
+        },
+        MODEL_ROUTING_ENABLED: "true",
+        QUALITY_ESCALATION_ENABLED: "false",
+      })
+    );
+
+    try {
+      await service.generateProfileInsights(makeProfileInsightsRequestFixture(), {
+        timeoutProfile: "async_job",
+        contextProfile: "rich_async_analytics_v1",
+        promptProfile: "profile_rich_async_analytics_v1",
+      });
+
+      const failedLog = parseLoggedPayloads(warnSpy).find(
+        (payload) => payload.event === "coach_profile_attempt_failed"
+      );
+      expect(failedLog).toBeDefined();
+      expect(failedLog).toMatchObject({
+        selectedModel: "@cf/zai-org/glm-4.7-flash",
+        modelRole: "insights_fast",
+        fallbackStage: "primary",
+        fallbackHopCount: 0,
+        mode: "structured",
+      });
+      expect(failedLog?.reasonDetails).toMatchObject({
+        promptVariant: "profile_compact_context_v2",
+        contextProfile: "compact_sync_v2",
+        modelRole: "insights_fast",
+        selectedModel: "@cf/zai-org/glm-4.7-flash",
+        fallbackStage: "primary",
+        fallbackHopCount: 0,
+        mode: "structured",
+      });
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it("cuts off long-running profile insight requests before the client disconnects", async () => {

@@ -447,8 +447,8 @@ export class WorkersAICoachService implements CoachInferenceService {
             ...parsePlainProfileInsights(
               extractPlainText(fallbackInvocation.rawResponse, "profile insights")
             ),
-            generationStatus: "model",
-            insightSource: "fresh_model",
+            generationStatus: "fallback",
+            insightSource: "fallback",
           },
           localFallback,
           attemptExecution.derivedAnalytics
@@ -1377,9 +1377,12 @@ function buildProfileInsightsAttemptDetails(
   sharedDetails: Record<string, unknown>
 ): Record<string, unknown> {
   return {
+    ...sharedDetails,
     promptVariant: attempt.promptProfile,
     contextProfile: attempt.contextProfile,
     modelRole: attempt.modelRole,
+    selectedModel: attempt.selectedModel,
+    mode: attempt.mode,
     useCase: attempt.useCase,
     routingVersion: attempt.routingVersion,
     routingReasonTags: attempt.routingReasonTags,
@@ -1390,7 +1393,6 @@ function buildProfileInsightsAttemptDetails(
     installID: request.installID,
     capabilityScope: request.capabilityScope,
     remainingBudgetMs,
-    ...sharedDetails,
   };
 }
 

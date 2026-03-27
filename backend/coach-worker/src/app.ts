@@ -291,22 +291,12 @@ export function createApp(
                 storageKey
               )
             : null;
-          const degradedCachedResponse = !body.forceRefresh && context.cacheAllowed
-            ? await stateRepository.getDegradedInsightsCache(
-                body.installID,
-                storageKey
-              )
-            : null;
-          const cacheLookupMs = deps.now() - cacheLookupStartedAt;
           const reusableCachedResponse = normalizeReusableProfileInsightsCacheEntry(
             cachedResponse
           );
-          const reusableDegradedCachedResponse =
-            normalizeReusableDegradedProfileInsightsCacheEntry(
-              degradedCachedResponse
-            );
 
           if (reusableCachedResponse) {
+            const cacheLookupMs = deps.now() - cacheLookupStartedAt;
             logRequest({
               requestID,
               route: pathname,
@@ -339,6 +329,18 @@ export function createApp(
             return json(reusableCachedResponse, 200);
           }
 
+          const degradedCachedResponse = !body.forceRefresh && context.cacheAllowed
+            ? await stateRepository.getDegradedInsightsCache(
+                body.installID,
+                storageKey
+              )
+            : null;
+          const cacheLookupMs = deps.now() - cacheLookupStartedAt;
+          const reusableDegradedCachedResponse =
+            normalizeReusableDegradedProfileInsightsCacheEntry(
+              degradedCachedResponse
+            );
+
           if (reusableDegradedCachedResponse) {
             logRequest({
               requestID,
@@ -357,10 +359,7 @@ export function createApp(
               modelInferenceExecuted: false,
               responseSource: "degraded_sidecar",
               cacheSource: "degraded_sidecar",
-              fallbackSource:
-                reusableDegradedCachedResponse.generationStatus === "fallback"
-                  ? "local_fallback"
-                  : "none",
+              fallbackSource: "none",
               useCase: routingDecision.useCase,
               modelRole: routingDecision.modelRole,
               selectedModel: routingDecision.selectedModel,
@@ -394,9 +393,7 @@ export function createApp(
             body.forceRefresh,
             context.cacheAllowed
           );
-          const liveResponseSource = isLiveProfileInsightsFallbackMode(result.mode)
-            ? "live_fallback"
-            : "live_model";
+          const liveResponseSource = resolveProfileInsightsResponseSource(result.mode);
           const fallbackSource =
             result.mode === "local_fallback" ? "local_fallback" : "none";
           const cacheSource = body.forceRefresh
@@ -1983,6 +1980,18 @@ function normalizeReusableDegradedProfileInsightsCacheEntry(
   response: CoachProfileInsightsResponse | null
 ): CoachProfileInsightsResponse | null {
   return response;
+}
+
+function resolveProfileInsightsResponseSource(
+  mode: string | undefined
+): "live_model" | "live_fallback" | "local_fallback" {
+  if (mode === "local_fallback") {
+    return "local_fallback";
+  }
+  if (mode === "plain_text_fallback") {
+    return "live_fallback";
+  }
+  return "live_model";
 }
 
 function isLiveProfileInsightsFallbackMode(mode: string | undefined): boolean {
