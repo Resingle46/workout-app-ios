@@ -846,6 +846,7 @@ struct CoachChatResponse: Codable, Hashable, Sendable {
     var followUps: [String]
     var generationStatus: CoachResponseGenerationStatus? = nil
     var provider: CoachAIProvider? = nil
+    var selectedModel: String? = nil
 
     var isModelGenerated: Bool {
         generationStatus == .model
@@ -854,6 +855,7 @@ struct CoachChatResponse: Codable, Hashable, Sendable {
 
 struct CoachJobMetadata: Codable, Hashable, Sendable {
     var provider: CoachAIProvider?
+    var selectedModel: String?
     var jobDeadlineAt: Date?
     var contextProfile: String?
     var promptProfile: String?
@@ -923,9 +925,11 @@ struct CoachChatMessage: Identifiable, Hashable, Sendable {
     var id: String
     var role: CoachChatRole
     var content: String
+    var createdAt: Date
     var followUps: [String]
     var generationStatus: CoachResponseGenerationStatus? = nil
     var provider: CoachAIProvider? = nil
+    var selectedModel: String? = nil
     var isLoading: Bool
     var isStatus: Bool
 
@@ -933,18 +937,22 @@ struct CoachChatMessage: Identifiable, Hashable, Sendable {
         id: String = UUID().uuidString,
         role: CoachChatRole,
         content: String,
+        createdAt: Date = Date(),
         followUps: [String] = [],
         generationStatus: CoachResponseGenerationStatus? = nil,
         provider: CoachAIProvider? = nil,
+        selectedModel: String? = nil,
         isLoading: Bool = false,
         isStatus: Bool = false
     ) {
         self.id = id
         self.role = role
         self.content = content
+        self.createdAt = createdAt
         self.followUps = followUps
         self.generationStatus = generationStatus
         self.provider = provider
+        self.selectedModel = selectedModel
         self.isLoading = isLoading
         self.isStatus = isStatus
     }
@@ -3072,7 +3080,8 @@ final class CoachStore {
             responseID: result.responseID,
             followUps: result.followUps,
             generationStatus: result.generationStatus,
-            provider: result.provider ?? jobResponse.metadata?.provider
+            provider: result.provider ?? jobResponse.metadata?.provider,
+            selectedModel: jobResponse.metadata?.selectedModel
         )
     }
 
@@ -3178,6 +3187,7 @@ final class CoachStore {
                     role: .assistant,
                     content: description,
                     provider: jobResponse.metadata?.provider ?? activeChatProvider,
+                    selectedModel: jobResponse.metadata?.selectedModel,
                     isStatus: true
                 )
             )
@@ -3206,7 +3216,8 @@ final class CoachStore {
                 content: response.answerMarkdown,
                 followUps: response.followUps,
                 generationStatus: response.generationStatus,
-                provider: response.provider ?? jobResponse.metadata?.provider ?? activeChatProvider
+                provider: response.provider ?? jobResponse.metadata?.provider ?? activeChatProvider,
+                selectedModel: response.selectedModel ?? jobResponse.metadata?.selectedModel
             )
         )
     }
@@ -3244,6 +3255,7 @@ final class CoachStore {
         content: String,
         isLoading: Bool
     ) {
+        let existingCreatedAt = messages.first(where: { $0.id == id })?.createdAt ?? Date()
         activeChatPlaceholderID = id
         replaceMessage(
             id: id,
@@ -3251,6 +3263,7 @@ final class CoachStore {
                 id: id,
                 role: .assistant,
                 content: content,
+                createdAt: existingCreatedAt,
                 isLoading: isLoading,
                 isStatus: true
             )
@@ -4204,6 +4217,15 @@ private struct CoachChatMessageCard: View {
     let message: CoachChatMessage
     let onFollowUpTap: (String) -> Void
 
+    private static let timestampFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = .autoupdatingCurrent
+        formatter.calendar = .autoupdatingCurrent
+        formatter.timeZone = .autoupdatingCurrent
+        formatter.dateFormat = "HH:mm:ss"
+        return formatter
+    }()
+
     private var isAssistant: Bool {
         message.role == .assistant
     }
@@ -4212,12 +4234,33 @@ private struct CoachChatMessageCard: View {
         isAssistant ? "coach.message.coach" : "coach.message.you"
     }
 
+    private var timestampText: String {
+        Self.timestampFormatter.string(from: message.createdAt)
+    }
+
     private var showsGenerationStatus: Bool {
         isAssistant && !message.isLoading && !message.isStatus
     }
 
     private var allowsCopy: Bool {
         isAssistant && !message.isLoading && !message.isStatus
+    }
+
+    private var visibleModelLabel: String? {
+        guard isAssistant,
+              !message.isLoading,
+              !message.isStatus,
+              let selectedModel = message.selectedModel?
+                  .trimmingCharacters(in: .whitespacesAndNewlines),
+              !selectedModel.isEmpty else {
+            return nil
+        }
+
+        if selectedModel.hasPrefix("@cf/") {
+            return String(selectedModel.dropFirst(4))
+        }
+
+        return selectedModel
     }
 
     @ViewBuilder
@@ -4248,12 +4291,27 @@ private struct CoachChatMessageCard: View {
                         in: Circle()
                     )
 
-                Text(authorKey)
-                    .font(AppTypography.body(size: 15, weight: .semibold))
-                    .foregroundStyle(AppTheme.primaryText)
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(authorKey)
+                            .font(AppTypography.body(size: 15, weight: .semibold))
+                            .foregroundStyle(AppTheme.primaryText)
 
-                if showsGenerationStatus {
-                    CoachGenerationStatusDot(generationStatus: message.generationStatus)
+                        Text(timestampText)
+                            .font(AppTypography.caption(size: 12, weight: .medium))
+                            .foregroundStyle(AppTheme.secondaryText)
+
+                        if showsGenerationStatus {
+                            CoachGenerationStatusDot(generationStatus: message.generationStatus)
+                        }
+                    }
+
+                    if let visibleModelLabel {
+                        Text(visibleModelLabel)
+                            .font(AppTypography.caption(size: 12, weight: .medium))
+                            .foregroundStyle(AppTheme.secondaryText)
+                            .lineLimit(2)
+                    }
                 }
             }
 

@@ -1224,6 +1224,7 @@ describe("coach worker app", () => {
       status: "queued",
       pollAfterMs: 1500,
       metadata: {
+        selectedModel: expect.any(String),
         contextProfile: "rich_async_v1",
         promptProfile: "chat_rich_async_v1",
         memoryProfile: "rich_async_v1",
@@ -2275,6 +2276,7 @@ describe("coach worker app", () => {
       pollAfterMs: 1500,
       reusedExistingJob: false,
       metadata: {
+        selectedModel: expect.any(String),
         contextProfile: "rich_async_v1",
         promptProfile: "workout_summary_rich_async_v1",
         memoryProfile: "rich_async_v1",

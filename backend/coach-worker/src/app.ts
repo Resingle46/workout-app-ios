@@ -2039,6 +2039,7 @@ function publicJobMetadata(
   | {
       jobDeadlineAt?: string;
       provider?: string;
+      selectedModel?: string;
       contextProfile?: string;
       promptProfile?: string;
       contextVersion?: string;
@@ -2053,6 +2054,7 @@ function publicJobMetadata(
   return {
     jobDeadlineAt: metadata.jobDeadlineAt,
     provider: metadata.provider,
+    selectedModel: metadata.selectedModel,
     contextProfile: metadata.contextProfile,
     promptProfile: metadata.promptProfile,
     contextVersion: metadata.contextVersion,

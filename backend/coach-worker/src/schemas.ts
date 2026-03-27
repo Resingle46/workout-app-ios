@@ -403,6 +403,7 @@ const workoutSummaryExerciseHistorySchema = z
 const jobMetadataSchema = z
   .object({
     provider: aiProviderSchema.optional(),
+    selectedModel: nonEmptyStringSchema.max(200).optional(),
     jobDeadlineAt: isoDateTimeSchema.optional(),
     contextProfile: nonEmptyStringSchema.max(80).optional(),
     promptProfile: nonEmptyStringSchema.max(80).optional(),
