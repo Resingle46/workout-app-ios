@@ -5,6 +5,7 @@ import {
   createWorkersAICoachService,
   type CoachInferenceService,
   type Env,
+  type InferenceResult,
 } from "./openai";
 import {
   ActiveCoachChatJobError,
@@ -12,7 +13,7 @@ import {
   type CoachChatJobRecord,
   type CoachStateStore,
 } from "./state";
-import type { CoachChatJobError } from "./schemas";
+import type { CoachChatJobError, CoachChatResponse } from "./schemas";
 
 const DEFAULT_WORKFLOW_STEP_CONFIG = {
   timeout: "10 minutes",
@@ -31,6 +32,40 @@ interface ChatJobExecutionDependencies {
   createInferenceService?: (env: Env) => CoachInferenceService;
   createStateRepository?: (env: Env) => CoachStateStore;
   now?: () => number;
+}
+
+type ChatJobFailureOrigin =
+  | "claim"
+  | "inference"
+  | "persist_completion"
+  | "memory_commit"
+  | "workflow_runtime";
+
+type GeneratedChatResponse = {
+  latestJob: CoachChatJobRecord;
+  inferenceResult: InferenceResult<CoachChatResponse>;
+  inferenceMode: NonNullable<CoachChatJobRecord["inferenceMode"]>;
+  totalJobDurationMs: number;
+};
+
+type ChatJobExecutionDiagnostics = {
+  errorName: string;
+  errorMessage: string;
+  stackPreview?: string;
+  wasRecognizedAsInferenceError: boolean;
+  wasRecognizedAsPersistenceError: boolean;
+  inferredCancellation: boolean;
+};
+
+class ChatJobExecutionPhaseError extends Error {
+  constructor(
+    readonly failureOrigin: ChatJobFailureOrigin,
+    readonly cause: unknown
+  ) {
+    super(cause instanceof Error ? cause.message : "Unknown error");
+    this.name = cause instanceof Error ? cause.name : "ChatJobExecutionPhaseError";
+    this.stack = cause instanceof Error ? cause.stack : undefined;
+  }
 }
 
 export async function executeChatJob(
@@ -68,63 +103,74 @@ export async function executeChatJob(
     return expireChatJob(stateRepository, initialJob, now);
   }
 
-  const startedAt = new Date(now()).toISOString();
-  const claimResult = await runWorkflowStep(
-    step,
-    "mark_chat_job_running",
-    DEFAULT_WORKFLOW_STEP_CONFIG,
-    async () => {
-      const updated = await stateRepository.markChatJobRunning(jobID, startedAt);
-      return {
-        claimed: updated.claimed,
-        found: Boolean(updated.job),
-        status: updated.job?.status ?? null,
-      };
-    }
-  );
-
-  if (!claimResult.found) {
-    return null;
-  }
-
-  const claimedJob = await stateRepository.getChatJobByID(jobID);
-  if (!claimedJob) {
-    throw new Error(`Coach chat job ${jobID} was not found.`);
-  }
-
-  if (!claimResult.claimed) {
-    if (claimedJob.status === "running") {
-      logChatJobEvent(
-        "coach_chat_job_duplicate_execution_skipped",
-        claimedJob
-      );
-    }
-    return claimedJob;
-  }
-
-  const runningJob = claimedJob;
-
-  if (isJobExpired(runningJob, now())) {
-    return expireChatJob(stateRepository, runningJob, now);
-  }
-
-  logChatJobEvent("coach_chat_job_started", runningJob);
-  logChatJobEvent("coach_chat_job_running", runningJob);
+  let currentJobForFailure = initialJob;
+  let terminalFailureOrigin: ChatJobFailureOrigin | undefined;
 
   try {
-    await runWorkflowStep(
+    const startedAt = new Date(now()).toISOString();
+    const claimResult = await runWorkflowStep(
       step,
-      "generate_and_persist_chat_response",
+      "mark_chat_job_running",
+      DEFAULT_WORKFLOW_STEP_CONFIG,
+      async () => {
+        try {
+          const updated = await stateRepository.markChatJobRunning(jobID, startedAt);
+          return {
+            claimed: updated.claimed,
+            found: Boolean(updated.job),
+            status: updated.job?.status ?? null,
+          };
+        } catch (error) {
+          throw wrapChatJobExecutionError("claim", error);
+        }
+      }
+    );
+
+    if (!claimResult.found) {
+      return null;
+    }
+
+    const claimedJob = await stateRepository.getChatJobByID(jobID);
+    if (!claimedJob) {
+      throw new Error(`Coach chat job ${jobID} was not found.`);
+    }
+    currentJobForFailure = claimedJob;
+
+    if (!claimResult.claimed) {
+      if (claimedJob.status === "running") {
+        logChatJobEvent(
+          "coach_chat_job_duplicate_execution_skipped",
+          claimedJob
+        );
+      }
+      return claimedJob;
+    }
+
+    const runningJob = claimedJob;
+
+    if (isJobExpired(runningJob, now())) {
+      terminalFailureOrigin = "workflow_runtime";
+      return expireChatJob(stateRepository, runningJob, now);
+    }
+
+    logChatJobEvent("coach_chat_job_started", runningJob);
+    logChatJobEvent("coach_chat_job_running", runningJob);
+
+    const generationResult = await runWorkflowStep(
+      step,
+      "generate_chat_response",
       DEFAULT_WORKFLOW_STEP_CONFIG,
       async () => {
         const latestJob = await stateRepository.getChatJobByID(jobID);
         if (!latestJob) {
           throw new Error(`Coach chat job ${jobID} was not found.`);
         }
+        currentJobForFailure = latestJob;
         if (isTerminalJobStatus(latestJob.status)) {
-          return { terminalStatus: latestJob.status };
+          return { terminalStatus: latestJob.status as CoachChatJobRecord["status"] };
         }
         if (isJobExpired(latestJob, now())) {
+          terminalFailureOrigin = "workflow_runtime";
           await expireChatJob(stateRepository, latestJob, now);
           return { terminalStatus: "failed" as const };
         }
@@ -137,74 +183,86 @@ export async function executeChatJob(
               timeoutProfile: "async_job",
             }
           );
-          const completedAt = new Date(now()).toISOString();
-          const totalJobDurationMs = Math.max(
-            now() - Date.parse(latestJob.createdAt),
-            0
-          );
-          const inferenceMode =
-            inferenceResult.mode === "plain_text_fallback"
-              ? "plain_text_fallback"
-              : inferenceResult.mode === "degraded_fallback"
-                ? "degraded_fallback"
-                : "structured";
 
-          await stateRepository.completeChatJob(jobID, {
-            completedAt,
-            result: {
-              ...inferenceResult.data,
-              responseID: latestJob.preparedRequest.responseID,
-              inferenceMode,
-              modelDurationMs: inferenceResult.modelDurationMs,
-              totalJobDurationMs,
-            },
-            promptBytes: inferenceResult.promptBytes,
-            fallbackPromptBytes: inferenceResult.fallbackPromptBytes,
-            modelDurationMs: inferenceResult.modelDurationMs,
-            fallbackModelDurationMs: inferenceResult.fallbackModelDurationMs,
-            totalJobDurationMs,
-            inferenceMode,
-            generationStatus: inferenceResult.data.generationStatus,
-          });
-
-          return { terminalStatus: "completed" as const };
+          return {
+            terminalStatus: "generated" as const,
+            generated: buildGeneratedChatResponse(
+              latestJob,
+              inferenceResult,
+              now
+            ),
+          };
         } catch (error) {
-          const failure = normalizeChatJobExecutionError(error);
-          if (failure.retryable) {
-            throw error;
-          }
-
-          const failedAt = new Date(now()).toISOString();
-          const totalJobDurationMs = Math.max(
-            now() - Date.parse(latestJob.createdAt),
-            0
-          );
-          await persistFailedStateSafely(
-            stateRepository,
-            jobID,
-            {
-              completedAt: failedAt,
-              error: failure,
-              promptBytes: extractNumericErrorDetail(error, "promptBytes"),
-              fallbackPromptBytes: extractNumericErrorDetail(
-                error,
-                "fallbackPromptBytes"
-              ),
-              modelDurationMs: extractNumericErrorDetail(error, "modelDurationMs"),
-              fallbackModelDurationMs: extractNumericErrorDetail(
-                error,
-                "fallbackModelDurationMs"
-              ),
-              totalJobDurationMs,
-              inferenceMode: normalizeInferenceMode(error),
-            },
-            latestJob
-          );
-
-          return { terminalStatus: "failed" as const, errorCode: failure.code };
+          throw wrapChatJobExecutionError("inference", error);
         }
       }
     );
+
+    if (generationResult.terminalStatus === "generated") {
+      const generated = generationResult.generated;
+      currentJobForFailure = generated.latestJob;
+      await runWorkflowStep(
+        step,
+        "persist_chat_completion",
+        DEFAULT_WORKFLOW_STEP_CONFIG,
+        async () => {
+          logChatCompletionPersistenceEvent(
+            "coach_chat_job_persist_started",
+            generated.latestJob,
+            generated,
+            {
+              phase: "persist_completion",
+              failureOrigin: "persist_completion",
+            }
+          );
+
+          try {
+            await stateRepository.completeChatJob(jobID, {
+              completedAt: new Date(now()).toISOString(),
+              result: {
+                ...generated.inferenceResult.data,
+                responseID: generated.latestJob.preparedRequest.responseID,
+                inferenceMode: generated.inferenceMode,
+                modelDurationMs: generated.inferenceResult.modelDurationMs,
+                totalJobDurationMs: generated.totalJobDurationMs,
+              },
+              promptBytes: generated.inferenceResult.promptBytes,
+              fallbackPromptBytes: generated.inferenceResult.fallbackPromptBytes,
+              modelDurationMs: generated.inferenceResult.modelDurationMs,
+              fallbackModelDurationMs:
+                generated.inferenceResult.fallbackModelDurationMs,
+              totalJobDurationMs: generated.totalJobDurationMs,
+              inferenceMode: generated.inferenceMode,
+              generationStatus: generated.inferenceResult.data.generationStatus,
+            });
+          } catch (error) {
+            logChatCompletionPersistenceEvent(
+              "coach_chat_job_persist_failed",
+              generated.latestJob,
+              generated,
+              {
+                phase: "persist_completion",
+                failureOrigin: "persist_completion",
+                ...summarizeExecutionError(error),
+              }
+            );
+            throw wrapChatJobExecutionError("persist_completion", error);
+          }
+
+          logChatCompletionPersistenceEvent(
+            "coach_chat_job_persist_succeeded",
+            generated.latestJob,
+            generated,
+            {
+              phase: "persist_completion",
+              failureOrigin: "persist_completion",
+            }
+          );
+
+          return { terminalStatus: "completed" as const };
+        }
+      );
+    }
 
     const finalJob = (await stateRepository.getChatJobByID(jobID)) ?? runningJob;
 
@@ -215,20 +273,21 @@ export async function executeChatJob(
           "commit_chat_memory",
           DEFAULT_WORKFLOW_STEP_CONFIG,
           async () => {
-        await stateRepository.commitChatJobMemory(jobID);
-        return { committed: true };
+            await stateRepository.commitChatJobMemory(jobID);
+            return { committed: true };
           }
         );
       } catch (error) {
         console.error(
           JSON.stringify({
             event: "coach_chat_job_memory_commit_failed",
+            phase: "memory_commit",
+            failureOrigin: "memory_commit",
             jobID: finalJob.jobID,
             installID: finalJob.installID,
             clientRequestID: finalJob.clientRequestID,
             status: finalJob.status,
-            errorMessage:
-              error instanceof Error ? error.message.slice(0, 300) : "Unknown error",
+            ...summarizeExecutionError(error),
           })
         );
       }
@@ -238,18 +297,34 @@ export async function executeChatJob(
       logChatJobEvent("coach_chat_job_completed", finalJob);
     } else if (finalJob.status === "failed") {
       logChatJobEvent("coach_chat_job_failed", finalJob, {
+        phase: terminalFailureOrigin ?? "workflow_runtime",
+        failureOrigin: terminalFailureOrigin ?? "workflow_runtime",
         errorCode: finalJob.error?.code,
       });
     }
     return finalJob;
   } catch (error) {
     const failedAt = new Date(now()).toISOString();
-    const currentJob = (await stateRepository.getChatJobByID(jobID)) ?? runningJob;
+    const currentJob =
+      (await stateRepository.getChatJobByID(jobID)) ?? currentJobForFailure;
     const totalJobDurationMs = Math.max(
       now() - Date.parse(currentJob.createdAt),
       0
     );
+    const failureOrigin = resolveFailureOrigin(error);
     const failure = normalizeChatJobExecutionError(error);
+    console.error(
+      JSON.stringify({
+        event: "coach_chat_job_failure_diagnostics",
+        phase: failureOrigin,
+        failureOrigin,
+        jobID,
+        installID: currentJob.installID,
+        clientRequestID: currentJob.clientRequestID,
+        errorCode: failure.code,
+        ...summarizeExecutionError(error),
+      })
+    );
     const failedJob = await persistFailedStateSafely(
       stateRepository,
       jobID,
@@ -266,9 +341,12 @@ export async function executeChatJob(
         totalJobDurationMs,
         inferenceMode: normalizeInferenceMode(error),
       },
-      currentJob
+      currentJob,
+      failureOrigin
     );
     logChatJobEvent("coach_chat_job_failed", failedJob, {
+      phase: failureOrigin,
+      failureOrigin,
       errorCode: failure.code,
     });
     return failedJob;
@@ -288,7 +366,8 @@ async function persistFailedStateSafely(
     totalJobDurationMs?: number;
     inferenceMode?: CoachChatJobRecord["inferenceMode"];
   },
-  fallbackJob: CoachChatJobRecord
+  fallbackJob: CoachChatJobRecord,
+  failureOrigin: ChatJobFailureOrigin
 ): Promise<CoachChatJobRecord> {
   try {
     return await stateRepository.failChatJob(jobID, input);
@@ -296,7 +375,8 @@ async function persistFailedStateSafely(
     console.error(
       JSON.stringify({
         event: "terminal_state_persist_failed",
-        phase: "persist_failure",
+        phase: failureOrigin,
+        failureOrigin,
         jobID,
         installID: fallbackJob.installID,
         clientRequestID: fallbackJob.clientRequestID,
@@ -314,7 +394,8 @@ async function persistFailedStateSafely(
       console.error(
         JSON.stringify({
           event: "terminal_state_persist_retry_failed",
-          phase: "persist_failure",
+          phase: failureOrigin,
+          failureOrigin,
           jobID,
           installID: fallbackJob.installID,
           clientRequestID: fallbackJob.clientRequestID,
@@ -390,9 +471,15 @@ function logChatJobEvent(
   job: CoachChatJobRecord,
   extra: Record<string, unknown> = {}
 ): void {
+  const phase =
+    (typeof extra.phase === "string"
+      ? extra.phase
+      : typeof extra.failureOrigin === "string"
+        ? extra.failureOrigin
+        : resolveEventPhase(event)) ?? resolveEventPhase(event);
   const payload = JSON.stringify({
     event,
-    phase: resolveEventPhase(event),
+    phase,
     jobID: job.jobID,
     installID: job.installID,
     clientRequestID: job.clientRequestID,
@@ -430,23 +517,33 @@ function logChatJobEvent(
 }
 
 function normalizeChatJobExecutionError(error: unknown): CoachChatJobError {
-  if (error instanceof ActiveCoachChatJobError) {
+  const cause = unwrapExecutionError(error);
+
+  if (cause instanceof ActiveCoachChatJobError) {
     return {
       code: "chat_job_in_progress",
-      message: error.message,
+      message: cause.message,
       retryable: true,
     };
   }
 
-  if (error instanceof CoachInferenceServiceError) {
+  if (cause instanceof CoachInferenceServiceError) {
     return {
-      code: error.code,
+      code: cause.code,
       message: "Coach upstream request failed.",
-      retryable: error.code.startsWith("upstream_"),
+      retryable: cause.code.startsWith("upstream_"),
     };
   }
 
-  if (isPersistenceError(error)) {
+  if (isRuntimeCancellationError(cause)) {
+    return {
+      code: "workflow_canceled",
+      message: "Workflow execution was canceled before completion.",
+      retryable: true,
+    };
+  }
+
+  if (isPersistenceError(cause)) {
     return {
       code: "persistence_error",
       message: "Failed to persist job state.",
@@ -465,16 +562,143 @@ function resolveEventPhase(event: string): string {
   if (event.includes("started") || event.includes("running")) {
     return "claim";
   }
-  if (event.includes("completed")) {
-    return "persist_completion";
-  }
-  if (event.includes("failed")) {
-    return "persist_failure";
+  if (event.includes("duplicate") || event.includes("skipped")) {
+    return "claim";
   }
   if (event.includes("memory")) {
     return "memory_commit";
   }
-  return "inference";
+  if (event.includes("persist")) {
+    return "persist_completion";
+  }
+  if (event.includes("completed")) {
+    return "persist_completion";
+  }
+  return "workflow_runtime";
+}
+
+function buildGeneratedChatResponse(
+  latestJob: CoachChatJobRecord,
+  inferenceResult: InferenceResult<CoachChatResponse>,
+  now: () => number
+): GeneratedChatResponse {
+  return {
+    latestJob,
+    inferenceResult,
+    inferenceMode:
+      inferenceResult.mode === "plain_text_fallback"
+        ? "plain_text_fallback"
+        : inferenceResult.mode === "degraded_fallback"
+          ? "degraded_fallback"
+          : "structured",
+    totalJobDurationMs: Math.max(now() - Date.parse(latestJob.createdAt), 0),
+  };
+}
+
+function logChatCompletionPersistenceEvent(
+  event: string,
+  job: CoachChatJobRecord,
+  generated: GeneratedChatResponse,
+  extra: Record<string, unknown> = {}
+): void {
+  const payload = JSON.stringify({
+    event,
+    phase: "persist_completion",
+    jobID: job.jobID,
+    installID: job.installID,
+    clientRequestID: job.clientRequestID,
+    selectedModel:
+      generated.inferenceResult.selectedModel ??
+      job.preparedRequest.metadata?.selectedModel ??
+      generated.inferenceResult.model,
+    modelRole:
+      generated.inferenceResult.modelRole ?? job.preparedRequest.metadata?.modelRole,
+    inferenceMode: generated.inferenceMode,
+    generationStatus: generated.inferenceResult.data.generationStatus,
+    promptBytes: generated.inferenceResult.promptBytes,
+    fallbackPromptBytes: generated.inferenceResult.fallbackPromptBytes,
+    modelDurationMs: generated.inferenceResult.modelDurationMs,
+    fallbackModelDurationMs: generated.inferenceResult.fallbackModelDurationMs,
+    totalJobDurationMs: generated.totalJobDurationMs,
+    ...extra,
+  });
+
+  if (event.includes("failed")) {
+    console.error(payload);
+    return;
+  }
+
+  console.log(payload);
+}
+
+function wrapChatJobExecutionError(
+  failureOrigin: ChatJobFailureOrigin,
+  error: unknown
+): ChatJobExecutionPhaseError {
+  if (error instanceof ChatJobExecutionPhaseError) {
+    return error;
+  }
+
+  return new ChatJobExecutionPhaseError(failureOrigin, error);
+}
+
+function resolveFailureOrigin(error: unknown): ChatJobFailureOrigin {
+  return error instanceof ChatJobExecutionPhaseError
+    ? error.failureOrigin
+    : "workflow_runtime";
+}
+
+function unwrapExecutionError(error: unknown): unknown {
+  return error instanceof ChatJobExecutionPhaseError ? error.cause : error;
+}
+
+function summarizeExecutionError(error: unknown): ChatJobExecutionDiagnostics {
+  const cause = unwrapExecutionError(error);
+  const recognizedInferenceError = cause instanceof CoachInferenceServiceError;
+  const recognizedPersistenceError = isPersistenceError(cause);
+  return {
+    errorName:
+      cause instanceof Error && cause.name.trim().length > 0
+        ? cause.name
+        : "UnknownError",
+    errorMessage:
+      cause instanceof Error ? cause.message.slice(0, 300) : "Unknown error",
+    stackPreview:
+      cause instanceof Error && cause.stack
+        ? cause.stack.split("\n").slice(0, 4).join("\n").slice(0, 600)
+        : undefined,
+    wasRecognizedAsInferenceError: recognizedInferenceError,
+    wasRecognizedAsPersistenceError: recognizedPersistenceError,
+    inferredCancellation: isRuntimeCancellationError(cause),
+  };
+}
+
+function isRuntimeCancellationError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  const name = error.name.toLowerCase();
+  const message = error.message.toLowerCase();
+  const stack = error.stack?.toLowerCase() ?? "";
+
+  return (
+    name.includes("abort") ||
+    name.includes("cancel") ||
+    message.includes("abort") ||
+    message.includes("canceled") ||
+    message.includes("cancelled") ||
+    message.includes("promise will never complete") ||
+    message.includes("script will never generate a response") ||
+    message.includes("workflow cancellation") ||
+    message.includes("workflow cancelled") ||
+    message.includes("workflow canceled") ||
+    message.includes("context canceled") ||
+    message.includes("context cancelled") ||
+    message.includes("rpc context cancellation") ||
+    message.includes("rpc context canceled") ||
+    stack.includes("aborterror")
+  );
 }
 
 function isPersistenceError(error: unknown): boolean {
@@ -495,15 +719,17 @@ function extractNumericErrorDetail(
   error: unknown,
   key: string
 ): number | undefined {
+  const cause = unwrapExecutionError(error);
   const details =
-    error instanceof CoachInferenceServiceError ? error.details : undefined;
+    cause instanceof CoachInferenceServiceError ? cause.details : undefined;
   const value = details?.[key];
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function normalizeInferenceMode(error: unknown): CoachChatJobRecord["inferenceMode"] {
+  const cause = unwrapExecutionError(error);
   const details =
-    error instanceof CoachInferenceServiceError ? error.details : undefined;
+    cause instanceof CoachInferenceServiceError ? cause.details : undefined;
   const mode = details?.mode;
   return mode === "structured" ||
     mode === "plain_text_fallback" ||
@@ -548,6 +774,7 @@ async function expireChatJob(
       },
       totalJobDurationMs,
     },
-    job
+    job,
+    "workflow_runtime"
   );
 }

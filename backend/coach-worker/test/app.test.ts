@@ -1674,6 +1674,66 @@ describe("coach worker app", () => {
     expect(committedAgain).toEqual(memory);
   });
 
+  it("uses separate generate and persist workflow steps for async chat jobs", async () => {
+    const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
+    const app = createApp({
+      createStateRepository: () => repository,
+      createInferenceService: () =>
+        stubInferenceService({
+          chat: {
+            answerMarkdown: "Async coach answer",
+            responseID: "unused",
+            followUps: ["Need a deload option?"],
+            generationStatus: "model",
+          },
+        }),
+    });
+    const env = makeEnv();
+    const createRequest = makeChatJobCreateRequestFixture();
+    const createResponse = await app.fetch(
+      authedRequest("https://coach.example.workers.dev/v2/coach/chat-jobs", {
+        method: "POST",
+        body: JSON.stringify(createRequest),
+      }),
+      env
+    );
+    const created = await createResponse.json();
+    const step = {
+      do: vi.fn(
+        async (
+          name: string,
+          arg2: unknown,
+          arg3?: () => Promise<unknown>
+        ): Promise<unknown> => {
+          const callback =
+            typeof arg2 === "function"
+              ? (arg2 as () => Promise<unknown>)
+              : (arg3 as () => Promise<unknown>);
+          return callback();
+        }
+      ),
+    };
+
+    await executeChatJob(
+      created.jobID,
+      env,
+      {
+        createStateRepository: () => repository,
+        createInferenceService: () => stubInferenceService(),
+      },
+      step as never
+    );
+
+    const stepNames = step.do.mock.calls.map(([name]) => name);
+    expect(stepNames).toEqual([
+      "mark_chat_job_running",
+      "generate_chat_response",
+      "persist_chat_completion",
+      "commit_chat_memory",
+    ]);
+    expect(stepNames).not.toContain("generate_and_persist_chat_response");
+  });
+
   it("keeps an async chat job completed when chat memory commit fails", async () => {
     class FailingCommitRepository extends InMemoryCoachStateRepository {
       override async commitChatJobMemory(): Promise<void> {
@@ -1699,36 +1759,52 @@ describe("coach worker app", () => {
       COACH_CHAT_WORKFLOW: makeWorkflowBinding(workflowCreate),
     });
     const createRequest = makeChatJobCreateRequestFixture();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    const createResponse = await app.fetch(
-      authedRequest("https://coach.example.workers.dev/v2/coach/chat-jobs", {
-        method: "POST",
-        body: JSON.stringify(createRequest),
-      }),
-      env
-    );
-    const created = await createResponse.json();
-
-    const completed = await executeChatJob(created.jobID, env, {
-      createStateRepository: () => repository,
-      createInferenceService: () =>
-        stubInferenceService({
-          chat: {
-            answerMarkdown: "Async coach answer",
-            responseID: "unused",
-            followUps: ["Need a deload option?"],
-            generationStatus: "model",
-          },
+    try {
+      const createResponse = await app.fetch(
+        authedRequest("https://coach.example.workers.dev/v2/coach/chat-jobs", {
+          method: "POST",
+          body: JSON.stringify(createRequest),
         }),
-    });
+        env
+      );
+      const created = await createResponse.json();
 
-    expect(completed?.status).toBe("completed");
-    expect(completed?.result?.answerMarkdown).toBe("Async coach answer");
-    expect(completed?.memoryCommittedAt).toBeUndefined();
+      const completed = await executeChatJob(created.jobID, env, {
+        createStateRepository: () => repository,
+        createInferenceService: () =>
+          stubInferenceService({
+            chat: {
+              answerMarkdown: "Async coach answer",
+              responseID: "unused",
+              followUps: ["Need a deload option?"],
+              generationStatus: "model",
+            },
+          }),
+      });
 
-    const storedJob = await repository.getChatJob(created.jobID, createRequest.installID);
-    expect(storedJob?.status).toBe("completed");
-    expect(storedJob?.error).toBeUndefined();
+      expect(completed?.status).toBe("completed");
+      expect(completed?.result?.answerMarkdown).toBe("Async coach answer");
+      expect(completed?.memoryCommittedAt).toBeUndefined();
+
+      const storedJob = await repository.getChatJob(created.jobID, createRequest.installID);
+      expect(storedJob?.status).toBe("completed");
+      expect(storedJob?.error).toBeUndefined();
+
+      const memoryCommitLog = parseLoggedPayloads(errorSpy).find(
+        (payload) => payload.event === "coach_chat_job_memory_commit_failed"
+      );
+      expect(memoryCommitLog).toMatchObject({
+        phase: "memory_commit",
+        failureOrigin: "memory_commit",
+        errorName: "Error",
+        errorMessage: "KV temporarily unavailable",
+      });
+      expect(memoryCommitLog?.stackPreview).toEqual(expect.any(String));
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 
   it("logs workflow run completion with safe correlation fields on normal return", async () => {
@@ -1938,6 +2014,237 @@ describe("coach worker app", () => {
         )
       : null;
     expect(memory).toBeNull();
+  });
+
+  it("classifies inference failures with the real failure phase in terminal logs", async () => {
+    const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
+    const workflowCreate = vi.fn().mockResolvedValue(makeWorkflowInstanceStub());
+    const app = createApp({
+      createInferenceService: () => stubInferenceService(),
+      createStateRepository: () => repository,
+    });
+    const env = makeEnv({
+      COACH_CHAT_WORKFLOW: makeWorkflowBinding(workflowCreate),
+    });
+    const createRequest = makeChatJobCreateRequestFixture();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      const createResponse = await app.fetch(
+        authedRequest("https://coach.example.workers.dev/v2/coach/chat-jobs", {
+          method: "POST",
+          body: JSON.stringify(createRequest),
+        }),
+        env
+      );
+      const created = await createResponse.json();
+
+      const failed = await executeChatJob(created.jobID, env, {
+        createStateRepository: () => repository,
+        createInferenceService: () =>
+          stubInferenceService({
+            chatError: new CoachInferenceServiceError(
+              504,
+              "upstream_timeout",
+              "Workers AI request timed out",
+              {
+                promptBytes: 321,
+                mode: "structured",
+                modelDurationMs: 5_000,
+              }
+            ),
+          }),
+      });
+
+      expect(failed?.status).toBe("failed");
+      expect(failed?.error?.code).toBe("upstream_timeout");
+
+      const diagnosticsLog = parseLoggedPayloads(errorSpy).find(
+        (payload) => payload.event === "coach_chat_job_failure_diagnostics"
+      );
+      expect(diagnosticsLog).toMatchObject({
+        phase: "inference",
+        failureOrigin: "inference",
+        errorCode: "upstream_timeout",
+        errorName: "CoachInferenceServiceError",
+        errorMessage: "Workers AI request timed out",
+        wasRecognizedAsInferenceError: true,
+        wasRecognizedAsPersistenceError: false,
+        inferredCancellation: false,
+      });
+      expect(diagnosticsLog?.stackPreview).toEqual(expect.any(String));
+
+      const failedLog = parseLoggedPayloads(errorSpy).find(
+        (payload) => payload.event === "coach_chat_job_failed"
+      );
+      expect(failedLog).toMatchObject({
+        phase: "inference",
+        failureOrigin: "inference",
+        errorCode: "upstream_timeout",
+      });
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("normalizes cancellation-like inference errors to workflow_canceled", async () => {
+    const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
+    const workflowCreate = vi.fn().mockResolvedValue(makeWorkflowInstanceStub());
+    const app = createApp({
+      createInferenceService: () => stubInferenceService(),
+      createStateRepository: () => repository,
+    });
+    const env = makeEnv({
+      COACH_CHAT_WORKFLOW: makeWorkflowBinding(workflowCreate),
+    });
+    const createRequest = makeChatJobCreateRequestFixture();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      const createResponse = await app.fetch(
+        authedRequest("https://coach.example.workers.dev/v2/coach/chat-jobs", {
+          method: "POST",
+          body: JSON.stringify(createRequest),
+        }),
+        env
+      );
+      const created = await createResponse.json();
+      const abortError = new Error("This script will never generate a response");
+      abortError.name = "AbortError";
+
+      const failed = await executeChatJob(created.jobID, env, {
+        createStateRepository: () => repository,
+        createInferenceService: () =>
+          stubInferenceService({
+            chatError: abortError,
+          }),
+      });
+
+      expect(failed?.status).toBe("failed");
+      expect(failed?.error).toMatchObject({
+        code: "workflow_canceled",
+        retryable: true,
+      });
+
+      const diagnosticsLog = parseLoggedPayloads(errorSpy).find(
+        (payload) => payload.event === "coach_chat_job_failure_diagnostics"
+      );
+      expect(diagnosticsLog).toMatchObject({
+        phase: "inference",
+        failureOrigin: "inference",
+        errorCode: "workflow_canceled",
+        errorName: "AbortError",
+        wasRecognizedAsInferenceError: false,
+        wasRecognizedAsPersistenceError: false,
+        inferredCancellation: true,
+      });
+
+      const storedJob = await repository.getChatJob(created.jobID, createRequest.installID);
+      expect(storedJob?.error).toMatchObject({
+        code: "workflow_canceled",
+        retryable: true,
+      });
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("classifies completeChatJob persistence failures as persist_completion", async () => {
+    class FailingCompleteRepository extends InMemoryCoachStateRepository {
+      override async completeChatJob(
+        _jobID: string,
+        _input: Parameters<InMemoryCoachStateRepository["completeChatJob"]>[1]
+      ): Promise<never> {
+        throw new Error("D1 completion write failed");
+      }
+    }
+
+    const repository = new FailingCompleteRepository("test.v1", DEFAULT_AI_MODEL);
+    const app = createApp({
+      createStateRepository: () => repository,
+      createInferenceService: () =>
+        stubInferenceService({
+          chat: {
+            answerMarkdown: "Async coach answer",
+            responseID: "unused",
+            followUps: ["Need a deload option?"],
+            generationStatus: "model",
+          },
+        }),
+    });
+    const env = makeEnv();
+    const createRequest = makeChatJobCreateRequestFixture();
+    const createResponse = await app.fetch(
+      authedRequest("https://coach.example.workers.dev/v2/coach/chat-jobs", {
+        method: "POST",
+        body: JSON.stringify(createRequest),
+      }),
+      env
+    );
+    const created = await createResponse.json();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    try {
+      const failed = await executeChatJob(created.jobID, env, {
+        createStateRepository: () => repository,
+        createInferenceService: () =>
+          stubInferenceService({
+            chat: {
+              answerMarkdown: "Async coach answer",
+              responseID: "unused",
+              followUps: ["Need a deload option?"],
+              generationStatus: "model",
+            },
+          }),
+      });
+
+      expect(failed?.status).toBe("failed");
+      expect(failed?.error?.code).toBe("persistence_error");
+
+      const persistStartedLog = parseLoggedPayloads(logSpy).find(
+        (payload) => payload.event === "coach_chat_job_persist_started"
+      );
+      expect(persistStartedLog).toMatchObject({
+        phase: "persist_completion",
+        failureOrigin: "persist_completion",
+        generationStatus: "model",
+      });
+
+      const persistFailedLog = parseLoggedPayloads(errorSpy).find(
+        (payload) => payload.event === "coach_chat_job_persist_failed"
+      );
+      expect(persistFailedLog).toMatchObject({
+        phase: "persist_completion",
+        failureOrigin: "persist_completion",
+        errorName: "Error",
+        errorMessage: "D1 completion write failed",
+      });
+
+      const diagnosticsLog = parseLoggedPayloads(errorSpy).find(
+        (payload) => payload.event === "coach_chat_job_failure_diagnostics"
+      );
+      expect(diagnosticsLog).toMatchObject({
+        phase: "persist_completion",
+        failureOrigin: "persist_completion",
+        errorCode: "persistence_error",
+        wasRecognizedAsInferenceError: false,
+        wasRecognizedAsPersistenceError: true,
+        inferredCancellation: false,
+      });
+
+      const failedLog = parseLoggedPayloads(errorSpy).find(
+        (payload) => payload.event === "coach_chat_job_failed"
+      );
+      expect(failedLog).toMatchObject({
+        phase: "persist_completion",
+        failureOrigin: "persist_completion",
+        errorCode: "persistence_error",
+      });
+    } finally {
+      errorSpy.mockRestore();
+      logSpy.mockRestore();
+    }
   });
 
   it("keeps failing chat jobs terminal even when fail-state persistence fails once", async () => {
