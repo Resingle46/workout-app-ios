@@ -511,7 +511,14 @@ enum CoachClientError: LocalizedError, Equatable {
     case missingAuthToken
     case invalidResponse
     case httpStatus(Int)
-    case api(statusCode: Int, code: String, message: String, requestID: String?, jobID: String?)
+    case api(
+        statusCode: Int,
+        code: String,
+        message: String,
+        requestID: String?,
+        jobID: String?,
+        provider: CoachAIProvider?
+    )
 
     var errorDescription: String? {
         switch self {
@@ -528,14 +535,14 @@ enum CoachClientError: LocalizedError, Equatable {
                 format: coachLocalizedString("coach.error.http_status"),
                 code
             )
-        case .api(_, _, let message, _, _):
+        case .api(_, _, let message, _, _, _):
             return message.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
                 ?? coachLocalizedString("coach.error.invalid_response")
         }
     }
 
     var activeChatJobID: String? {
-        guard case .api(_, let code, _, _, let jobID) = self,
+        guard case .api(_, let code, _, _, let jobID, _) = self,
               code == "chat_job_in_progress" else {
             return nil
         }
@@ -543,8 +550,17 @@ enum CoachClientError: LocalizedError, Equatable {
         return jobID
     }
 
+    var activeChatJobProvider: CoachAIProvider? {
+        guard case .api(_, let code, _, _, _, let provider) = self,
+              code == "chat_job_in_progress" else {
+            return nil
+        }
+
+        return provider
+    }
+
     var requestID: String? {
-        guard case .api(_, _, _, let requestID, _) = self else {
+        guard case .api(_, _, _, let requestID, _, _) = self else {
             return nil
         }
 
@@ -555,7 +571,7 @@ enum CoachClientError: LocalizedError, Equatable {
         switch self {
         case .httpStatus(let statusCode):
             return statusCode == 408 || statusCode == 425 || statusCode == 429 || statusCode >= 500
-        case .api(let statusCode, let code, _, _, _):
+        case .api(let statusCode, let code, _, _, _, _):
             return statusCode == 408 ||
             statusCode == 425 ||
             statusCode == 429 ||
@@ -862,6 +878,26 @@ struct CoachJobMetadata: Codable, Hashable, Sendable {
     var contextVersion: String?
     var analyticsVersion: String?
     var memoryProfile: String?
+
+    init(
+        provider: CoachAIProvider? = nil,
+        selectedModel: String? = nil,
+        jobDeadlineAt: Date? = nil,
+        contextProfile: String? = nil,
+        promptProfile: String? = nil,
+        contextVersion: String? = nil,
+        analyticsVersion: String? = nil,
+        memoryProfile: String? = nil
+    ) {
+        self.provider = provider
+        self.selectedModel = selectedModel
+        self.jobDeadlineAt = jobDeadlineAt
+        self.contextProfile = contextProfile
+        self.promptProfile = promptProfile
+        self.contextVersion = contextVersion
+        self.analyticsVersion = analyticsVersion
+        self.memoryProfile = memoryProfile
+    }
 }
 
 struct CoachChatJobCreateResponse: Codable, Hashable, Sendable {
@@ -909,6 +945,7 @@ private struct CoachAPIErrorPayload: Codable, Hashable, Sendable {
 private struct CoachAPIErrorResponse: Codable, Hashable, Sendable {
     var error: CoachAPIErrorPayload
     var jobID: String?
+    var provider: CoachAIProvider?
 }
 
 struct CoachConversationMessage: Codable, Hashable, Sendable {
@@ -1726,7 +1763,8 @@ struct CoachAPIHTTPClient: CoachAPIClient {
                 code: payload.error.code,
                 message: payload.error.message,
                 requestID: payload.error.requestID,
-                jobID: payload.jobID
+                jobID: payload.jobID,
+                provider: payload.provider
             )
         }
 
@@ -2783,13 +2821,18 @@ final class CoachStore {
                 )
             } catch let error as CoachClientError {
                 if let existingJobID = error.activeChatJobID {
+                    let existingJobProvider =
+                        error.activeChatJobProvider ??
+                        activeChatProvider ??
+                        localStateStore.pendingChatState?.provider ??
+                        configuration.provider
                     removeMessage(id: userMessageID)
                     removeMessage(id: placeholderID)
                     let recoveredPlaceholderID = ensureRecoveredChatPlaceholder()
                     setActiveChatJob(
                         jobID: existingJobID,
                         installID: snapshotPackage.envelope.installID,
-                        provider: configuration.provider,
+                        provider: existingJobProvider,
                         placeholderID: recoveredPlaceholderID,
                         initialPollAfterMs: CoachStore.initialChatPollAfterMs,
                         resetPollingStart: activeChatPollingStartedAt == nil
@@ -2799,7 +2842,7 @@ final class CoachStore {
                         message: "chat_job_resumed",
                         metadata: [
                             "reason": "existing_job_in_progress",
-                            "provider": configuration.provider.rawValue,
+                            "provider": existingJobProvider.rawValue,
                             "recentTurnsCount": String(priorConversation.count)
                         ]
                     )

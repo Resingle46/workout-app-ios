@@ -1621,6 +1621,103 @@ final class BackupCoordinatorTests: XCTestCase {
     }
 
     @MainActor
+    func testCoachStoreResumesPendingGeminiJobAfterSwitchingRuntimeProvider() async {
+        let suiteName = "CoachPendingGeminiSwitchTests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        let localStateStore = CoachLocalStateStore(
+            defaults: defaults,
+            generatedInstallID: "install-gemini-switch"
+        )
+        localStateStore.storePendingChatState(
+            .init(
+                jobID: "job-pending",
+                installID: localStateStore.installID,
+                provider: .gemini,
+                awaitingResume: true
+            )
+        )
+
+        let store = AppStore()
+        store.apply(snapshot: makeSnapshot())
+        let pollRecorder = ChatJobRequestRecorder()
+        let eventStore = DebugEventStore()
+        let debugRecorder = DebugEventRecorder(store: eventStore)
+        let coachStore = CoachStore(
+            client: StubCoachAPIClient(
+                shouldFailInsights: false,
+                shouldFailChat: false,
+                jobResponses: ChatJobStatusSequence([
+                    SequencedChatJobStep(
+                        response: makeCompletedChatJobStatusResponse(
+                            jobID: "job-pending",
+                            provider: .gemini
+                        )
+                    )
+                ]),
+                chatJobStatusRequestRecorder: pollRecorder
+            ),
+            configuration: CoachRuntimeConfiguration(
+                isFeatureEnabled: true,
+                backendBaseURL: URL(string: "https://example.com"),
+                internalBearerToken: "internal-token",
+                provider: .workersAI
+            ),
+            localStateStore: localStateStore,
+            debugRecorder: debugRecorder
+        )
+
+        await coachStore.resumePendingChatJobIfNeeded(using: store)
+        await waitForCoachChatToSettle(coachStore)
+
+        XCTAssertEqual(coachStore.messages.last?.content, "Coach answer")
+        XCTAssertEqual(coachStore.messages.last?.provider, .gemini)
+        XCTAssertEqual(coachStore.lastChatProvider, .gemini)
+        XCTAssertEqual(await pollRecorder.count(), 1)
+
+        let pollStarted = eventStore.snapshot().logs.first(where: { $0.message == "chat_job_poll_started" })
+        XCTAssertEqual(pollStarted?.metadata["provider"], CoachAIProvider.gemini.rawValue)
+    }
+
+    @MainActor
+    func testCoachStorePreservesConflictProviderWhenRuntimeProviderChanged() async {
+        let store = AppStore()
+        store.apply(snapshot: makeSnapshot())
+        let coachStore = CoachStore(
+            client: StubCoachAPIClient(
+                shouldFailInsights: false,
+                shouldFailChat: false,
+                createConflictJobID: "job-existing",
+                createConflictProvider: .gemini,
+                jobResponses: ChatJobStatusSequence([
+                    SequencedChatJobStep(
+                        response: makeCompletedChatJobStatusResponse(
+                            jobID: "job-existing",
+                            provider: .gemini
+                        )
+                    )
+                ])
+            ),
+            configuration: CoachRuntimeConfiguration(
+                isFeatureEnabled: true,
+                backendBaseURL: URL(string: "https://example.com"),
+                internalBearerToken: "internal-token",
+                provider: .workersAI
+            )
+        )
+
+        await coachStore.sendMessage("How should I progress?", using: store)
+        await waitForCoachChatToSettle(coachStore)
+
+        XCTAssertEqual(coachStore.messages.last?.content, "Coach answer")
+        XCTAssertEqual(coachStore.messages.last?.provider, .gemini)
+        XCTAssertEqual(coachStore.lastChatProvider, .gemini)
+    }
+
+    @MainActor
     func testCoachStoreSendsOnlyLastEightConversationMessages() async throws {
         let store = AppStore()
         store.apply(snapshot: makeSnapshot())
@@ -2425,6 +2522,7 @@ private struct StubCoachAPIClient: CoachAPIClient {
     let shouldFailInsights: Bool
     let shouldFailChat: Bool
     let createConflictJobID: String?
+    let createConflictProvider: CoachAIProvider?
     let jobID: String
     let createPollAfterMs: Int
     let jobResponses: ChatJobStatusSequence?
@@ -2436,6 +2534,7 @@ private struct StubCoachAPIClient: CoachAPIClient {
         shouldFailInsights: Bool,
         shouldFailChat: Bool,
         createConflictJobID: String? = nil,
+        createConflictProvider: CoachAIProvider? = nil,
         jobID: String = "job-1",
         createPollAfterMs: Int = 0,
         jobResponses: ChatJobStatusSequence? = nil,
@@ -2451,6 +2550,7 @@ private struct StubCoachAPIClient: CoachAPIClient {
         self.shouldFailInsights = shouldFailInsights
         self.shouldFailChat = shouldFailChat
         self.createConflictJobID = createConflictJobID
+        self.createConflictProvider = createConflictProvider
         self.jobID = jobID
         self.createPollAfterMs = createPollAfterMs
         self.jobResponses = jobResponses
@@ -2573,7 +2673,9 @@ private struct StubCoachAPIClient: CoachAPIClient {
                 statusCode: 409,
                 code: "chat_job_in_progress",
                 message: "Coach chat job already in progress.",
-                jobID: createConflictJobID
+                requestID: nil,
+                jobID: createConflictJobID,
+                provider: createConflictProvider
             )
         }
 
@@ -2702,17 +2804,22 @@ private func waitForCoachChatToSettle(
 
 private func makeQueuedChatJobCreateResponse(
     jobID: String = "job-1",
-    pollAfterMs: Int = 0
+    pollAfterMs: Int = 0,
+    provider: CoachAIProvider = .workersAI
 ) -> CoachChatJobCreateResponse {
     CoachChatJobCreateResponse(
         jobID: jobID,
         status: .queued,
         createdAt: .now,
-        pollAfterMs: pollAfterMs
+        pollAfterMs: pollAfterMs,
+        metadata: CoachJobMetadata(provider: provider)
     )
 }
 
-private func makeCompletedChatJobStatusResponse(jobID: String = "job-1") -> CoachChatJobStatusResponse {
+private func makeCompletedChatJobStatusResponse(
+    jobID: String = "job-1",
+    provider: CoachAIProvider = .workersAI
+) -> CoachChatJobStatusResponse {
     let completedAt = Date()
     return CoachChatJobStatusResponse(
         jobID: jobID,
@@ -2725,17 +2832,20 @@ private func makeCompletedChatJobStatusResponse(jobID: String = "job-1") -> Coac
             responseID: "response-1",
             followUps: ["Next question"],
             generationStatus: .model,
+            provider: provider,
             inferenceMode: .structured,
             modelDurationMs: 1200,
             totalJobDurationMs: 1500
         ),
-        error: nil
+        error: nil,
+        metadata: CoachJobMetadata(provider: provider)
     )
 }
 
 private func makePendingChatJobStatusResponse(
     jobID: String = "job-1",
-    status: CoachChatJobStatus = .queued
+    status: CoachChatJobStatus = .queued,
+    provider: CoachAIProvider = .workersAI
 ) -> CoachChatJobStatusResponse {
     let createdAt = Date()
     return CoachChatJobStatusResponse(
@@ -2745,13 +2855,15 @@ private func makePendingChatJobStatusResponse(
         startedAt: status == .running ? createdAt : nil,
         completedAt: nil,
         result: nil,
-        error: nil
+        error: nil,
+        metadata: CoachJobMetadata(provider: provider)
     )
 }
 
 private func makeFailedChatJobStatusResponse(
     jobID: String = "job-1",
-    message: String = "Chat failed"
+    message: String = "Chat failed",
+    provider: CoachAIProvider = .workersAI
 ) -> CoachChatJobStatusResponse {
     let completedAt = Date()
     return CoachChatJobStatusResponse(
@@ -2765,7 +2877,8 @@ private func makeFailedChatJobStatusResponse(
             code: "failed_chat",
             message: message,
             retryable: true
-        )
+        ),
+        metadata: CoachJobMetadata(provider: provider)
     )
 }
 

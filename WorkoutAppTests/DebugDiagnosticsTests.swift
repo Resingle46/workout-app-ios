@@ -259,7 +259,8 @@ final class DebugDiagnosticsTests: XCTestCase {
                 "message": "Coach chat job already in progress.",
                 "requestID": "req-409"
               },
-              "jobID": "job-1"
+              "jobID": "job-1",
+              "provider": "gemini"
             }
             """.data(using: .utf8)!
             return (response, body)
@@ -278,6 +279,7 @@ final class DebugDiagnosticsTests: XCTestCase {
             XCTFail("Expected 409 error")
         } catch let error as CoachClientError {
             XCTAssertEqual(error.requestID, "req-409")
+            XCTAssertEqual(error.activeChatJobProvider, .gemini)
         }
 
         let serverErrorSession = makeStubSession { request in

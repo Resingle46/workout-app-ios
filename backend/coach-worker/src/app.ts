@@ -1579,6 +1579,7 @@ function mapError(
           requestID,
         },
         jobID: error.jobID,
+        provider: error.provider,
       },
     };
   }

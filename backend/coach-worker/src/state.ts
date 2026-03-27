@@ -896,7 +896,7 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
 
       const active = await this.findActiveChatJob(input.installID);
       if (active) {
-        throw new ActiveCoachChatJobError(active.jobID);
+        throw new ActiveCoachChatJobError(active.jobID, active.provider);
       }
 
       throw error;
@@ -2445,7 +2445,7 @@ export class InMemoryCoachStateRepository implements CoachStateStore {
         (job.status === "queued" || job.status === "running")
     );
     if (active) {
-      throw new ActiveCoachChatJobError(active.jobID);
+      throw new ActiveCoachChatJobError(active.jobID, active.provider);
     }
 
     const created: CoachChatJobRecord = {
@@ -2958,7 +2958,10 @@ export class StaleRemoteStateError extends Error {
 }
 
 export class ActiveCoachChatJobError extends Error {
-  constructor(readonly jobID: string) {
+  constructor(
+    readonly jobID: string,
+    readonly provider: CoachAIProvider = "workers_ai"
+  ) {
     super("Coach chat job already in progress.");
     this.name = "ActiveCoachChatJobError";
   }

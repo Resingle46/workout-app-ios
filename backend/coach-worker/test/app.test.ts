@@ -1517,6 +1517,7 @@ describe("coach worker app", () => {
         code: "chat_job_in_progress",
       },
       jobID: firstBody.jobID,
+      provider: "workers_ai",
     });
   });
 
