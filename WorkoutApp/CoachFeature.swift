@@ -2270,6 +2270,8 @@ final class CoachStore {
     @ObservationIgnored private var activeChatPlaceholderID: String?
     @ObservationIgnored private var activeChatPollingStartedAt: Date?
     @ObservationIgnored private var activeChatNextPollAfterMs = CoachStore.initialChatPollAfterMs
+    @ObservationIgnored private var activeChatPollTask: Task<Void, Never>?
+    @ObservationIgnored private var activeChatPollTaskJobID: String?
     @ObservationIgnored private var hasHydratedAnalysisSettingsDrafts = false
     @ObservationIgnored private let maxChatPollingDuration: TimeInterval
     @ObservationIgnored private let debugRecorder: any DebugEventRecording
@@ -2313,7 +2315,7 @@ final class CoachStore {
     }
 
     var canResumePendingChatJob: Bool {
-        activeChatJobID != nil && !isSendingMessage
+        activeChatJobID != nil && !isSendingMessage && activeChatPollTask == nil
     }
 
     func updateConfiguration(_ configuration: CoachRuntimeConfiguration) {
@@ -2694,72 +2696,57 @@ final class CoachStore {
     }
 
     func resumePendingChatJobIfNeeded(using _: AppStore) async {
-        guard !isSendingMessage,
-              let activeChatContext = currentActiveChatContext() else {
+        guard configuration.canUseRemoteCoach else {
+            logChatResumeIgnored(reason: "remote_coach_unavailable")
             return
         }
 
-        isSendingMessage = true
+        guard let activeChatContext = currentActiveChatContext() else {
+            logChatResumeIgnored(reason: "no_active_job")
+            return
+        }
+
+        guard activeChatPollTask == nil else {
+            logChatResumeIgnored(
+                reason: "polling_in_progress",
+                metadata: ["jobID": activeChatContext.jobID]
+            )
+            return
+        }
+
+        guard !isSendingMessage else {
+            logChatResumeIgnored(
+                reason: "message_in_flight",
+                metadata: ["jobID": activeChatContext.jobID]
+            )
+            return
+        }
+
         let wasAwaitingResume = activeChatAwaitingResume
         activeChatAwaitingResume = false
+        activeChatPollingStartedAt = Date()
+        activeChatNextPollAfterMs = 0
         lastChatErrorDescription = nil
         ensureActiveChatPlaceholder(
             id: activeChatContext.placeholderID,
             content: coachLocalizedString("coach.loading.response"),
             isLoading: true
         )
-        defer {
-            isSendingMessage = false
-        }
         debugRecorder.log(
             category: .coach,
             message: "chat_job_resumed",
             metadata: [
-                "awaitingResume": wasAwaitingResume ? "true" : "false"
+                "awaitingResume": wasAwaitingResume ? "true" : "false",
+                "jobID": activeChatContext.jobID
             ]
         )
-
-        do {
-            if let jobResponse = try await awaitTerminalChatJob(
-                jobID: activeChatContext.jobID,
-                installID: activeChatContext.installID,
-                initialPollAfterMs: activeChatNextPollAfterMs,
-                placeholderID: activeChatContext.placeholderID,
-                pollStartedAt: activeChatContext.pollStartedAt
-            ) {
-                finishActiveChatJob(
-                    with: jobResponse,
-                    placeholderID: activeChatContext.placeholderID
-                )
-            }
-        } catch {
-            if isTransientPollingError(error) {
-                suspendActiveChatJob(
-                    placeholderID: activeChatContext.placeholderID,
-                    nextPollAfterMs: activeChatNextPollAfterMs
-                )
-                return
-            }
-
-            clearActiveChatJob()
-            let description = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-            lastChatErrorDescription = description
-            debugRecorder.log(
-                category: .coach,
-                level: .error,
-                message: "chat_job_failed",
-                metadata: ["error": description]
-            )
-            replaceMessage(
-                id: activeChatContext.placeholderID,
-                with: CoachChatMessage(
-                    id: activeChatContext.placeholderID,
-                    role: .assistant,
-                    content: description,
-                    isStatus: true
-                )
-            )
-        }
+        startActiveChatPolling(
+            jobID: activeChatContext.jobID,
+            installID: activeChatContext.installID,
+            placeholderID: activeChatContext.placeholderID,
+            initialPollAfterMs: 0,
+            pollStartedAt: activeChatPollingStartedAt ?? Date()
+        )
     }
 
     func resetConversation() {
@@ -2773,6 +2760,7 @@ final class CoachStore {
         activeChatPlaceholderID = nil
         activeChatPollingStartedAt = nil
         activeChatNextPollAfterMs = CoachStore.initialChatPollAfterMs
+        cancelActiveChatPollTask()
     }
 
     func handleCoachScreenDidBecomeVisible(using appStore: AppStore) async {
@@ -2819,19 +2807,47 @@ final class CoachStore {
         var nextDelayMs = max(initialPollAfterMs, 0)
         var pollAttempt = 0
 
+        debugRecorder.log(
+            category: .coach,
+            message: "chat_job_poll_started",
+            metadata: [
+                "jobID": jobID,
+                "initialPollAfterMs": String(nextDelayMs)
+            ]
+        )
+
         while true {
             if hasExceededChatPollingDuration(since: pollStartedAt) {
                 suspendActiveChatJob(
                     placeholderID: placeholderID,
-                    nextPollAfterMs: nextDelayMs
+                    nextPollAfterMs: nextDelayMs,
+                    expectedJobID: jobID
                 )
                 return nil
             }
 
             do {
+                debugRecorder.log(
+                    category: .coach,
+                    message: "chat_job_poll_request_sent",
+                    metadata: [
+                        "jobID": jobID,
+                        "attempt": String(pollAttempt),
+                        "nextDelayMs": String(nextDelayMs)
+                    ]
+                )
                 let response = try await client.getChatJob(
                     jobID: jobID,
                     installID: installID
+                )
+                debugRecorder.log(
+                    category: .coach,
+                    message: "chat_job_poll_response_received",
+                    metadata: [
+                        "jobID": jobID,
+                        "attempt": String(pollAttempt),
+                        "status": response.status.rawValue
+                    ]
                 )
 
                 switch response.status {
@@ -2847,7 +2863,8 @@ final class CoachStore {
             } catch is CancellationError {
                 suspendActiveChatJob(
                     placeholderID: placeholderID,
-                    nextPollAfterMs: nextDelayMs
+                    nextPollAfterMs: nextDelayMs,
+                    expectedJobID: jobID
                 )
                 return nil
             } catch {
@@ -2862,7 +2879,8 @@ final class CoachStore {
                 } catch is CancellationError {
                     suspendActiveChatJob(
                         placeholderID: placeholderID,
-                        nextPollAfterMs: nextDelayMs
+                        nextPollAfterMs: nextDelayMs,
+                        expectedJobID: jobID
                     )
                     return nil
                 }
@@ -2957,6 +2975,7 @@ final class CoachStore {
         activeChatPlaceholderID = nil
         activeChatPollingStartedAt = nil
         activeChatNextPollAfterMs = CoachStore.initialChatPollAfterMs
+        cancelActiveChatPollTask()
     }
 
     private func finishActiveChatJob(
@@ -3060,8 +3079,13 @@ final class CoachStore {
 
     private func suspendActiveChatJob(
         placeholderID: String,
-        nextPollAfterMs: Int
+        nextPollAfterMs: Int,
+        expectedJobID: String? = nil
     ) {
+        if let expectedJobID,
+           activeChatJobID != expectedJobID {
+            return
+        }
         activeChatPlaceholderID = placeholderID
         activeChatAwaitingResume = true
         activeChatNextPollAfterMs = max(nextPollAfterMs, CoachStore.initialChatPollAfterMs)
@@ -3074,6 +3098,118 @@ final class CoachStore {
             id: placeholderID,
             content: coachLocalizedString("coach.loading.response_delayed"),
             isLoading: false
+        )
+    }
+
+    private func startActiveChatPolling(
+        jobID: String,
+        installID: String,
+        placeholderID: String,
+        initialPollAfterMs: Int,
+        pollStartedAt: Date
+    ) {
+        guard activeChatPollTask == nil else {
+            return
+        }
+
+        isSendingMessage = true
+        activeChatPollTaskJobID = jobID
+        activeChatPollTask = Task { [weak self, jobID, installID, placeholderID, initialPollAfterMs, pollStartedAt] in
+            guard let self else {
+                return
+            }
+
+            await self.runActiveChatPolling(
+                jobID: jobID,
+                installID: installID,
+                placeholderID: placeholderID,
+                initialPollAfterMs: initialPollAfterMs,
+                pollStartedAt: pollStartedAt
+            )
+        }
+    }
+
+    private func runActiveChatPolling(
+        jobID: String,
+        installID: String,
+        placeholderID: String,
+        initialPollAfterMs: Int,
+        pollStartedAt: Date
+    ) async {
+        defer {
+            clearActiveChatPollTaskIfNeeded(jobID: jobID)
+            isSendingMessage = false
+        }
+
+        do {
+            if let jobResponse = try await awaitTerminalChatJob(
+                jobID: jobID,
+                installID: installID,
+                initialPollAfterMs: initialPollAfterMs,
+                placeholderID: placeholderID,
+                pollStartedAt: pollStartedAt
+            ) {
+                finishActiveChatJob(
+                    with: jobResponse,
+                    placeholderID: placeholderID
+                )
+            }
+        } catch {
+            if isTransientPollingError(error) {
+                suspendActiveChatJob(
+                    placeholderID: placeholderID,
+                    nextPollAfterMs: activeChatNextPollAfterMs,
+                    expectedJobID: jobID
+                )
+                return
+            }
+
+            clearActiveChatJob()
+            let description = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            lastChatErrorDescription = description
+            debugRecorder.log(
+                category: .coach,
+                level: .error,
+                message: "chat_job_failed",
+                metadata: ["error": description]
+            )
+            replaceMessage(
+                id: placeholderID,
+                with: CoachChatMessage(
+                    id: placeholderID,
+                    role: .assistant,
+                    content: description,
+                    isStatus: true
+                )
+            )
+        }
+    }
+
+    private func cancelActiveChatPollTask() {
+        let task = activeChatPollTask
+        activeChatPollTask = nil
+        activeChatPollTaskJobID = nil
+        task?.cancel()
+    }
+
+    private func clearActiveChatPollTaskIfNeeded(jobID: String) {
+        guard activeChatPollTaskJobID == jobID else {
+            return
+        }
+
+        activeChatPollTask = nil
+        activeChatPollTaskJobID = nil
+    }
+
+    private func logChatResumeIgnored(
+        reason: String,
+        metadata: [String: String] = [:]
+    ) {
+        debugRecorder.log(
+            category: .coach,
+            level: .warning,
+            message: "chat_job_resume_ignored",
+            metadata: ["reason": reason].merging(metadata) { current, _ in current }
         )
     }
 

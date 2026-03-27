@@ -1566,6 +1566,9 @@ final class BackupCoordinatorTests: XCTestCase {
     func testCoachStoreKeepsPendingJobForResumeWhenPollingStops() async {
         let store = AppStore()
         store.apply(snapshot: makeSnapshot())
+        let pollRecorder = ChatJobRequestRecorder()
+        let eventStore = DebugEventStore()
+        let debugRecorder = DebugEventRecorder(store: eventStore)
         let coachStore = CoachStore(
             client: StubCoachAPIClient(
                 shouldFailInsights: false,
@@ -1580,14 +1583,16 @@ final class BackupCoordinatorTests: XCTestCase {
                     SequencedChatJobStep(
                         response: makeCompletedChatJobStatusResponse(jobID: "job-pending")
                     )
-                ])
+                ]),
+                chatJobStatusRequestRecorder: pollRecorder
             ),
             configuration: CoachRuntimeConfiguration(
                 isFeatureEnabled: true,
                 backendBaseURL: URL(string: "https://example.com"),
                 internalBearerToken: "internal-token"
             ),
-            maxChatPollingDuration: 0.01
+            maxChatPollingDuration: 0.01,
+            debugRecorder: debugRecorder
         )
         coachStore.draftQuestion = "How should I progress?"
 
@@ -1598,12 +1603,21 @@ final class BackupCoordinatorTests: XCTestCase {
         XCTAssertTrue(coachStore.canResumePendingChatJob)
         XCTAssertEqual(coachStore.activeChatJobID, "job-pending")
         XCTAssertEqual(coachStore.draftQuestion, "")
+        XCTAssertEqual(await pollRecorder.count(), 1)
 
         await coachStore.resumePendingChatJobIfNeeded(using: store)
+
+        await waitForCoachChatToSettle(coachStore)
 
         XCTAssertEqual(coachStore.messages.last?.content, "Coach answer")
         XCTAssertNil(coachStore.activeChatJobID)
         XCTAssertFalse(coachStore.canResumePendingChatJob)
+        XCTAssertEqual(await pollRecorder.count(), 2)
+
+        let logMessages = eventStore.snapshot().logs.map(\.message)
+        XCTAssertTrue(logMessages.contains("chat_job_poll_started"))
+        XCTAssertTrue(logMessages.contains("chat_job_poll_request_sent"))
+        XCTAssertTrue(logMessages.contains("chat_job_poll_response_received"))
     }
 
     @MainActor
@@ -2416,6 +2430,7 @@ private struct StubCoachAPIClient: CoachAPIClient {
     let jobResponses: ChatJobStatusSequence?
     let profileInsights: CoachProfileInsights
     let snapshotRequestRecorder: SnapshotRequestRecorder?
+    let chatJobStatusRequestRecorder: ChatJobRequestRecorder?
 
     init(
         shouldFailInsights: Bool,
@@ -2430,7 +2445,8 @@ private struct StubCoachAPIClient: CoachAPIClient {
             generationStatus: .model,
             insightSource: .freshModel
         ),
-        snapshotRequestRecorder: SnapshotRequestRecorder? = nil
+        snapshotRequestRecorder: SnapshotRequestRecorder? = nil,
+        chatJobStatusRequestRecorder: ChatJobRequestRecorder? = nil
     ) {
         self.shouldFailInsights = shouldFailInsights
         self.shouldFailChat = shouldFailChat
@@ -2440,6 +2456,7 @@ private struct StubCoachAPIClient: CoachAPIClient {
         self.jobResponses = jobResponses
         self.profileInsights = profileInsights
         self.snapshotRequestRecorder = snapshotRequestRecorder
+        self.chatJobStatusRequestRecorder = chatJobStatusRequestRecorder
     }
 
     func syncSnapshot(_ request: CoachSnapshotSyncRequest) async throws -> CoachSnapshotSyncResponse {
@@ -2570,6 +2587,10 @@ private struct StubCoachAPIClient: CoachAPIClient {
         jobID: String,
         installID: String
     ) async throws -> CoachChatJobStatusResponse {
+        if let chatJobStatusRequestRecorder {
+            await chatJobStatusRequestRecorder.record(jobID: jobID, installID: installID)
+        }
+
         if let jobResponses {
             return await jobResponses.next()
         }
@@ -2648,6 +2669,34 @@ private actor SnapshotRequestRecorder {
 
     func record(_ request: RecordedCoachSnapshotRequest) {
         requests.append(request)
+    }
+}
+
+private actor ChatJobRequestRecorder {
+    private(set) var requests: [(jobID: String, installID: String)] = []
+
+    func record(jobID: String, installID: String) {
+        requests.append((jobID: jobID, installID: installID))
+    }
+
+    func count() -> Int {
+        requests.count
+    }
+}
+
+@MainActor
+private func waitForCoachChatToSettle(
+    _ coachStore: CoachStore,
+    timeoutNanoseconds: UInt64 = 500_000_000
+) async {
+    let deadline = Date().addingTimeInterval(TimeInterval(timeoutNanoseconds) / 1_000_000_000)
+    while Date() < deadline {
+        if coachStore.activeChatJobID == nil,
+           coachStore.messages.last?.content == "Coach answer" {
+            return
+        }
+
+        try? await Task.sleep(nanoseconds: 10_000_000)
     }
 }
 
