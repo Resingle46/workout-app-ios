@@ -1193,116 +1193,6 @@ describe("coach worker app", () => {
     );
   });
 
-  it("uses server-side context for slim chat requests", async () => {
-    const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
-    let capturedRequest: CoachChatRequest | undefined;
-    const app = createApp({
-      createInferenceService: () => ({
-        async generateProfileInsights() {
-          throw new Error("not used");
-        },
-        async generateWorkoutSummary() {
-          throw new Error("not used");
-        },
-        async generateChat(request) {
-          capturedRequest = request;
-          return {
-            data: {
-              answerMarkdown: "Coach answer",
-              responseID: "coach-turn_1",
-              followUps: ["Need a progression block?"],
-              generationStatus: "model",
-            },
-            responseId: "coach-turn_1",
-            model: DEFAULT_AI_MODEL,
-          };
-        },
-      }),
-      createStateRepository: () => repository,
-    });
-
-    const upload = makeBackupUploadRequestFixture();
-    await app.fetch(
-      authedRequest("https://coach.example.workers.dev/v1/backup", {
-        method: "PUT",
-        body: JSON.stringify(upload),
-      }),
-      makeEnv()
-    );
-
-    const response = await app.fetch(
-      authedRequest("https://coach.example.workers.dev/v1/coach/chat", {
-        method: "POST",
-        body: JSON.stringify({
-          locale: "en",
-          installID: upload.installID,
-          question: "How should I progress next week?",
-          clientRecentTurns: [
-            {
-              role: "user",
-              content: "My top sets felt heavy last week.",
-            },
-          ],
-          capabilityScope: "draft_changes",
-        }),
-      }),
-      makeEnv()
-    );
-
-    expect(response.status).toBe(200);
-    expect(capturedRequest?.snapshot?.profile.weeklyWorkoutTarget).toBe(4);
-    expect(capturedRequest?.snapshot).toBeTruthy();
-  });
-
-  it("returns a chat answer instead of 504 when timeout fallback succeeds", async () => {
-    const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
-    const aiRun = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("Request timed out"))
-      .mockResolvedValueOnce({
-        response: "Keep load the same next week and add one rep where bar speed stays solid.",
-      });
-    const app = createApp({
-      createStateRepository: () => repository,
-    });
-    const env = makeEnv({
-      AI: {
-        run: aiRun,
-      },
-    });
-    const upload = makeBackupUploadRequestFixture();
-
-    await app.fetch(
-      authedRequest("https://coach.example.workers.dev/v1/backup", {
-        method: "PUT",
-        body: JSON.stringify(upload),
-      }),
-      env
-    );
-
-    const response = await app.fetch(
-      authedRequest("https://coach.example.workers.dev/v1/coach/chat", {
-        method: "POST",
-        body: JSON.stringify({
-          locale: "en",
-          installID: upload.installID,
-          question: "How should I progress next week?",
-          clientRecentTurns: [],
-          capabilityScope: "draft_changes",
-        }),
-      }),
-      env
-    );
-
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({
-      answerMarkdown:
-        "Keep load the same next week and add one rep where bar speed stays solid.",
-      followUps: [],
-      generationStatus: "model",
-    });
-  });
-
   it("creates a queued async chat job and starts the workflow", async () => {
     const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
     const workflowCreate = vi.fn().mockResolvedValue(makeWorkflowInstanceStub());
@@ -2507,7 +2397,7 @@ describe("coach worker app", () => {
     }
   });
 
-  it("maps invalid request bodies to 400", async () => {
+  it("returns 404 for the removed sync chat endpoint", async () => {
     const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
     const app = createApp({
       createInferenceService: () => stubInferenceService(),
@@ -2522,12 +2412,7 @@ describe("coach worker app", () => {
       makeEnv()
     );
 
-    expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toMatchObject({
-      error: {
-        code: "invalid_request",
-      },
-    });
+    expect(response.status).toBe(404);
   });
 });
 

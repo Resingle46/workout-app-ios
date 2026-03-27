@@ -660,15 +660,6 @@ protocol CoachAPIClient: Sendable {
         installID: String
     ) async throws -> WorkoutSummaryJobStatusResponse
 
-    func sendChat(
-        locale: String,
-        question: String,
-        clientRecentTurns: [CoachConversationMessage],
-        snapshotEnvelope: CoachSnapshotEnvelope,
-        capabilityScope: CoachCapabilityScope,
-        runtimeContextDelta: CoachRuntimeContextDelta?
-    ) async throws -> CoachChatResponse
-
     func deleteRemoteState(installID: String) async throws
 }
 
@@ -718,19 +709,6 @@ struct CoachProfileInsightsRequest: Codable, Sendable {
     var runtimeContextDelta: CoachRuntimeContextDelta?
     var capabilityScope: CoachCapabilityScope
     var forceRefresh: Bool?
-}
-
-struct CoachChatRequest: Codable, Sendable {
-    var locale: String
-    var question: String
-    var installID: String
-    var provider: CoachAIProvider
-    var snapshotHash: String?
-    var snapshot: CompactCoachSnapshot?
-    var snapshotUpdatedAt: Date?
-    var runtimeContextDelta: CoachRuntimeContextDelta?
-    var clientRecentTurns: [CoachConversationMessage]
-    var capabilityScope: CoachCapabilityScope
 }
 
 struct CoachChatJobCreateRequest: Codable, Sendable {
@@ -1134,20 +1112,16 @@ struct CoachAPIHTTPClient: CoachAPIClient {
     private static let standardResourceTimeoutInterval: TimeInterval = 25
     private static let profileInsightsRequestTimeoutInterval: TimeInterval = 32
     private static let profileInsightsResourceTimeoutInterval: TimeInterval = 36
-    private static let chatRequestTimeoutInterval: TimeInterval = 30
-    private static let chatResourceTimeoutInterval: TimeInterval = 35
 
     private let configuration: CoachRuntimeConfiguration
     private let standardSession: URLSession
     private let profileInsightsSession: URLSession
-    private let chatSession: URLSession
     private let debugRecorder: any DebugEventRecording
 
     init(
         configuration: CoachRuntimeConfiguration,
         session: URLSession? = nil,
         profileInsightsSession: URLSession? = nil,
-        chatSession: URLSession? = nil,
         debugRecorder: any DebugEventRecording = NoopDebugEventRecorder()
     ) {
         self.configuration = configuration
@@ -1158,10 +1132,6 @@ struct CoachAPIHTTPClient: CoachAPIClient {
         self.profileInsightsSession = profileInsightsSession ?? Self.makeSession(
             requestTimeoutInterval: Self.profileInsightsRequestTimeoutInterval,
             resourceTimeoutInterval: Self.profileInsightsResourceTimeoutInterval
-        )
-        self.chatSession = chatSession ?? Self.makeSession(
-            requestTimeoutInterval: Self.chatRequestTimeoutInterval,
-            resourceTimeoutInterval: Self.chatResourceTimeoutInterval
         )
         self.debugRecorder = debugRecorder
     }
@@ -1569,36 +1539,6 @@ struct CoachAPIHTTPClient: CoachAPIClient {
             )
             throw CoachClientError.invalidResponse
         }
-    }
-
-    func sendChat(
-        locale: String,
-        question: String,
-        clientRecentTurns: [CoachConversationMessage],
-        snapshotEnvelope: CoachSnapshotEnvelope,
-        capabilityScope: CoachCapabilityScope,
-        runtimeContextDelta: CoachRuntimeContextDelta?
-    ) async throws -> CoachChatResponse {
-        try await send(
-            path: "v1/coach/chat",
-            method: "POST",
-            body: CoachChatRequest(
-                locale: locale,
-                question: question,
-                installID: snapshotEnvelope.installID,
-                provider: configuration.provider,
-                snapshotHash: snapshotEnvelope.snapshotHash,
-                snapshot: snapshotEnvelope.snapshot,
-                snapshotUpdatedAt: snapshotEnvelope.snapshotUpdatedAt,
-                runtimeContextDelta: runtimeContextDelta,
-                clientRecentTurns: clientRecentTurns,
-                capabilityScope: capabilityScope
-            ),
-            session: chatSession,
-            timeoutInterval: Self.chatRequestTimeoutInterval,
-            clientRequestID: nil,
-            responseType: CoachChatResponse.self
-        )
     }
 
     func deleteRemoteState(installID: String) async throws {

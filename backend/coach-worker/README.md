@@ -8,7 +8,6 @@ Cloudflare Worker backend for the in-app AI Coach.
 - `PUT /v1/coach/snapshot`
 - `DELETE /v1/coach/state`
 - `POST /v1/coach/profile-insights`
-- `POST /v1/coach/chat`
 - `POST /v2/coach/chat-jobs`
 - `GET /v2/coach/chat-jobs/:jobID?installID=...`
 
