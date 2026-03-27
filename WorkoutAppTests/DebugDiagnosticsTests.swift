@@ -108,9 +108,9 @@ final class DebugDiagnosticsTests: XCTestCase {
 
         let localStateStore = CoachLocalStateStore(
             defaults: defaults,
-            generatedInstallID: "install-abcdef1234567890"
+            generatedInstallID: "install-abcdef1234567890",
+            identityVault: InMemoryCoachIdentityVault()
         )
-        let cloudStateStore = CloudSyncLocalStateStore(defaults: defaults)
         let remoteHead = CloudBackupHead(
             installID: localStateStore.installID,
             backupVersion: 12,
@@ -125,7 +125,6 @@ final class DebugDiagnosticsTests: XCTestCase {
             compression: "none",
             sizeBytes: 512
         )
-        cloudStateStore.markSynced(remote: remoteHead)
 
         let eventStore = DebugEventStore()
         let appStore = AppStore()
@@ -139,7 +138,21 @@ final class DebugDiagnosticsTests: XCTestCase {
             client: client,
             configuration: configuration,
             installID: localStateStore.installID,
-            localStateStore: cloudStateStore
+            localStateStore: CloudSyncLocalStateStore(defaults: defaults)
+        )
+        cloudSyncStore.lastBackupStatus = CloudBackupStatusResponse(
+            syncState: .remoteReady,
+            contextState: .contextReady,
+            reasonCodes: ["hash_match"],
+            actions: CloudBackupStatusActions(
+                canUseRemoteAIContextNow: true,
+                shouldUpload: false,
+                shouldOfferRestore: false,
+                shouldBuildInlineFallback: false,
+                shouldPromptUser: false
+            ),
+            authMode: .secretValid,
+            remote: remoteHead
         )
         cloudSyncStore.lastSyncErrorDescription = "sync failed"
         cloudSyncStore.pendingRemoteRestore = CloudPendingRemoteRestore(
@@ -161,7 +174,8 @@ final class DebugDiagnosticsTests: XCTestCase {
                         profile: .empty
                     )
                 )
-            )
+            ),
+            localBackupHash: "local-hash"
         )
 
         let coachStore = CoachStore(
@@ -186,7 +200,6 @@ final class DebugDiagnosticsTests: XCTestCase {
             workoutSummaryStoreProvider: { workoutSummaryStore },
             cloudSyncStoreProvider: { cloudSyncStore },
             coachLocalStateStoreProvider: { localStateStore },
-            cloudSyncLocalStateStoreProvider: { cloudStateStore },
             runtimeConfigurationProvider: { configuration }
         )
 
@@ -195,9 +208,9 @@ final class DebugDiagnosticsTests: XCTestCase {
 
         XCTAssertEqual(report.runtime.installID?.displayValueMasked, "instal…7890")
         XCTAssertEqual(report.runtime.installID?.copyValueFull, "install-abcdef1234567890")
-        XCTAssertEqual(report.cloudSync.lastSyncedBackupHash?.displayValueMasked, "hash-a…7890")
         XCTAssertEqual(exportPayload.runtime.installID, "install-abcdef1234567890")
-        XCTAssertEqual(exportPayload.cloudSync.lastSyncedBackupHash, "hash-abcdef1234567890")
+        XCTAssertEqual(report.cloudSync.remoteBackupVersion, 12)
+        XCTAssertEqual(exportPayload.cloudSync.remoteBackupVersion, 12)
         XCTAssertEqual(report.cloudSync.pendingRemoteRestoreState, "conflict@v12")
     }
 
@@ -212,7 +225,7 @@ final class DebugDiagnosticsTests: XCTestCase {
         )
 
         let successSession = makeStubSession { request in
-            XCTAssertEqual(request.httpMethod, "PUT")
+            XCTAssertEqual(request.httpMethod, "GET")
             let response = HTTPURLResponse(
                 url: try XCTUnwrap(request.url),
                 statusCode: 200,
@@ -220,9 +233,19 @@ final class DebugDiagnosticsTests: XCTestCase {
                 headerFields: nil
             )!
             let body = try JSONEncoder.withISO8601.encode(
-                CoachSnapshotSyncResponse(
-                    acceptedHash: "hash-1",
-                    storedAt: Date(timeIntervalSince1970: 100)
+                CloudBackupStatusResponse(
+                    syncState: .remoteReady,
+                    contextState: .contextReady,
+                    reasonCodes: ["hash_match"],
+                    actions: CloudBackupStatusActions(
+                        canUseRemoteAIContextNow: true,
+                        shouldUpload: false,
+                        shouldOfferRestore: false,
+                        shouldBuildInlineFallback: false,
+                        shouldPromptUser: false
+                    ),
+                    authMode: .secretValid,
+                    remote: nil
                 )
             )
             return (response, body)
@@ -235,12 +258,12 @@ final class DebugDiagnosticsTests: XCTestCase {
             chatSession: successSession,
             debugRecorder: recorder
         )
-        _ = try await successClient.syncSnapshot(
-            CoachSnapshotSyncRequest(
+        _ = try await successClient.getBackupStatus(
+            CloudBackupStatusRequest(
                 installID: "install-1",
-                snapshotHash: "hash",
-                snapshot: makeEmptyCoachSnapshot(),
-                snapshotUpdatedAt: Date(timeIntervalSince1970: 10)
+                localBackupHash: "hash",
+                localSourceModifiedAt: Date(timeIntervalSince1970: 10),
+                localStateKind: .userData
             )
         )
 
@@ -311,14 +334,12 @@ final class DebugDiagnosticsTests: XCTestCase {
         )
 
         do {
-            _ = try await serverErrorClient.reconcileBackup(
-                CloudBackupReconcileRequest(
+            try await serverErrorClient.recordRestoreDecision(
+                CloudBackupRestoreDecisionRequest(
                     installID: "install-1",
+                    remoteVersion: 1,
                     localBackupHash: "hash",
-                    localSourceModifiedAt: nil,
-                    lastSyncedRemoteVersion: nil,
-                    lastSyncedBackupHash: nil,
-                    localStateKind: .userData
+                    action: .ignore
                 )
             )
             XCTFail("Expected 500 error")
@@ -328,13 +349,13 @@ final class DebugDiagnosticsTests: XCTestCase {
 
         let traces = eventStore.snapshot().networkTraces
         XCTAssertEqual(traces.count, 3)
-        XCTAssertEqual(traces[0].path, "/v1/coach/snapshot")
+        XCTAssertEqual(traces[0].path, "/v1/backup/status")
         XCTAssertEqual(traces[0].statusCode, 200)
         XCTAssertNil(traces[0].errorDescription)
         XCTAssertEqual(traces[1].path, "/v2/coach/chat-jobs/job-1")
         XCTAssertEqual(traces[1].statusCode, 409)
         XCTAssertEqual(traces[1].requestID, "req-409")
-        XCTAssertEqual(traces[2].path, "/v1/backup/reconcile")
+        XCTAssertEqual(traces[2].path, "/v1/backup/restore-decision")
         XCTAssertEqual(traces[2].statusCode, 500)
         XCTAssertEqual(traces[2].requestID, "req-500")
     }
@@ -418,23 +439,9 @@ final class DebugDiagnosticsTests: XCTestCase {
         configuration.protocolClasses = [StubURLProtocol.self]
         return URLSession(configuration: configuration)
     }
-
-    @MainActor
-    private func makeEmptyCoachSnapshot() -> CoachContextPayload {
-        let store = AppStore()
-        return CoachContextBuilder().build(from: store)
-    }
 }
 
 private actor DebugDiagnosticsTestClient: CoachAPIClient {
-    func syncSnapshot(_ request: CoachSnapshotSyncRequest) async throws -> CoachSnapshotSyncResponse {
-        throw CoachClientError.invalidResponse
-    }
-
-    func reconcileBackup(_ request: CloudBackupReconcileRequest) async throws -> CloudBackupReconcileResponse {
-        throw CoachClientError.invalidResponse
-    }
-
     func uploadBackup(_ request: CloudBackupUploadRequest) async throws -> CloudBackupHead {
         throw CoachClientError.invalidResponse
     }

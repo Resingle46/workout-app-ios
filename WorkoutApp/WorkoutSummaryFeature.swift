@@ -89,6 +89,8 @@ struct WorkoutSummaryJobCreateRequest: Codable, Hashable, Sendable {
     var installID: String
     var provider: CoachAIProvider
     var clientRequestID: String
+    var localBackupHash: String?
+    var providerID: String?
     var sessionID: UUID
     var fingerprint: String
     var requestMode: WorkoutSummaryRequestMode
@@ -245,6 +247,8 @@ enum WorkoutSummaryRequestBuilder {
                 installID: installID,
                 provider: provider,
                 clientRequestID: UUID().uuidString.lowercased(),
+                localBackupHash: nil,
+                providerID: coachDefaultProviderID,
                 sessionID: session.id,
                 fingerprint: fingerprint,
                 requestMode: requestMode,
@@ -442,7 +446,7 @@ private struct WorkoutSummaryCompletedMetrics: Hashable, Sendable {
     var averageReps: Double?
 }
 
-private struct WorkoutSummarySessionState: Hashable, Sendable {
+private struct WorkoutSummarySessionState: Codable, Hashable, Sendable {
     var latestFingerprint: String?
     var activeJobID: String?
     var activeProvider: CoachAIProvider?
@@ -460,6 +464,11 @@ private struct WorkoutSummarySessionState: Hashable, Sendable {
     var lastTouchedAt: Date = .now
 }
 
+private struct PersistedWorkoutSummaryStateEnvelope: Codable, Hashable, Sendable {
+    var installID: String
+    var states: [UUID: WorkoutSummarySessionState]
+}
+
 @MainActor
 @Observable
 final class WorkoutSummaryStore {
@@ -467,12 +476,19 @@ final class WorkoutSummaryStore {
     private static let retainedSessionCount = 2
 
     private var configuration: CoachRuntimeConfiguration
-    private var sessionStates: [UUID: WorkoutSummarySessionState] = [:]
+    private var sessionStates: [UUID: WorkoutSummarySessionState] = [:] {
+        didSet {
+            persistSessionStates()
+        }
+    }
     var lastSummaryProvider: CoachAIProvider?
 
     @ObservationIgnored private var client: any CoachAPIClient
     @ObservationIgnored private let installID: String
     @ObservationIgnored private let localStateStore: CoachLocalStateStore
+    @ObservationIgnored private let installSecretProvider: @Sendable () -> String?
+    @ObservationIgnored private let cloudSyncStore: CloudSyncStore?
+    @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let prewarmDebounceDuration: Duration
     @ObservationIgnored private let maxPollingDuration: TimeInterval
     @ObservationIgnored private let pollIntervalProvider: @Sendable (Int) -> Int
@@ -487,6 +503,7 @@ final class WorkoutSummaryStore {
         client: any CoachAPIClient,
         configuration: CoachRuntimeConfiguration,
         localStateStore: CoachLocalStateStore = CoachLocalStateStore(),
+        cloudSyncStore: CloudSyncStore? = nil,
         prewarmDebounceDuration: Duration = workoutSummaryDefaultPrewarmDebounceDuration,
         maxPollingDuration: TimeInterval = workoutSummaryDefaultMaxPollingDuration,
         pollIntervalProvider: @escaping @Sendable (Int) -> Int = workoutSummaryDefaultPollIntervalMs,
@@ -500,22 +517,18 @@ final class WorkoutSummaryStore {
         self.configuration = configuration
         self.localStateStore = localStateStore
         self.installID = localStateStore.installID
+        self.installSecretProvider = { localStateStore.installSecret }
+        self.cloudSyncStore = cloudSyncStore
+        self.defaults = localStateStore.userDefaults
         self.prewarmDebounceDuration = prewarmDebounceDuration
         self.maxPollingDuration = maxPollingDuration
         self.pollIntervalProvider = pollIntervalProvider
         self.debugRecorder = debugRecorder
         self.logger = logger
-        for (sessionID, pendingState) in localStateStore.pendingWorkoutSummaryStates {
-            sessionStates[sessionID] = WorkoutSummarySessionState(
-                latestFingerprint: pendingState.fingerprint,
-                activeJobID: pendingState.jobID,
-                activeProvider: pendingState.provider,
-                activeJobFingerprint: pendingState.fingerprint,
-                status: .queued,
-                requestMode: pendingState.requestMode,
-                awaitingResume: pendingState.awaitingResume
-            )
-        }
+        self.sessionStates = Self.restoreSessionStates(
+            from: localStateStore.userDefaults,
+            installID: localStateStore.installID
+        )
     }
 
     var canUseRemoteSummary: Bool {
@@ -544,6 +557,7 @@ final class WorkoutSummaryStore {
         self.configuration = configuration
         client = CoachAPIHTTPClient(
             configuration: configuration,
+            installSecretProvider: installSecretProvider,
             debugRecorder: debugRecorder
         )
         if providerChanged {
@@ -604,7 +618,7 @@ final class WorkoutSummaryStore {
         }
 
         do {
-            guard let preparedRequest = try WorkoutSummaryRequestBuilder.prewarmRequest(
+            guard let basePreparedRequest = try WorkoutSummaryRequestBuilder.prewarmRequest(
                 for: session,
                 using: appStore,
                 installID: installID,
@@ -622,6 +636,10 @@ final class WorkoutSummaryStore {
                 )
                 return
             }
+            let preparedRequest = await enrichPreparedRequestForRemoteContext(
+                basePreparedRequest,
+                using: appStore
+            )
 
             logSummaryDebug(
                 "summary_create_requested",
@@ -737,11 +755,14 @@ final class WorkoutSummaryStore {
         }
 
         do {
-            let preparedRequest = try WorkoutSummaryRequestBuilder.finalRequest(
-                for: session,
-                using: appStore,
-                installID: installID,
-                provider: configuration.provider
+            let preparedRequest = await enrichPreparedRequestForRemoteContext(
+                try WorkoutSummaryRequestBuilder.finalRequest(
+                    for: session,
+                    using: appStore,
+                    installID: installID,
+                    provider: configuration.provider
+                ),
+                using: appStore
             )
             logSummaryDebug(
                 "summary_create_requested",
@@ -881,11 +902,14 @@ final class WorkoutSummaryStore {
         }
 
         do {
-            let preparedRequest = try WorkoutSummaryRequestBuilder.finalRequest(
-                for: session,
-                using: appStore,
-                installID: installID,
-                provider: configuration.provider
+            let preparedRequest = await enrichPreparedRequestForRemoteContext(
+                try WorkoutSummaryRequestBuilder.finalRequest(
+                    for: session,
+                    using: appStore,
+                    installID: installID,
+                    provider: configuration.provider
+                ),
+                using: appStore
             )
             logSummaryDebug(
                 "summary_create_requested",
@@ -930,6 +954,31 @@ final class WorkoutSummaryStore {
             )
             logger.error(
                 "summary_retry_build_failed session=\(session.id.uuidString, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+            )
+        }
+    }
+
+    func resumePendingJobsIfNeeded() async {
+        guard configuration.canUseRemoteCoach else {
+            return
+        }
+
+        let resumableJobs = sessionStates.compactMap { entry -> (UUID, String, String)? in
+            let (sessionID, state) = entry
+            guard let jobID = state.activeJobID,
+                  let fingerprint = state.activeJobFingerprint,
+                  isPending(state.status),
+                  pollTasks[sessionID] == nil else {
+                return nil
+            }
+            return (sessionID, jobID, fingerprint)
+        }
+
+        for (sessionID, jobID, fingerprint) in resumableJobs {
+            await inspectOrResumeJob(
+                sessionID: sessionID,
+                jobID: jobID,
+                fingerprint: fingerprint
             )
         }
     }
@@ -989,16 +1038,6 @@ final class WorkoutSummaryStore {
             nextState.awaitingResume = false
             nextState.lastTouchedAt = .now
             sessionStates[sessionID] = nextState
-            localStateStore.storePendingWorkoutSummaryState(
-                .init(
-                    sessionID: sessionID,
-                    jobID: response.jobID,
-                    fingerprint: response.fingerprint,
-                    provider: nextState.activeProvider ?? configuration.provider,
-                    requestMode: preparedRequest.request.requestMode,
-                    awaitingResume: false
-                )
-            )
             cancelDeferredResumeTask(for: sessionID)
 
             if isTerminal(response.status) {
@@ -1043,6 +1082,31 @@ final class WorkoutSummaryStore {
                 fingerprint: fingerprint
             )
         }
+    }
+
+    private func enrichPreparedRequestForRemoteContext(
+        _ preparedRequest: WorkoutSummaryPreparedRequest,
+        using appStore: AppStore
+    ) async -> WorkoutSummaryPreparedRequest {
+        var request = preparedRequest.request
+        request.providerID = coachDefaultProviderID
+        request.localBackupHash = appStore.localBackupHash
+
+        guard let cloudSyncStore else {
+            return WorkoutSummaryPreparedRequest(request: request)
+        }
+
+        let preparation = await cloudSyncStore.syncIfNeeded(
+            using: appStore,
+            allowUserPrompt: false
+        )
+        request.localBackupHash = preparation.localBackupHash ?? request.localBackupHash
+
+        if preparation.canUseRemoteAIContextNow {
+            request.recentExerciseHistory = []
+        }
+
+        return WorkoutSummaryPreparedRequest(request: request)
     }
 
     private func inspectOrResumeJob(
@@ -1241,7 +1305,6 @@ final class WorkoutSummaryStore {
         state.activeJobID = nil
         state.activeJobFingerprint = nil
         state.awaitingResume = false
-        localStateStore.removePendingWorkoutSummaryState(sessionID: response.sessionID)
 
         if response.status == .completed,
            let result = response.result {
@@ -1306,7 +1369,6 @@ final class WorkoutSummaryStore {
         state.awaitingResume = false
         state.lastTouchedAt = .now
         sessionStates[sessionID] = state
-        localStateStore.removePendingWorkoutSummaryState(sessionID: sessionID)
         cancelDeferredResumeTask(for: sessionID)
 
         logger.error(
@@ -1350,18 +1412,6 @@ final class WorkoutSummaryStore {
         state.error = nil
         state.lastTouchedAt = .now
         sessionStates[sessionID] = state
-        if let provider = state.activeProvider {
-            localStateStore.storePendingWorkoutSummaryState(
-                .init(
-                    sessionID: sessionID,
-                    jobID: jobID,
-                    fingerprint: fingerprint,
-                    provider: provider,
-                    requestMode: state.requestMode ?? .final,
-                    awaitingResume: true
-                )
-            )
-        }
 
         logger.notice(
             "summary_polling_suspended session=\(sessionID.uuidString, privacy: .public) fingerprint=\(fingerprint, privacy: .public) jobID=\(jobID, privacy: .public)"
@@ -1453,6 +1503,42 @@ final class WorkoutSummaryStore {
         deferredResumeTasks.removeAll()
     }
 
+    private func persistSessionStates() {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let envelope = PersistedWorkoutSummaryStateEnvelope(
+            installID: installID,
+            states: sessionStates
+        )
+        if let data = try? encoder.encode(envelope) {
+            defaults.set(data, forKey: PreferenceKey.persistedSessionStates)
+        } else {
+            defaults.removeObject(forKey: PreferenceKey.persistedSessionStates)
+        }
+    }
+
+    private static func restoreSessionStates(
+        from defaults: UserDefaults,
+        installID: String
+    ) -> [UUID: WorkoutSummarySessionState] {
+        guard let data = defaults.data(forKey: PreferenceKey.persistedSessionStates) else {
+            return [:]
+        }
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard let envelope = try? decoder.decode(
+            PersistedWorkoutSummaryStateEnvelope.self,
+            from: data
+        ),
+        envelope.installID == installID else {
+            defaults.removeObject(forKey: PreferenceKey.persistedSessionStates)
+            return [:]
+        }
+
+        return envelope.states
+    }
+
     private func purgeSessionStates() {
         guard sessionStates.count > Self.retainedSessionCount else {
             return
@@ -1467,7 +1553,6 @@ final class WorkoutSummaryStore {
             cancelPrewarmTask(for: sessionID)
             cancelPollTask(for: sessionID)
             cancelDeferredResumeTask(for: sessionID)
-            localStateStore.removePendingWorkoutSummaryState(sessionID: sessionID)
             sessionStates.removeValue(forKey: sessionID)
         }
     }
@@ -1569,6 +1654,10 @@ final class WorkoutSummaryStore {
                 fingerprint: fingerprint
             )
         }
+    }
+
+    private enum PreferenceKey {
+        static let persistedSessionStates = "coach.runtime.persisted_workout_summary_states"
     }
 }
 

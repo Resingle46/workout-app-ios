@@ -150,9 +150,6 @@ struct RootTabBarPresentationResolver {
 struct RootTabView: View {
     @Environment(AppStore.self) private var store
     @Environment(CloudSyncStore.self) private var cloudSyncStore
-    @State private var showBackupSetupPrompt = false
-    @State private var launchBackupPickerMode: BackupDocumentPickerMode?
-    @State private var launchRestoreRequest: BackupRestoreRequest?
     @State private var workoutTabsExpanded = false
 
     private var tabBarPresentationMode: TabBarPresentationMode {
@@ -174,9 +171,6 @@ struct RootTabView: View {
                 rootNavigationStack(for: .coach, bottomRailInset: bottomRailInset)
                 rootNavigationStack(for: .profile, bottomRailInset: bottomRailInset)
             }
-            .onChange(of: store.shouldPromptForBackupSetup, initial: true) { _, newValue in
-                showBackupSetupPrompt = newValue
-            }
             .onChange(of: store.selectedTab, initial: false) { _, newValue in
                 if newValue != .workout {
                     workoutTabsExpanded = false
@@ -192,59 +186,29 @@ struct RootTabView: View {
             }
             .environment(\.locale, store.locale)
             .environment(\.appBottomRailInset, bottomRailInset)
-            .confirmationDialog("backup.setup.title", isPresented: $showBackupSetupPrompt, titleVisibility: .visible) {
-                Button("backup.setup.choose_folder") {
-                    store.dismissBackupSetupPrompt()
-                    launchBackupPickerMode = .folder
-                }
-                Button("backup.setup.later", role: .cancel) {
-                    store.dismissBackupSetupPrompt()
-                }
-            } message: {
-                Text("backup.setup.message")
-            }
-            .sheet(item: $launchBackupPickerMode) { mode in
-                BackupDocumentPicker(mode: mode, onPick: { url in
-                    launchBackupPickerMode = nil
-                    Task {
-                        let hadExistingBackups = await store.chooseBackupFolder(url)
-                        if hadExistingBackups {
-                            launchRestoreRequest = .latest
-                        }
-                    }
-                }, onCancel: {
-                    launchBackupPickerMode = nil
-                })
-            }
-            .alert(item: $launchRestoreRequest) { request in
-                Alert(
-                    title: Text("backup.setup.restore_found_title"),
-                    message: Text(request.message(store: store)),
-                    primaryButton: .default(Text("backup.action.restore")) {
-                        Task {
-                            await store.restoreLatestBackup()
-                        }
-                    },
-                    secondaryButton: .cancel(Text("backup.setup.restore_later"))
-                )
-            }
             .alert(
                 cloudRestoreAlertTitle,
                 isPresented: Binding(
                     get: { cloudSyncStore.pendingRemoteRestore != nil },
                     set: { isPresented in
                         if !isPresented, cloudSyncStore.pendingRemoteRestore != nil {
-                            cloudSyncStore.dismissPendingRemoteRestore()
+                            Task {
+                                await cloudSyncStore.dismissPendingRemoteRestore()
+                            }
                         }
                     }
                 ),
                 presenting: cloudSyncStore.pendingRemoteRestore
             ) { _ in
                 Button("Restore Remote") {
-                    cloudSyncStore.confirmPendingRemoteRestore(using: store)
+                    Task {
+                        await cloudSyncStore.confirmPendingRemoteRestore(using: store)
+                    }
                 }
                 Button("Keep Local", role: .cancel) {
-                    cloudSyncStore.dismissPendingRemoteRestore()
+                    Task {
+                        await cloudSyncStore.dismissPendingRemoteRestore()
+                    }
                 }
             } message: { pending in
                 Text(cloudRestoreAlertMessage(for: pending))

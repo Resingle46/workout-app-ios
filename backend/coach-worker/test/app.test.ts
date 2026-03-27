@@ -7,7 +7,6 @@ import { executeWorkoutSummaryJob } from "../src/workout-summary-job-executor";
 import { buildProfileInsightsMessages } from "../src/prompts";
 import {
   buildCoachContextFromSnapshot,
-  hashCoachContext,
 } from "../src/context";
 import {
   CoachInferenceServiceError,
@@ -102,69 +101,7 @@ describe("coach worker app", () => {
     });
   });
 
-  it("stores legacy snapshot and reuses it on a follow-up insights request", async () => {
-    const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
-    let capturedSnapshot: CompactCoachSnapshot | undefined;
-    const app = createApp({
-      createInferenceService: () => ({
-        async generateProfileInsights(request) {
-          capturedSnapshot = request.snapshot;
-          return {
-            data: {
-              summary: "Remote summary",
-              recommendations: ["Remote recommendation"],
-              generationStatus: "model",
-              insightSource: "fresh_model",
-            },
-            model: DEFAULT_AI_MODEL,
-          };
-        },
-        async generateWorkoutSummary() {
-          throw new Error("not used");
-        },
-        async generateChat() {
-          throw new Error("not used");
-        },
-      }),
-      createStateRepository: () => repository,
-    });
-
-    const legacySnapshot = makeCompactSnapshotFixture();
-    const snapshotHash = await hashCoachContext(legacySnapshot);
-
-    const syncResponse = await app.fetch(
-      authedRequest("https://coach.example.workers.dev/v1/coach/snapshot", {
-        method: "PUT",
-        body: JSON.stringify({
-          installID: "install_legacy",
-          snapshotHash,
-          snapshot: legacySnapshot,
-          snapshotUpdatedAt: "2026-03-25T19:00:00.000Z",
-        }),
-      }),
-      makeEnv()
-    );
-
-    expect(syncResponse.status).toBe(200);
-
-    const response = await app.fetch(
-      authedRequest("https://coach.example.workers.dev/v1/coach/profile-insights", {
-        method: "POST",
-        body: JSON.stringify({
-          locale: "en",
-          installID: "install_legacy",
-          snapshotHash,
-          capabilityScope: "draft_changes",
-        }),
-      }),
-      makeEnv()
-    );
-
-    expect(response.status).toBe(200);
-    expect(capturedSnapshot).toEqual(legacySnapshot);
-  });
-
-  it("uploads, reconciles, and downloads full backups", async () => {
+  it("uploads, reports status, and downloads full backups", async () => {
     const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
     const app = createApp({
       createInferenceService: () => stubInferenceService(),
@@ -172,19 +109,20 @@ describe("coach worker app", () => {
     });
     const upload = makeBackupUploadRequestFixture();
 
-    const initialReconcile = await app.fetch(
-      authedRequest("https://coach.example.workers.dev/v1/backup/reconcile", {
-        method: "POST",
-        body: JSON.stringify({
-          installID: upload.installID,
-          localBackupHash: "local-only-hash",
-          localStateKind: "user_data",
-        }),
-      }),
+    const initialStatus = await app.fetch(
+      authedRequest(
+        `https://coach.example.workers.dev/v1/backup/status?installID=${upload.installID}&localBackupHash=local-only-hash&localStateKind=user_data`,
+        {
+          method: "GET",
+        }
+      ),
       makeEnv()
     );
-    await expect(initialReconcile.json()).resolves.toMatchObject({
-      action: "upload",
+    await expect(initialStatus.json()).resolves.toMatchObject({
+      syncState: "no_remote_backup",
+      actions: {
+        shouldUpload: true,
+      },
     });
 
     const uploadResponse = await app.fetch(
@@ -202,21 +140,18 @@ describe("coach worker app", () => {
       /^installs\/install_backup\/backups\/v000001-/
     );
 
-    const noopReconcile = await app.fetch(
-      authedRequest("https://coach.example.workers.dev/v1/backup/reconcile", {
-        method: "POST",
-        body: JSON.stringify({
-          installID: upload.installID,
-          localBackupHash: uploaded.backupHash,
-          localStateKind: "user_data",
-          lastSyncedRemoteVersion: 1,
-          lastSyncedBackupHash: uploaded.backupHash,
-        }),
-      }),
+    const readyStatus = await app.fetch(
+      authedRequest(
+        `https://coach.example.workers.dev/v1/backup/status?installID=${upload.installID}&localBackupHash=${uploaded.backupHash}&localStateKind=user_data`,
+        {
+          method: "GET",
+        }
+      ),
       makeEnv()
     );
-    await expect(noopReconcile.json()).resolves.toMatchObject({
-      action: "noop",
+    await expect(readyStatus.json()).resolves.toMatchObject({
+      syncState: "remote_ready",
+      contextState: "context_ready",
       remote: {
         backupVersion: 1,
       },
@@ -247,6 +182,258 @@ describe("coach worker app", () => {
         },
       },
     });
+  });
+
+  it("returns normalized backup status for same-device restore flow", async () => {
+    const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
+    const app = createApp({
+      createInferenceService: () => stubInferenceService(),
+      createStateRepository: () => repository,
+    });
+    const upload = makeBackupUploadRequestFixture();
+
+    await app.fetch(
+      authedRequest("https://coach.example.workers.dev/v1/backup", {
+        method: "PUT",
+        body: JSON.stringify(upload),
+      }),
+      makeEnv()
+    );
+
+    const response = await app.fetch(
+      authedRequest(
+        `https://coach.example.workers.dev/v1/backup/status?installID=${upload.installID}&localStateKind=seed`,
+        {
+          method: "GET",
+        }
+      ),
+      makeEnv()
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      syncState: "restore_pending_decision",
+      contextState: "context_stale",
+      actions: {
+        canUseRemoteAIContextNow: false,
+        shouldOfferRestore: true,
+        shouldPromptUser: true,
+      },
+      remote: {
+        backupVersion: 1,
+      },
+    });
+  });
+
+  it("rejects stale remote context instead of silently using it", async () => {
+    const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
+    const app = createApp({
+      createInferenceService: () => stubInferenceService(),
+      createStateRepository: () => repository,
+    });
+    const upload = makeBackupUploadRequestFixture();
+    upload.installID = "install_stale_context";
+
+    await app.fetch(
+      authedRequest("https://coach.example.workers.dev/v1/backup", {
+        method: "PUT",
+        body: JSON.stringify(upload),
+      }),
+      makeEnv()
+    );
+
+    const response = await app.fetch(
+      authedRequest("https://coach.example.workers.dev/v1/coach/profile-insights", {
+        method: "POST",
+        body: JSON.stringify({
+          locale: "en",
+          installID: upload.installID,
+          localBackupHash: "different-local-hash",
+          capabilityScope: "draft_changes",
+        }),
+      }),
+      makeEnv()
+    );
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      error: {
+        code: "remote_head_changed",
+      },
+    });
+  });
+
+  it("enrolls install secret and rejects invalid proof afterwards", async () => {
+    const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
+    const app = createApp({
+      createInferenceService: () => stubInferenceService(),
+      createStateRepository: () => repository,
+    });
+    const upload = makeBackupUploadRequestFixture();
+    upload.installID = "install_secret_enrolled";
+
+    const uploadResponse = await app.fetch(
+      authedRequest("https://coach.example.workers.dev/v1/backup", {
+        method: "PUT",
+        headers: {
+          "x-install-secret": "super-secret-install-proof",
+        },
+        body: JSON.stringify(upload),
+      }),
+      makeEnv()
+    );
+    expect(uploadResponse.status).toBe(200);
+
+    const invalidProofResponse = await app.fetch(
+      authedRequest(
+        `https://coach.example.workers.dev/v1/backup/status?installID=${upload.installID}&localBackupHash=nope`,
+        {
+          method: "GET",
+          headers: {
+            "x-install-secret": "wrong-secret",
+          },
+        }
+      ),
+      makeEnv()
+    );
+
+    expect(invalidProofResponse.status).toBe(401);
+    await expect(invalidProofResponse.json()).resolves.toMatchObject({
+      error: {
+        code: "install_proof_invalid",
+      },
+    });
+  });
+
+  it("keeps legacy clients working before install secret enrollment", async () => {
+    const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
+    const app = createApp({
+      createInferenceService: () => stubInferenceService(),
+      createStateRepository: () => repository,
+    });
+    const upload = makeBackupUploadRequestFixture();
+    upload.installID = "install_legacy_compat";
+
+    const uploadResponse = await app.fetch(
+      authedRequest("https://coach.example.workers.dev/v1/backup", {
+        method: "PUT",
+        body: JSON.stringify(upload),
+      }),
+      makeEnv()
+    );
+    expect(uploadResponse.status).toBe(200);
+
+    const statusResponse = await app.fetch(
+      authedRequest(
+        `https://coach.example.workers.dev/v1/backup/status?installID=${upload.installID}&localBackupHash=other-hash&localSourceModifiedAt=2026-03-26T19:00:00.000Z&localStateKind=user_data`,
+        {
+          method: "GET",
+        }
+      ),
+      makeEnv()
+    );
+
+    expect(statusResponse.status).toBe(200);
+    await expect(statusResponse.json()).resolves.toMatchObject({
+      authMode: "legacy_compat",
+    });
+  });
+
+  it("clears remote chat memory without deleting backup", async () => {
+    const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
+    const capturedRecentTurns: number[] = [];
+    const app = createApp({
+      createInferenceService: () => ({
+        async generateProfileInsights() {
+          throw new Error("not used");
+        },
+        async generateWorkoutSummary() {
+          throw new Error("not used");
+        },
+        async generateChat(request) {
+          capturedRecentTurns.push(request.clientRecentTurns.length);
+          return {
+            data: {
+              answerMarkdown: "Answer",
+              responseID: "resp-1",
+              followUps: [],
+              generationStatus: "model",
+            },
+            model: DEFAULT_AI_MODEL,
+          };
+        },
+      }),
+      createStateRepository: () => repository,
+    });
+    const upload = makeBackupUploadRequestFixture();
+    upload.installID = "install_chat_memory_clear";
+
+    const uploadResponse = await app.fetch(
+      authedRequest("https://coach.example.workers.dev/v1/backup", {
+        method: "PUT",
+        body: JSON.stringify(upload),
+      }),
+      makeEnv()
+    );
+    const uploaded = await uploadResponse.json();
+
+    await app.fetch(
+      authedRequest("https://coach.example.workers.dev/v1/coach/chat", {
+        method: "POST",
+        body: JSON.stringify({
+          locale: "en",
+          installID: upload.installID,
+          localBackupHash: uploaded.backupHash,
+          capabilityScope: "draft_changes",
+          question: "First",
+          clientRecentTurns: [],
+        }),
+      }),
+      makeEnv()
+    );
+
+    await app.fetch(
+      authedRequest("https://coach.example.workers.dev/v1/coach/chat", {
+        method: "POST",
+        body: JSON.stringify({
+          locale: "en",
+          installID: upload.installID,
+          localBackupHash: uploaded.backupHash,
+          capabilityScope: "draft_changes",
+          question: "Second",
+          clientRecentTurns: [],
+        }),
+      }),
+      makeEnv()
+    );
+
+    const clearResponse = await app.fetch(
+      authedRequest("https://coach.example.workers.dev/v1/coach/memory/clear", {
+        method: "POST",
+        body: JSON.stringify({
+          installID: upload.installID,
+        }),
+      }),
+      makeEnv()
+    );
+    expect(clearResponse.status).toBe(200);
+
+    await app.fetch(
+      authedRequest("https://coach.example.workers.dev/v1/coach/chat", {
+        method: "POST",
+        body: JSON.stringify({
+          locale: "en",
+          installID: upload.installID,
+          localBackupHash: uploaded.backupHash,
+          capabilityScope: "draft_changes",
+          question: "Third",
+          clientRecentTurns: [],
+        }),
+      }),
+      makeEnv()
+    );
+
+    expect(capturedRecentTurns).toEqual([0, 2, 0]);
   });
 
   it("rejects stale backup uploads after the remote head moves", async () => {

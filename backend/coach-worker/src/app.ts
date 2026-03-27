@@ -1,8 +1,10 @@
 import { jsonByteLength, type CoachExecutionMetadata } from "./context";
 import {
+  backupDeleteRequestSchema,
   backupDownloadResponseSchema,
-  backupReconcileRequestSchema,
-  backupReconcileResponseSchema,
+  backupRestoreDecisionRequestSchema,
+  backupStatusRequestSchema,
+  backupStatusResponseSchema,
   backupUploadRequestSchema,
   backupUploadResponseSchema,
   chatJobCreateRequestSchema,
@@ -10,9 +12,8 @@ import {
   chatJobStatusResponseSchema,
   coachPreferencesUpdateRequestSchema,
   coachPreferencesUpdateResponseSchema,
+  coachMemoryClearRequestSchema,
   profileInsightsRequestSchema,
-  snapshotSyncRequestSchema,
-  snapshotSyncResponseSchema,
   stateDeleteRequestSchema,
   workoutSummaryJobCreateRequestSchema,
   workoutSummaryJobCreateResponseSchema,
@@ -41,6 +42,7 @@ import {
 import {
   ActiveCoachChatJobError,
   CloudflareCoachStateRepository,
+  InstallAccessError,
   MissingCoachContextError,
   MissingRemoteBackupError,
   StaleRemoteStateError,
@@ -108,11 +110,17 @@ export function createApp(
 
         const stateRepository = deps.createStateRepository(env);
 
-        if (pathname === "/v1/backup/reconcile" && request.method === "POST") {
-          const body = backupReconcileRequestSchema.parse(await readJSON(request));
-          const response = backupReconcileResponseSchema.parse(
-            await stateRepository.reconcileBackup(body)
+        if (pathname === "/v1/backup/status" && request.method === "GET") {
+          const input = parseBackupStatusRequest(request);
+          const installAuth = await authorizeInstallScope(
+            request,
+            stateRepository,
+            input.installID
           );
+          const response = backupStatusResponseSchema.parse({
+            ...(await stateRepository.getBackupStatus(input)),
+            authMode: installAuth.authMode,
+          });
 
           logRequest({
             requestID,
@@ -120,8 +128,10 @@ export function createApp(
             method: request.method,
             status: 200,
             durationMs: deps.now() - startedAt,
-            reconcileAction: response.action,
-            installID: body.installID,
+            installID: input.installID,
+            syncState: response.syncState,
+            contextState: response.contextState,
+            installAuthMode: installAuth.authMode,
           });
           return json(response, 200);
         }
@@ -134,9 +144,15 @@ export function createApp(
             normalized.migratedLegacyCategoryIDs
           );
           const body = backupUploadRequestSchema.parse(normalized.body);
+          const installAuth = await authorizeInstallScope(
+            request,
+            stateRepository,
+            body.installID
+          );
           const response = backupUploadResponseSchema.parse(
             await stateRepository.uploadBackup(body)
           );
+          await maybeBindInstallSecret(request, stateRepository, body.installID, installAuth);
 
           logRequest({
             requestID,
@@ -147,12 +163,18 @@ export function createApp(
             installID: body.installID,
             backupVersion: response.backupVersion,
             backupBytes: jsonByteLength(body.snapshot),
+            installAuthMode: installAuth.authMode,
           });
           return json(response, 200);
         }
 
         if (pathname === "/v1/backup/download" && request.method === "GET") {
           const input = parseBackupDownloadRequest(request);
+          const installAuth = await authorizeInstallScope(
+            request,
+            stateRepository,
+            input.installID
+          );
           const response = backupDownloadResponseSchema.parse(
             await stateRepository.downloadBackup(input)
           );
@@ -165,6 +187,7 @@ export function createApp(
             durationMs: deps.now() - startedAt,
             installID: input.installID,
             backupVersion: response.remote.backupVersion,
+            installAuthMode: installAuth.authMode,
           });
           return json(response, 200);
         }
@@ -173,9 +196,15 @@ export function createApp(
           const body = coachPreferencesUpdateRequestSchema.parse(
             await readJSON(request)
           );
+          const installAuth = await authorizeInstallScope(
+            request,
+            stateRepository,
+            body.installID
+          );
           const response = coachPreferencesUpdateResponseSchema.parse(
             await stateRepository.updateCoachPreferences(body)
           );
+          await maybeBindInstallSecret(request, stateRepository, body.installID, installAuth);
 
           logRequest({
             requestID,
@@ -185,15 +214,19 @@ export function createApp(
             durationMs: deps.now() - startedAt,
             installID: body.installID,
             coachStateVersion: response.coachStateVersion,
+            installAuthMode: installAuth.authMode,
           });
           return json(response, 200);
         }
 
-        if (pathname === "/v1/coach/snapshot" && request.method === "PUT") {
-          const body = snapshotSyncRequestSchema.parse(await readJSON(request));
-          const response = snapshotSyncResponseSchema.parse(
-            await stateRepository.storeLegacySnapshot(body)
+        if (pathname === "/v1/backup/restore-decision" && request.method === "POST") {
+          const body = backupRestoreDecisionRequestSchema.parse(await readJSON(request));
+          const installAuth = await authorizeInstallScope(
+            request,
+            stateRepository,
+            body.installID
           );
+          await stateRepository.recordRestoreDecision(body);
 
           logRequest({
             requestID,
@@ -202,13 +235,63 @@ export function createApp(
             status: 200,
             durationMs: deps.now() - startedAt,
             installID: body.installID,
-            snapshotBytes: jsonByteLength(body.snapshot),
+            remoteVersion: body.remoteVersion,
+            restoreDecision: body.action,
+            installAuthMode: installAuth.authMode,
           });
-          return json(response, 200);
+          return json({}, 200);
+        }
+
+        if (pathname === "/v1/coach/memory/clear" && request.method === "POST") {
+          const body = coachMemoryClearRequestSchema.parse(await readJSON(request));
+          const installAuth = await authorizeInstallScope(
+            request,
+            stateRepository,
+            body.installID
+          );
+          await stateRepository.clearRemoteAIMemory(body);
+
+          logRequest({
+            requestID,
+            route: pathname,
+            method: request.method,
+            status: 200,
+            durationMs: deps.now() - startedAt,
+            installID: body.installID,
+            providerID: body.providerID ?? "workers_ai",
+            installAuthMode: installAuth.authMode,
+          });
+          return json({}, 200);
+        }
+
+        if (pathname === "/v1/backup" && request.method === "DELETE") {
+          const body = backupDeleteRequestSchema.parse(await readJSON(request));
+          const installAuth = await authorizeInstallScope(
+            request,
+            stateRepository,
+            body.installID
+          );
+          await stateRepository.deleteRemoteBackup(body);
+
+          logRequest({
+            requestID,
+            route: pathname,
+            method: request.method,
+            status: 200,
+            durationMs: deps.now() - startedAt,
+            installID: body.installID,
+            installAuthMode: installAuth.authMode,
+          });
+          return json({}, 200);
         }
 
         if (pathname === "/v1/coach/state" && request.method === "DELETE") {
           const body = stateDeleteRequestSchema.parse(await readJSON(request));
+          const installAuth = await authorizeInstallScope(
+            request,
+            stateRepository,
+            body.installID
+          );
           await stateRepository.deleteInstallState(body.installID);
 
           logRequest({
@@ -218,12 +301,18 @@ export function createApp(
             status: 200,
             durationMs: deps.now() - startedAt,
             installID: body.installID,
+            installAuthMode: installAuth.authMode,
           });
           return json({}, 200);
         }
 
         if (pathname === "/v1/coach/profile-insights" && request.method === "POST") {
           const body = profileInsightsRequestSchema.parse(await readJSON(request));
+          const installAuth = await authorizeInstallScope(
+            request,
+            stateRepository,
+            body.installID
+          );
           assertProviderReadiness(env, body.provider);
           const inferenceService = deps.createInferenceService(env, body.provider);
           const contextResolveStartedAt = deps.now();
@@ -243,6 +332,7 @@ export function createApp(
             contextVersion: context.contextVersion,
             analyticsVersion: context.analyticsVersion,
             memoryProfile: "compact_v1",
+            providerID: body.providerID ?? "workers_ai",
             derivedAnalytics: context.derivedAnalytics,
             useCase: routingDecision.useCase,
             modelRole: routingDecision.modelRole,
@@ -329,6 +419,7 @@ export function createApp(
               recentPrCount,
               relativeStrengthCount,
               preferredProgramWorkoutCount,
+              installAuthMode: installAuth.authMode,
             });
             return json(reusableCachedResponse, 200);
           }
@@ -374,6 +465,7 @@ export function createApp(
               recentPrCount,
               relativeStrengthCount,
               preferredProgramWorkoutCount,
+              installAuthMode: installAuth.authMode,
             });
             return json(reusableDegradedCachedResponse, 200);
           }
@@ -469,6 +561,7 @@ export function createApp(
             modelDurationMs,
             fallbackPromptBytes: result.fallbackPromptBytes,
             fallbackModelDurationMs: result.fallbackModelDurationMs,
+            installAuthMode: installAuth.authMode,
           });
           return json(result.data, 200);
         }
@@ -490,6 +583,11 @@ export function createApp(
             })
           );
           validationRequestPreview = undefined;
+          const installAuth = await authorizeInstallScope(
+            request,
+            stateRepository,
+            body.installID
+          );
           const context = await stateRepository.resolveCoachContext(body);
           const routingDecision = buildChatRoutingDecision(
             env,
@@ -512,6 +610,7 @@ export function createApp(
             contextVersion: context.contextVersion,
             analyticsVersion: context.analyticsVersion,
             memoryProfile: "rich_async_v1",
+            providerID: body.providerID ?? "workers_ai",
             jobDeadlineAt: new Date(deps.now() + ASYNC_CHAT_JOB_TTL_MS).toISOString(),
             derivedAnalytics: context.derivedAnalytics,
             useCase: routingDecision.useCase,
@@ -774,13 +873,152 @@ export function createApp(
             modelRole: routingDecision.modelRole,
             selectedModel: routingDecision.selectedModel,
             routingVersion: routingDecision.routingVersion,
+            installAuthMode: installAuth.authMode,
           });
           return json(response, 202);
         }
 
+        if (pathname === "/v1/coach/chat" && request.method === "POST") {
+          const rawBody = await readJSON(request);
+          validationRequestPreview = buildChatRequestPreview(rawBody);
+          const body = chatRequestSchema.parse(rawBody);
+          validationRequestPreview = undefined;
+          const installAuth = await authorizeInstallScope(
+            request,
+            stateRepository,
+            body.installID
+          );
+          assertProviderReadiness(env, body.provider);
+          const inferenceService = deps.createInferenceService(env, body.provider);
+          const context = await stateRepository.resolveCoachContext(body);
+          const routingDecision = buildChatRoutingDecision(
+            env,
+            {
+              ...body,
+              snapshotHash: context.contextHash,
+              snapshot: context.snapshot,
+              snapshotUpdatedAt:
+                context.backupHead?.uploadedAt ?? body.snapshotUpdatedAt,
+            },
+            { timeoutProfile: "sync" }
+          );
+          const executionMetadata = buildExecutionMetadata({
+            contextProfile: "compact_sync_v2",
+            promptProfile: "chat_compact_sync_v2",
+            contextVersion: context.contextVersion,
+            analyticsVersion: context.analyticsVersion,
+            memoryProfile: "compact_v1",
+            providerID: body.providerID ?? "workers_ai",
+            derivedAnalytics: context.derivedAnalytics,
+            useCase: routingDecision.useCase,
+            modelRole: routingDecision.modelRole,
+            selectedModel: routingDecision.selectedModel,
+            allowedContextProfiles: routingDecision.allowedContextProfiles,
+            payloadTier: routingDecision.payloadTier,
+            routingVersion: routingDecision.routingVersion,
+            memoryCompatibilityKey: routingDecision.memoryCompatibilityKey,
+            promptFamily: routingDecision.promptFamily,
+            contextFamily: routingDecision.contextFamily,
+            routingReasonTags: routingDecision.routingReasonTags,
+          });
+          const storageKey = storageKeyFromMetadata(
+            context.contextHash,
+            executionMetadata,
+            resolvePromptVersion(env),
+            routingDecision.selectedModel
+          );
+          const storedMemory = context.cacheAllowed
+            ? await stateRepository.getChatMemory(body.installID, storageKey)
+            : null;
+          const recentTurns = mergeRecentTurns(
+            storedMemory?.recentTurns ?? [],
+            body.clientRecentTurns
+          );
+          const chatMemoryHit = Boolean(storedMemory?.recentTurns?.length);
+          const snapshotBytes = jsonByteLength(context.snapshot);
+          const recentTurnCount = recentTurns.length;
+          const recentTurnChars = totalChatTurnChars(recentTurns);
+          const questionChars = body.question.trim().length;
+          routeDiagnostics = {
+            installID: body.installID,
+            contextSource: context.source,
+            chatMemoryHit,
+            snapshotBytes,
+            recentTurnCount,
+            recentTurnChars,
+            questionChars,
+            useCase: routingDecision.useCase,
+            modelRole: routingDecision.modelRole,
+            selectedModel: routingDecision.selectedModel,
+            routingVersion: routingDecision.routingVersion,
+            routingReasonTags: routingDecision.routingReasonTags,
+          };
+
+          const inferenceStartedAt = deps.now();
+          const result = await inferenceService.generateChat({
+            ...body,
+            snapshotHash: context.contextHash,
+            snapshot: context.snapshot,
+            snapshotUpdatedAt:
+              context.backupHead?.uploadedAt ?? body.snapshotUpdatedAt,
+            clientRecentTurns: recentTurns,
+          }, {
+            contextProfile: executionMetadata.contextProfile,
+            promptProfile: executionMetadata.promptProfile,
+            derivedAnalytics: executionMetadata.derivedAnalytics,
+          });
+          const modelDurationMs = deps.now() - inferenceStartedAt;
+
+          if (context.cacheAllowed) {
+            await stateRepository.appendChatMemory(
+              body.installID,
+              storageKey,
+              recentTurns,
+              body.question,
+              result.data.answerMarkdown
+            );
+          }
+
+          logRequest({
+            requestID,
+            route: pathname,
+            method: request.method,
+            status: 200,
+            durationMs: deps.now() - startedAt,
+            installID: body.installID,
+            model: result.model,
+            useCase: result.useCase ?? routingDecision.useCase,
+            modelRole: result.modelRole ?? routingDecision.modelRole,
+            selectedModel: result.selectedModel ?? routingDecision.selectedModel,
+            routingVersion:
+              result.routingVersion ?? routingDecision.routingVersion,
+            routingReasonTags:
+              result.routingReasonTags ?? routingDecision.routingReasonTags,
+            fallbackHopCount: result.fallbackHopCount,
+            fallbackReason: result.fallbackReason,
+            responseID: result.responseId,
+            usage: result.usage,
+            inferenceMode: result.mode,
+            contextSource: context.source,
+            chatMemoryHit,
+            snapshotBytes,
+            recentTurnCount,
+            recentTurnChars,
+            questionChars,
+            promptBytes: result.promptBytes,
+            modelDurationMs,
+            installAuthMode: installAuth.authMode,
+          });
+          return json(result.data, 200);
+        }
         if (pathname === "/v2/coach/workout-summary-jobs" && request.method === "POST") {
           const body = workoutSummaryJobCreateRequestSchema.parse(
             await readJSON(request)
+          );
+          const installAuth = await authorizeInstallScope(
+            request,
+            stateRepository,
+            body.installID
           );
           assertProviderReadiness(env, body.provider);
           console.log(
@@ -803,6 +1041,7 @@ export function createApp(
             contextVersion: "2026-03-27.context.v1",
             analyticsVersion: "2026-03-27.analytics.v1",
             memoryProfile: "rich_async_v1",
+            providerID: body.providerID ?? "workers_ai",
             jobDeadlineAt: new Date(
               deps.now() + ASYNC_WORKOUT_SUMMARY_JOB_TTL_MS
             ).toISOString(),
@@ -995,6 +1234,7 @@ export function createApp(
             selectedModel: routingDecision.selectedModel,
             routingVersion: routingDecision.routingVersion,
             reusedExistingJob,
+            installAuthMode: installAuth.authMode,
           });
           return json(response, statusCode);
         }
@@ -1002,6 +1242,11 @@ export function createApp(
         const chatJobPath = parseChatJobPath(pathname);
         if (chatJobPath && request.method === "GET") {
           const installID = parseInstallIDQuery(request);
+          const installAuth = await authorizeInstallScope(
+            request,
+            stateRepository,
+            installID
+          );
           const job = await stateRepository.getChatJob(chatJobPath.jobID, installID);
           if (!job) {
             throw new RequestError(404, "chat_job_not_found", "Chat job not found.");
@@ -1036,6 +1281,7 @@ export function createApp(
             promptBytes: job.promptBytes,
             modelDurationMs: job.modelDurationMs,
             totalJobDurationMs: job.totalJobDurationMs,
+            installAuthMode: installAuth.authMode,
           });
           return json(response, 200);
         }
@@ -1043,6 +1289,11 @@ export function createApp(
         const workoutSummaryJobPath = parseWorkoutSummaryJobPath(pathname);
         if (workoutSummaryJobPath && request.method === "GET") {
           const installID = parseInstallIDQuery(request);
+          const installAuth = await authorizeInstallScope(
+            request,
+            stateRepository,
+            installID
+          );
           const job = await stateRepository.getWorkoutSummaryJob(
             workoutSummaryJobPath.jobID,
             installID
@@ -1088,6 +1339,7 @@ export function createApp(
             promptBytes: job.promptBytes,
             modelDurationMs: job.modelDurationMs,
             totalJobDurationMs: job.totalJobDurationMs,
+            installAuthMode: installAuth.authMode,
           });
           return json(response, 200);
         }
@@ -1383,6 +1635,54 @@ function parseBackupDownloadRequest(request: Request): {
   return { installID, version };
 }
 
+function parseBackupStatusRequest(request: Request): {
+  installID: string;
+  localBackupHash?: string;
+  localSourceModifiedAt?: string;
+  localStateKind: "seed" | "user_data";
+} {
+  const url = new URL(request.url);
+  return backupStatusRequestSchema.parse({
+    installID: url.searchParams.get("installID")?.trim(),
+    localBackupHash: url.searchParams.get("localBackupHash")?.trim() || undefined,
+    localSourceModifiedAt:
+      url.searchParams.get("localSourceModifiedAt")?.trim() || undefined,
+    localStateKind: url.searchParams.get("localStateKind")?.trim() || undefined,
+  });
+}
+
+async function authorizeInstallScope(
+  request: Request,
+  stateRepository: CoachStateStore,
+  installID: string
+): Promise<{ authMode: "legacy_compat" | "secret_valid" | "unbound_secret" }> {
+  const providedSecret = request.headers.get("x-install-secret")?.trim() || undefined;
+  return stateRepository.authorizeInstallAccess({
+    installID,
+    providedSecret,
+    allowLegacyCompat: true,
+    enrollIfMissing: true,
+  });
+}
+
+async function maybeBindInstallSecret(
+  request: Request,
+  stateRepository: CoachStateStore,
+  installID: string,
+  auth: { authMode: "legacy_compat" | "secret_valid" | "unbound_secret" }
+): Promise<void> {
+  if (auth.authMode !== "unbound_secret") {
+    return;
+  }
+
+  const providedSecret = request.headers.get("x-install-secret")?.trim();
+  if (!providedSecret) {
+    return;
+  }
+
+  await stateRepository.bindInstallSecret(installID, providedSecret);
+}
+
 async function readJSON(request: Request): Promise<unknown> {
   try {
     return await request.json();
@@ -1580,6 +1880,22 @@ function mapError(
         },
         jobID: error.jobID,
         provider: error.provider,
+      },
+    };
+  }
+
+  if (error instanceof InstallAccessError) {
+    return {
+      status: error.code === "install_proof_required" ? 403 : 401,
+      body: {
+        error: {
+          code: error.code,
+          message:
+            error.code === "install_proof_required"
+              ? "Install proof required."
+              : "Install proof invalid.",
+          requestID,
+        },
       },
     };
   }
@@ -1854,12 +2170,14 @@ function buildChatRequestPreview(rawBody: unknown): Record<string, unknown> {
     "locale",
     "question",
     "installID",
+    "localBackupHash",
     "snapshotHash",
     "snapshot",
     "snapshotUpdatedAt",
     "runtimeContextDelta",
     "clientRecentTurns",
     "capabilityScope",
+    "providerID",
     "clientRequestID",
   ]);
   const question = typeof rawBody.question === "string" ? rawBody.question : undefined;
@@ -1999,6 +2317,7 @@ function buildExecutionMetadata(input: {
   contextVersion: string;
   analyticsVersion: string;
   memoryProfile: CoachExecutionMetadata["memoryProfile"];
+  providerID?: CoachExecutionMetadata["providerID"];
   jobDeadlineAt?: string;
   derivedAnalytics?: CoachExecutionMetadata["derivedAnalytics"];
   useCase?: CoachExecutionMetadata["useCase"];
@@ -2019,6 +2338,7 @@ function buildExecutionMetadata(input: {
     contextVersion: input.contextVersion,
     analyticsVersion: input.analyticsVersion,
     memoryProfile: input.memoryProfile,
+    providerID: input.providerID,
     jobDeadlineAt: input.jobDeadlineAt,
     derivedAnalytics: input.derivedAnalytics,
     useCase: input.useCase,
@@ -2046,6 +2366,7 @@ function publicJobMetadata(
       contextVersion?: string;
       analyticsVersion?: string;
       memoryProfile?: string;
+      providerID?: string;
     }
   | undefined {
   if (!metadata) {
@@ -2061,6 +2382,7 @@ function publicJobMetadata(
     contextVersion: metadata.contextVersion,
     analyticsVersion: metadata.analyticsVersion,
     memoryProfile: metadata.memoryProfile,
+    providerID: metadata.providerID,
   };
 }
 

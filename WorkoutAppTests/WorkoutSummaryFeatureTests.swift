@@ -221,7 +221,11 @@ final class WorkoutSummaryFeatureTests: XCTestCase {
         defer {
             defaults.removePersistentDomain(forName: suiteName)
         }
-        let localStateStore = CoachLocalStateStore(defaults: defaults, generatedInstallID: "install-test")
+        let localStateStore = CoachLocalStateStore(
+            defaults: defaults,
+            generatedInstallID: "install-test",
+            identityVault: InMemoryCoachIdentityVault()
+        )
         let prewarmRequest = try XCTUnwrap(
             WorkoutSummaryRequestBuilder.prewarmRequest(
                 for: activeSession,
@@ -337,7 +341,8 @@ final class WorkoutSummaryFeatureTests: XCTestCase {
             ),
             localStateStore: CoachLocalStateStore(
                 defaults: UserDefaults(suiteName: "WorkoutSummaryFeatureTests.timeout.\(UUID().uuidString)")!,
-                generatedInstallID: "install-test"
+                generatedInstallID: "install-test",
+                identityVault: InMemoryCoachIdentityVault()
             ),
             prewarmDebounceDuration: .zero,
             maxPollingDuration: 0.01,
@@ -407,7 +412,8 @@ final class WorkoutSummaryFeatureTests: XCTestCase {
             ),
             localStateStore: CoachLocalStateStore(
                 defaults: UserDefaults(suiteName: "WorkoutSummaryFeatureTests.visibility.\(UUID().uuidString)")!,
-                generatedInstallID: "install-test"
+                generatedInstallID: "install-test",
+                identityVault: InMemoryCoachIdentityVault()
             ),
             prewarmDebounceDuration: .zero,
             maxPollingDuration: 5,
@@ -525,7 +531,8 @@ final class WorkoutSummaryFeatureTests: XCTestCase {
             ),
             localStateStore: CoachLocalStateStore(
                 defaults: UserDefaults(suiteName: "WorkoutSummaryFeatureTests.retry.\(UUID().uuidString)")!,
-                generatedInstallID: "install-test"
+                generatedInstallID: "install-test",
+                identityVault: InMemoryCoachIdentityVault()
             ),
             prewarmDebounceDuration: .zero,
             maxPollingDuration: 5,
@@ -547,6 +554,118 @@ final class WorkoutSummaryFeatureTests: XCTestCase {
             [.final, .final]
         )
         XCTAssertEqual(summaryStore.cardState(for: session.id), .ready(expectedResult))
+    }
+
+    @MainActor
+    func testRemoteReadySummaryRequestOmitsHistoryAndCarriesLocalBackupHash() async throws {
+        let bench = makeExercise(
+            id: UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-000000000110")!,
+            name: "Bench Press"
+        )
+        let session = makeSession(
+            sessionID: UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-000000000111")!,
+            workoutTemplateID: UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-000000000112")!,
+            title: "Push",
+            exercise: bench,
+            weight: 85,
+            reps: 6,
+            startedAt: Date(timeIntervalSince1970: 1_700_700_000),
+            completed: true
+        )
+        let history = [
+            makeSession(
+                sessionID: UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-000000000113")!,
+                workoutTemplateID: UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-000000000114")!,
+                title: "Push Previous",
+                exercise: bench,
+                weight: 82.5,
+                reps: 8,
+                startedAt: Date(timeIntervalSince1970: 1_700_690_000),
+                completed: true
+            )
+        ]
+        let store = makeAppStore(exercises: [bench], history: history)
+        let suiteName = "WorkoutSummaryFeatureTests.remoteReady.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        let localStateStore = CoachLocalStateStore(
+            defaults: defaults,
+            generatedInstallID: "install-test",
+            identityVault: InMemoryCoachIdentityVault()
+        )
+        let finalRequest = try WorkoutSummaryRequestBuilder.finalRequest(
+            for: session,
+            using: store,
+            installID: localStateStore.installID
+        )
+        let summaryClient = WorkoutSummaryTestClient(
+            createResponses: [
+                .success(
+                    makeCreateResponse(
+                        jobID: "job-remote-ready",
+                        sessionID: session.id,
+                        fingerprint: finalRequest.fingerprint,
+                        status: .queued
+                    )
+                )
+            ],
+            statusResponses: [
+                .success(
+                    makeStatusResponse(
+                        jobID: "job-remote-ready",
+                        sessionID: session.id,
+                        fingerprint: finalRequest.fingerprint,
+                        status: .completed,
+                        result: WorkoutSummaryJobResult(
+                            headline: "Remote-ready summary",
+                            summary: "Summary generated from server-side context.",
+                            highlights: ["History was resolved remotely."],
+                            nextWorkoutFocus: ["Keep bar speed consistent."],
+                            generationStatus: .model,
+                            inferenceMode: .structured,
+                            modelDurationMs: 700,
+                            totalJobDurationMs: 950
+                        )
+                    )
+                )
+            ]
+        )
+        let syncClient = WorkoutSummaryRemoteReadySyncClient()
+        let cloudSyncStore = CloudSyncStore(
+            client: syncClient,
+            configuration: CoachRuntimeConfiguration(
+                isFeatureEnabled: true,
+                backendBaseURL: URL(string: "https://example.com"),
+                internalBearerToken: "token"
+            ),
+            installID: localStateStore.installID,
+            localStateStore: CloudSyncLocalStateStore(defaults: defaults)
+        )
+        let summaryStore = WorkoutSummaryStore(
+            client: summaryClient,
+            configuration: CoachRuntimeConfiguration(
+                isFeatureEnabled: true,
+                backendBaseURL: URL(string: "https://example.com"),
+                internalBearerToken: "token"
+            ),
+            localStateStore: localStateStore,
+            cloudSyncStore: cloudSyncStore,
+            prewarmDebounceDuration: .zero,
+            maxPollingDuration: 5,
+            pollIntervalProvider: { _ in 0 }
+        )
+
+        await summaryStore.finalizeOrResumeSummary(for: session, using: store)
+        try? await Task.sleep(for: .milliseconds(20))
+
+        let createdRequests = await summaryClient.createdRequests
+        let createdRequest = try XCTUnwrap(createdRequests.first)
+        XCTAssertEqual(createdRequest.providerID, "workers_ai")
+        XCTAssertEqual(createdRequest.localBackupHash, store.localBackupHash)
+        XCTAssertTrue(createdRequest.recentExerciseHistory.isEmpty)
     }
 }
 
@@ -571,14 +690,6 @@ private actor WorkoutSummaryTestClient: CoachAPIClient {
     ) {
         self.createResponses = createResponses
         self.statusResponses = statusResponses
-    }
-
-    func syncSnapshot(_ request: CoachSnapshotSyncRequest) async throws -> CoachSnapshotSyncResponse {
-        throw CoachClientError.invalidResponse
-    }
-
-    func reconcileBackup(_ request: CloudBackupReconcileRequest) async throws -> CloudBackupReconcileResponse {
-        throw CoachClientError.invalidResponse
     }
 
     func uploadBackup(_ request: CloudBackupUploadRequest) async throws -> CloudBackupHead {
@@ -673,6 +784,94 @@ private actor WorkoutSummaryTestClient: CoachAPIClient {
         }
 
         return try result.get()
+    }
+}
+
+private actor WorkoutSummaryRemoteReadySyncClient: CoachAPIClient {
+    func getBackupStatus(_ request: CloudBackupStatusRequest) async throws -> CloudBackupStatusResponse {
+        CloudBackupStatusResponse(
+            syncState: .remoteReady,
+            contextState: .contextReady,
+            reasonCodes: ["test_context_ready"],
+            actions: CloudBackupStatusActions(
+                canUseRemoteAIContextNow: true,
+                shouldUpload: false,
+                shouldOfferRestore: false,
+                shouldBuildInlineFallback: false,
+                shouldPromptUser: false
+            ),
+            authMode: .secretValid,
+            remote: CloudBackupHead(
+                installID: request.installID,
+                backupVersion: 1,
+                backupHash: request.localBackupHash ?? "cloud-hash",
+                r2Key: "installs/\(request.installID)/backups/v000001-cloud-hash.json.gz",
+                uploadedAt: .now,
+                clientSourceModifiedAt: nil,
+                selectedProgramID: nil,
+                programComment: "",
+                coachStateVersion: 1,
+                schemaVersion: 2,
+                compression: "gzip",
+                sizeBytes: 1024
+            )
+        )
+    }
+
+    func uploadBackup(_ request: CloudBackupUploadRequest) async throws -> CloudBackupHead {
+        throw CoachClientError.invalidResponse
+    }
+
+    func downloadBackup(installID: String, version: Int?) async throws -> CloudBackupDownloadResponse {
+        throw CoachClientError.invalidResponse
+    }
+
+    func updateCoachPreferences(_ request: CloudCoachPreferencesUpdateRequest) async throws -> CloudCoachPreferencesUpdateResponse {
+        throw CoachClientError.invalidResponse
+    }
+
+    func fetchProfileInsights(
+        locale: String,
+        snapshotEnvelope: CoachSnapshotEnvelope,
+        capabilityScope: CoachCapabilityScope,
+        runtimeContextDelta: CoachRuntimeContextDelta?,
+        forceRefresh: Bool
+    ) async throws -> CoachProfileInsights {
+        throw CoachClientError.invalidResponse
+    }
+
+    func createChatJob(
+        locale: String,
+        question: String,
+        clientRequestID: String,
+        clientRecentTurns: [CoachConversationMessage],
+        snapshotEnvelope: CoachSnapshotEnvelope,
+        capabilityScope: CoachCapabilityScope,
+        runtimeContextDelta: CoachRuntimeContextDelta?
+    ) async throws -> CoachChatJobCreateResponse {
+        throw CoachClientError.invalidResponse
+    }
+
+    func getChatJob(
+        jobID: String,
+        installID: String
+    ) async throws -> CoachChatJobStatusResponse {
+        throw CoachClientError.invalidResponse
+    }
+
+    func sendChat(
+        locale: String,
+        question: String,
+        clientRecentTurns: [CoachConversationMessage],
+        snapshotEnvelope: CoachSnapshotEnvelope,
+        capabilityScope: CoachCapabilityScope,
+        runtimeContextDelta: CoachRuntimeContextDelta?
+    ) async throws -> CoachChatResponse {
+        throw CoachClientError.invalidResponse
+    }
+
+    func deleteRemoteState(installID: String) async throws {
+        throw CoachClientError.invalidResponse
     }
 }
 

@@ -1584,45 +1584,52 @@ private struct DashboardCardAccent {
 
 @MainActor
 private struct BackupControlsCard: View {
+    private enum RemoteMaintenanceAction: String, Identifiable {
+        case clearChatMemory
+        case deleteBackup
+        case resetRemoteState
+
+        var id: String { rawValue }
+    }
+
     @Environment(AppStore.self) private var store
-    @State private var pickerMode: BackupDocumentPickerMode?
-    @State private var pendingRestoreRequest: BackupRestoreRequest?
+    @Environment(CloudSyncStore.self) private var cloudSyncStore
+    @Environment(CoachStore.self) private var coachStore
+    @State private var pendingAction: RemoteMaintenanceAction?
 
     var body: some View {
         AppCard {
             VStack(alignment: .leading, spacing: 16) {
                 AppSectionTitle(titleKey: "backup.section")
 
-                backupRow(titleKey: "backup.status", value: statusText)
                 backupRow(
-                    titleKey: "backup.folder",
-                    value: store.backupStatus.selectedFolderName ?? localized("backup.value.none")
+                    title: localized("backup.row.remote_status"),
+                    value: remoteStatusText
+                )
+                backupRow(
+                    title: localized("backup.row.remote_backup"),
+                    value: formattedDate(
+                        cloudSyncStore.lastBackupStatus?.remote?.uploadedAt,
+                        emptyKey: "backup.value.remote_none"
+                    )
+                )
+                backupRow(
+                    title: localized("backup.row.local_cache"),
+                    value: formattedDate(
+                        store.localStateUpdatedAt,
+                        emptyKey: "backup.value.local_none"
+                    )
+                )
+                backupRow(
+                    title: localized("backup.row.remote_context"),
+                    value: remoteContextStatusText
+                )
+                backupRow(
+                    title: localized("backup.row.install_auth"),
+                    value: installAuthText
                 )
 
-                if let folderPath = store.backupStatus.selectedFolderPath, !folderPath.isEmpty {
-                    Text(folderPath)
-                        .font(AppTypography.caption(size: 13, weight: .regular))
-                        .foregroundStyle(AppTheme.secondaryText)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                backupRow(
-                    titleKey: "backup.last_backup",
-                    value: formattedDate(store.backupStatus.latestBackup?.createdAt ?? store.backupStatus.lastSuccessfulBackupAt)
-                )
-                backupRow(titleKey: "backup.local_state", value: formattedDate(store.localStateUpdatedAt))
-
-                if store.backupStatus.isBackupInProgress || store.backupStatus.isRestoreInProgress {
-                    HStack(spacing: 12) {
-                        ProgressView()
-                            .tint(AppTheme.accent)
-                        Text(progressTextKey)
-                            .font(AppTypography.body(size: 16, weight: .medium))
-                            .foregroundStyle(AppTheme.secondaryText)
-                    }
-                }
-
-                if let errorDescription = store.backupStatus.lastErrorDescription, !errorDescription.isEmpty {
+                if let errorDescription = cloudSyncStore.lastSyncErrorDescription, !errorDescription.isEmpty {
                     Text(errorDescription)
                         .font(AppTypography.caption(size: 13, weight: .medium))
                         .foregroundStyle(AppTheme.warning)
@@ -1630,80 +1637,130 @@ private struct BackupControlsCard: View {
                 }
 
                 VStack(spacing: 12) {
-                    Button("backup.action.choose_folder") {
-                        pickerMode = .folder
-                    }
-                    .buttonStyle(AppSecondaryButtonStyle())
-
-                    Button("backup.action.backup_now") {
+                    Button(localized("backup.action.sync_remote")) {
                         Task {
-                            await store.backupNow()
+                            _ = await cloudSyncStore.syncIfNeeded(using: store, allowUserPrompt: true)
                         }
                     }
                     .buttonStyle(AppPrimaryButtonStyle())
-                    .disabled(!store.canBackupNow)
-                    .opacity(store.canBackupNow ? 1 : 0.55)
 
-                    Button("backup.action.restore_latest") {
-                        pendingRestoreRequest = .latest
+                    Button(localized("backup.action.clear_remote_chat")) {
+                        pendingAction = .clearChatMemory
                     }
                     .buttonStyle(AppSecondaryButtonStyle())
-                    .disabled(!store.canRestoreLatestBackup)
-                    .opacity(store.canRestoreLatestBackup ? 1 : 0.55)
+                    .disabled(!coachStore.canUseRemoteCoach)
+                    .opacity(coachStore.canUseRemoteCoach ? 1 : 0.55)
 
-                    Button("backup.action.import_file") {
-                        pickerMode = .backupFile
+                    Button(localized("backup.action.delete_remote_backup")) {
+                        pendingAction = .deleteBackup
                     }
                     .buttonStyle(AppSecondaryButtonStyle())
+                    .disabled(!coachStore.canUseRemoteCoach)
+                    .opacity(coachStore.canUseRemoteCoach ? 1 : 0.55)
+
+                    Button(localized("backup.action.reset_remote_state")) {
+                        pendingAction = .resetRemoteState
+                    }
+                    .buttonStyle(AppSecondaryButtonStyle())
+                    .disabled(!coachStore.canUseRemoteCoach)
+                    .opacity(coachStore.canUseRemoteCoach ? 1 : 0.55)
                 }
             }
         }
-        .sheet(item: $pickerMode) { mode in
-            BackupDocumentPicker(mode: mode, onPick: { url in
-                handlePicked(url, for: mode)
-            }, onCancel: {
-                pickerMode = nil
-            })
-        }
-        .alert(item: $pendingRestoreRequest) { request in
-            Alert(
-                title: Text(request.titleKey),
-                message: Text(request.message(store: store)),
-                primaryButton: .destructive(Text("backup.action.restore")) {
-                    Task {
-                        await handleRestore(request)
+        .alert(
+            alertTitle,
+            isPresented: Binding(
+                get: { pendingAction != nil },
+                set: { isPresented in
+                    if !isPresented {
+                        pendingAction = nil
                     }
-                },
-                secondaryButton: .cancel(Text("action.cancel"))
+                }
             )
+        ) {
+            Button(localized("backup.action.confirm"), role: pendingAction == .clearChatMemory ? nil : .destructive) {
+                Task {
+                    await performPendingAction()
+                }
+            }
+            Button(localized("backup.action.cancel"), role: .cancel) {
+                pendingAction = nil
+            }
+        } message: {
+            Text(alertMessage)
         }
     }
 
-    private var statusText: String {
-        if store.backupStatus.isRestoreInProgress {
-            return localized("backup.state.restoring")
-        }
-        if store.backupStatus.isBackupInProgress {
-            return localized("backup.state.backing_up")
+    private var remoteStatusText: String {
+        guard let status = cloudSyncStore.lastBackupStatus else {
+            return localized("backup.sync_state.not_checked")
         }
 
-        switch store.backupStatus.availability {
-        case .notConfigured:
-            return localized("backup.state.not_configured")
-        case .ready:
-            return localized("backup.state.ready")
-        case .accessLost:
-            return localized("backup.state.access_lost")
+        return localized("backup.sync_state.\(status.syncState.rawValue)")
+    }
+
+    private var remoteContextStatusText: String {
+        guard let status = cloudSyncStore.lastBackupStatus else {
+            return localized("backup.context_state.not_checked")
+        }
+
+        return localized("backup.context_state.\(status.contextState.rawValue)")
+    }
+
+    private var installAuthText: String {
+        guard let authMode = cloudSyncStore.lastBackupStatus?.authMode else {
+            return localized("backup.value.remote_none")
+        }
+
+        return localized("backup.auth_mode.\(authMode.rawValue)")
+    }
+
+    private var alertTitle: String {
+        switch pendingAction {
+        case .clearChatMemory:
+            return localized("backup.confirm.clear_remote_chat.title")
+        case .deleteBackup:
+            return localized("backup.confirm.delete_remote_backup.title")
+        case .resetRemoteState:
+            return localized("backup.confirm.reset_remote_state.title")
+        case .none:
+            return localized("backup.section")
         }
     }
 
-    private var progressTextKey: LocalizedStringKey {
-        store.backupStatus.isRestoreInProgress ? "backup.progress.restore" : "backup.progress.backup"
+    private var alertMessage: String {
+        switch pendingAction {
+        case .clearChatMemory:
+            return localized("backup.confirm.clear_remote_chat.message")
+        case .deleteBackup:
+            return localized("backup.confirm.delete_remote_backup.message")
+        case .resetRemoteState:
+            return localized("backup.confirm.reset_remote_state.message")
+        case .none:
+            return ""
+        }
     }
 
-    private func backupRow(titleKey: LocalizedStringKey, value: String) -> some View {
+    private func performPendingAction() async {
+        let action = pendingAction
+        pendingAction = nil
+
+        switch action {
+        case .clearChatMemory:
+            await coachStore.clearRemoteConversation()
+        case .deleteBackup:
+            await cloudSyncStore.clearRemoteBackup(using: store)
+        case .resetRemoteState:
+            await cloudSyncStore.resetRemoteState(using: store)
+            coachStore.resetConversation()
+        case .none:
+            break
+        }
+    }
+
+    private func backupRow(title: String, value: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
-            Text(titleKey)
+            Text(title)
                 .font(AppTypography.body(size: 17))
                 .foregroundStyle(AppTheme.primaryText)
             Spacer(minLength: 20)
@@ -1714,9 +1771,9 @@ private struct BackupControlsCard: View {
         }
     }
 
-    private func formattedDate(_ date: Date?) -> String {
+    private func formattedDate(_ date: Date?, emptyKey: String) -> String {
         guard let date else {
-            return localized("backup.value.none")
+            return localized(emptyKey)
         }
 
         return date.formatted(
@@ -1732,27 +1789,6 @@ private struct BackupControlsCard: View {
 
     private func localized(_ key: String) -> String {
         Bundle.main.localizedString(forKey: key, value: nil, table: nil)
-    }
-
-    private func handlePicked(_ url: URL, for mode: BackupDocumentPickerMode) {
-        pickerMode = nil
-        switch mode {
-        case .folder:
-            Task {
-                await store.chooseBackupFolder(url)
-            }
-        case .backupFile:
-            pendingRestoreRequest = .importFile(url)
-        }
-    }
-
-    private func handleRestore(_ request: BackupRestoreRequest) async {
-        switch request {
-        case .latest:
-            await store.restoreLatestBackup()
-        case .importFile(let url):
-            await store.importBackup(from: url)
-        }
     }
 }
 
@@ -1947,105 +1983,6 @@ private struct ProfilePickerSheet: View {
             return "profile.weekly_target"
         case .targetBodyWeight:
             return "profile.target_weight"
-        }
-    }
-}
-
-enum BackupDocumentPickerMode: String, Identifiable {
-    case folder
-    case backupFile
-
-    var id: String { rawValue }
-}
-
-enum BackupRestoreRequest: Identifiable {
-    case latest
-    case importFile(URL)
-
-    var id: String {
-        switch self {
-        case .latest:
-            return "latest"
-        case .importFile(let url):
-            return "import-\(url.absoluteString)"
-        }
-    }
-
-    var titleKey: LocalizedStringKey {
-        switch self {
-        case .latest:
-            return "backup.restore.latest_title"
-        case .importFile:
-            return "backup.restore.import_title"
-        }
-    }
-
-    @MainActor
-    func message(store: AppStore) -> String {
-        switch self {
-        case .latest:
-            let format = Bundle.main.localizedString(forKey: "backup.restore.latest_message", value: nil, table: nil)
-            let dateString = store.backupStatus.latestBackup?.createdAt.formatted(
-                .dateTime
-                    .year()
-                    .month(.abbreviated)
-                    .day()
-                    .hour()
-                    .minute()
-                    .locale(store.locale)
-            ) ?? Bundle.main.localizedString(forKey: "backup.value.none", value: nil, table: nil)
-            return String(format: format, dateString)
-        case .importFile(let url):
-            let format = Bundle.main.localizedString(forKey: "backup.restore.import_message", value: nil, table: nil)
-            return String(format: format, url.lastPathComponent)
-        }
-    }
-}
-
-struct BackupDocumentPicker: UIViewControllerRepresentable {
-    let mode: BackupDocumentPickerMode
-    let onPick: (URL) -> Void
-    let onCancel: () -> Void
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(onPick: onPick, onCancel: onCancel)
-    }
-
-    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
-        let picker: UIDocumentPickerViewController
-        switch mode {
-        case .folder:
-            picker = UIDocumentPickerViewController(forOpeningContentTypes: [.folder], asCopy: false)
-        case .backupFile:
-            picker = UIDocumentPickerViewController(forOpeningContentTypes: [.json], asCopy: true)
-        }
-
-        picker.allowsMultipleSelection = false
-        picker.delegate = context.coordinator
-        return picker
-    }
-
-    func updateUIViewController(_ uiViewController: UIDocumentPickerViewController, context: Context) {}
-
-    final class Coordinator: NSObject, UIDocumentPickerDelegate {
-        let onPick: (URL) -> Void
-        let onCancel: () -> Void
-
-        init(onPick: @escaping (URL) -> Void, onCancel: @escaping () -> Void) {
-            self.onPick = onPick
-            self.onCancel = onCancel
-        }
-
-        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
-            guard let url = urls.first else {
-                return
-            }
-
-            onPick(url)
-        }
-
-        func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
-            onCancel()
         }
     }
 }

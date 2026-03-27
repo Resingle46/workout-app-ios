@@ -176,6 +176,15 @@ struct DeveloperMenuView: View {
                     value: debugController.report.runtime.installID
                 )
                 DeveloperMenuValueRow(
+                    titleKey: "developer.runtime.install_secret_ready",
+                    value: boolValue(debugController.report.runtime.installSecretReady)
+                )
+                DeveloperMenuValueRow(
+                    titleKey: "developer.runtime.identity_storage_mode",
+                    value: debugController.report.runtime.identityStorageMode
+                        ?? localized("developer.value.none")
+                )
+                DeveloperMenuValueRow(
                     titleKey: "developer.runtime.backend_base_url",
                     value: debugController.report.runtime.backendBaseURL
                         ?? localized("developer.value.not_configured"),
@@ -218,16 +227,23 @@ struct DeveloperMenuView: View {
             VStack(alignment: .leading, spacing: 14) {
                 AppSectionTitle(titleKey: "developer.section.cloud_sync")
                 DeveloperMenuValueRow(
-                    titleKey: "developer.cloud.last_synced_remote_version",
-                    value: valueOrNone(debugController.report.cloudSync.lastSyncedRemoteVersion)
+                    titleKey: "developer.cloud.sync_state",
+                    value: debugController.report.cloudSync.syncState
+                        ?? localized("developer.value.none")
                 )
                 DeveloperMenuValueRow(
-                    titleKey: "developer.cloud.last_known_remote_version",
-                    value: valueOrNone(debugController.report.cloudSync.lastKnownRemoteVersion)
+                    titleKey: "developer.cloud.context_state",
+                    value: debugController.report.cloudSync.contextState
+                        ?? localized("developer.value.none")
                 )
-                DeveloperMenuMaskedValueRow(
-                    titleKey: "developer.cloud.last_synced_backup_hash",
-                    value: debugController.report.cloudSync.lastSyncedBackupHash
+                DeveloperMenuValueRow(
+                    titleKey: "developer.cloud.remote_backup_version",
+                    value: valueOrNone(debugController.report.cloudSync.remoteBackupVersion)
+                )
+                DeveloperMenuValueRow(
+                    titleKey: "developer.cloud.install_auth_mode",
+                    value: debugController.report.cloudSync.installAuthMode
+                        ?? localized("developer.value.none")
                 )
                 DeveloperMenuValueRow(
                     titleKey: "developer.cloud.pending_restore_state",

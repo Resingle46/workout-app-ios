@@ -69,8 +69,6 @@ private func nsRange(for text: String) -> NSRange {
 @MainActor
 @Observable
 final class AppStore {
-    private static let automaticBackupDebounceInterval: Duration = .seconds(60)
-
     var categories: [ExerciseCategory]
     var exercises: [Exercise]
     var programs: [WorkoutProgram]
@@ -80,19 +78,17 @@ final class AppStore {
     var profile: UserProfile
     var coachAnalysisSettings: CoachAnalysisSettings
     var selectedTab: RootTab = .programs
-    var backupStatus: BackupStatus
-    var shouldPromptForBackupSetup = false
-
-    var canBackupNow: Bool {
-        backupStatus.canBackupNow
-    }
-
-    var canRestoreLatestBackup: Bool {
-        backupStatus.canRestoreLatest
-    }
 
     var localStateUpdatedAt: Date? {
         localSnapshotModifiedAt
+    }
+
+    var localBackupHash: String? {
+        localSnapshotBackupHash
+    }
+
+    var hasRollbackCheckpoint: Bool {
+        persistence.hasRollbackCheckpoint()
     }
 
     var cloudLocalStateKind: CloudLocalStateKind {
@@ -100,16 +96,14 @@ final class AppStore {
     }
 
     private let persistence = PersistenceController()
-    @ObservationIgnored private let backupCoordinator: BackupCoordinator
-    @ObservationIgnored private var backupDebounceTask: Task<Void, Never>?
-    @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let debugRecorder: any DebugEventRecording
     private var hasPersistedSnapshot: Bool
     private var localSnapshotModifiedAt: Date?
+    private var localSnapshotBackupHash: String?
 
     init(debugRecorder: any DebugEventRecording = NoopDebugEventRecorder()) {
         let seed = SeedData.make()
-        let storedSnapshot = persistence.loadStoredSnapshot()
+        let storedSnapshot = persistence.loadStoredSnapshot() ?? persistence.loadRollbackCheckpoint()
         let baseSnapshot = storedSnapshot?.snapshot ?? AppSnapshot(
             programs: seed.programs,
             exercises: seed.exercises,
@@ -132,16 +126,13 @@ final class AppStore {
             availablePrograms: snapshot.programs
         )
         self.debugRecorder = debugRecorder
-        self.defaults = .standard
-        self.backupCoordinator = BackupCoordinator(debugRecorder: debugRecorder)
-        self.backupStatus = BackupStatus()
         self.hasPersistedSnapshot = hasStoredSnapshot
         self.localSnapshotModifiedAt = storedSnapshot?.modifiedAt
+        self.localSnapshotBackupHash = storedSnapshot?.backupHash
         Bundle.overrideLocalization(languageCode: selectedLanguageCode)
-        self.backupStatus = BackupCoordinator.initialStatus()
 
         if didMigrateStoredSnapshot {
-            self.localSnapshotModifiedAt = persistence.save(snapshot: snapshot)
+            persistSnapshot(snapshot)
             self.hasPersistedSnapshot = true
         }
     }
@@ -169,7 +160,7 @@ final class AppStore {
         profile = normalizedSnapshot.profile
         coachAnalysisSettings = normalizedSnapshot.coachAnalysisSettings
         Bundle.overrideLocalization(languageCode: selectedLanguageCode)
-        localSnapshotModifiedAt = persistence.save(snapshot: normalizedSnapshot)
+        persistSnapshot(normalizedSnapshot)
         hasPersistedSnapshot = true
     }
 
@@ -177,166 +168,37 @@ final class AppStore {
         let snapshot = currentSnapshot()
         profile = snapshot.profile
         Bundle.overrideLocalization(languageCode: selectedLanguageCode)
-        localSnapshotModifiedAt = persistence.save(snapshot: snapshot)
+        persistSnapshot(snapshot)
         hasPersistedSnapshot = true
-        scheduleAutomaticBackup()
     }
 
     func handleAppLaunch() async {
-        await refreshBackupStatus()
-        shouldPromptForBackupSetup = Self.shouldPromptForBackupSetup(defaults: defaults, backupStatus: backupStatus)
+        let hadRollbackCheckpoint = persistence.hasRollbackCheckpoint()
+        if hasPersistedSnapshot && hadRollbackCheckpoint {
+            persistence.clearRollbackCheckpoint()
+            debugRecorder.log(
+                category: .backup,
+                message: "rollback_checkpoint_cleared"
+            )
+        }
         debugRecorder.log(
             category: .appLifecycle,
             message: "app_launch",
             metadata: [
-                "backupAvailability": backupAvailabilityValue(backupStatus.availability),
-                "hasBackupFolder": backupStatus.hasSelectedFolder ? "true" : "false"
+                "localCacheAvailable": hasPersistedSnapshot ? "true" : "false",
+                "hasRollbackCheckpoint": hadRollbackCheckpoint ? "true" : "false"
             ]
         )
-        if !shouldPromptForBackupSetup {
-            defaults.set(true, forKey: PreferenceKey.didCompleteFirstLaunch)
-        }
     }
 
     func handleSceneDidEnterBackground() async {
-        backupDebounceTask?.cancel()
-        backupDebounceTask = nil
         debugRecorder.log(
             category: .appLifecycle,
             message: "scene_background",
             metadata: [
-                "backupAvailability": backupAvailabilityValue(backupStatus.availability)
+                "localCacheAvailable": hasPersistedSnapshot ? "true" : "false"
             ]
         )
-        guard backupStatus.availability == .ready else {
-            return
-        }
-        await performBackup(showErrors: false)
-    }
-
-    func refreshBackupStatus() async {
-        backupStatus = await backupCoordinator.refreshStatus()
-    }
-
-    func backupNow() async {
-        guard backupStatus.hasSelectedFolder else {
-            backupStatus.lastErrorDescription = Bundle.main.localizedString(forKey: "backup.error.folder_not_selected", value: nil, table: nil)
-            debugRecorder.log(
-                category: .backup,
-                level: .warning,
-                message: "backup_failed",
-                metadata: ["reason": "folder_not_selected"]
-            )
-            return
-        }
-
-        backupDebounceTask?.cancel()
-        backupDebounceTask = nil
-        persistCurrentSnapshotIfNeeded()
-        await performBackup(showErrors: true)
-    }
-
-    @discardableResult
-    func chooseBackupFolder(_ url: URL) async -> Bool {
-        do {
-            backupStatus.lastErrorDescription = nil
-            backupStatus = try await backupCoordinator.selectBackupFolder(url)
-            let hadExistingBackups = backupStatus.latestBackup != nil
-            debugRecorder.log(
-                category: .backup,
-                message: "backup_folder_selected",
-                metadata: [
-                    "hadExistingBackups": hadExistingBackups ? "true" : "false"
-                ]
-            )
-            shouldPromptForBackupSetup = false
-            defaults.set(true, forKey: PreferenceKey.didCompleteFirstLaunch)
-            let shouldCreateImmediateBackup = hasPersistedSnapshot || backupStatus.latestBackup == nil
-            if shouldCreateImmediateBackup {
-                persistCurrentSnapshotIfNeeded()
-                await performBackup(showErrors: true)
-            }
-            return hadExistingBackups
-        } catch {
-            let description = (error as? LocalizedError)?.errorDescription ?? (error as NSError).localizedDescription
-            backupStatus.lastErrorDescription = (error as? LocalizedError)?.errorDescription ?? (error as NSError).localizedDescription
-            backupStatus = await backupCoordinator.refreshStatus()
-            backupStatus.lastErrorDescription = (error as? LocalizedError)?.errorDescription ?? (error as NSError).localizedDescription
-            debugRecorder.log(
-                category: .backup,
-                level: .warning,
-                message: "backup_folder_selection_failed",
-                metadata: ["error": description]
-            )
-            return false
-        }
-    }
-
-    func dismissBackupSetupPrompt() {
-        shouldPromptForBackupSetup = false
-        defaults.set(true, forKey: PreferenceKey.didCompleteFirstLaunch)
-    }
-
-    func restoreLatestBackup() async {
-        backupDebounceTask?.cancel()
-        backupDebounceTask = nil
-        backupStatus.isRestoreInProgress = true
-        backupStatus.lastErrorDescription = nil
-        debugRecorder.log(category: .backup, message: "restore_started")
-
-        do {
-            let envelope = try await backupCoordinator.restoreLatestBackup()
-            apply(snapshot: envelope.snapshot)
-            backupStatus = await backupCoordinator.refreshStatus()
-            debugRecorder.log(
-                category: .backup,
-                message: "restore_succeeded",
-                metadata: ["schemaVersion": String(envelope.schemaVersion)]
-            )
-        } catch {
-            backupStatus.lastErrorDescription = (error as? LocalizedError)?.errorDescription ?? (error as NSError).localizedDescription
-            debugRecorder.log(
-                category: .backup,
-                level: .error,
-                message: "restore_failed",
-                metadata: [
-                    "error": (error as? LocalizedError)?.errorDescription ?? (error as NSError).localizedDescription
-                ]
-            )
-        }
-
-        backupStatus.isRestoreInProgress = false
-    }
-
-    func importBackup(from url: URL) async {
-        backupDebounceTask?.cancel()
-        backupDebounceTask = nil
-        backupStatus.isRestoreInProgress = true
-        backupStatus.lastErrorDescription = nil
-        debugRecorder.log(category: .backup, message: "import_started")
-
-        do {
-            let envelope = try await backupCoordinator.importBackup(from: url)
-            apply(snapshot: envelope.snapshot)
-            backupStatus = await backupCoordinator.refreshStatus()
-            debugRecorder.log(
-                category: .backup,
-                message: "import_succeeded",
-                metadata: ["schemaVersion": String(envelope.schemaVersion)]
-            )
-        } catch {
-            backupStatus.lastErrorDescription = (error as? LocalizedError)?.errorDescription ?? (error as NSError).localizedDescription
-            debugRecorder.log(
-                category: .backup,
-                level: .error,
-                message: "import_failed",
-                metadata: [
-                    "error": (error as? LocalizedError)?.errorDescription ?? (error as NSError).localizedDescription
-                ]
-            )
-        }
-
-        backupStatus.isRestoreInProgress = false
     }
 
     func updateProfile(_ updater: (inout UserProfile) -> Void) {
@@ -417,6 +279,21 @@ final class AppStore {
         lastFinishedSession = session
         activeSession = nil
         save()
+    }
+
+    func applyRemoteRestore(snapshot: AppSnapshot) {
+        let existingSnapshot = currentSnapshot()
+        if let checkpoint = persistence.saveRollbackCheckpoint(snapshot: existingSnapshot) {
+            debugRecorder.log(
+                category: .backup,
+                message: "rollback_checkpoint_created",
+                metadata: [
+                    "modifiedAt": checkpoint.modifiedAt?.ISO8601Format() ?? "unknown",
+                    "backupHash": checkpoint.backupHash ?? "unknown"
+                ]
+            )
+        }
+        apply(snapshot: snapshot)
     }
 
     func dismissLastFinishedSession() {
@@ -1471,66 +1348,10 @@ final class AppStore {
         }
     }
 
-    private func scheduleAutomaticBackup() {
-        guard backupStatus.availability == .ready else {
-            return
-        }
-
-        backupDebounceTask?.cancel()
-        backupDebounceTask = Task { [weak self] in
-            do {
-                try await Task.sleep(for: Self.automaticBackupDebounceInterval)
-            } catch {
-                return
-            }
-
-            guard let self else {
-                return
-            }
-
-            await self.performBackup(showErrors: false)
-        }
-    }
-
-    private func performBackup(showErrors: Bool) async {
-        backupStatus.isBackupInProgress = true
-        if showErrors {
-            backupStatus.lastErrorDescription = nil
-        }
-        debugRecorder.log(
-            category: .backup,
-            message: "backup_started",
-            metadata: ["interactive": showErrors ? "true" : "false"]
-        )
-
-        let status = await backupCoordinator.backupNow(snapshot: currentSnapshot())
-        backupStatus = status
-
-        if !showErrors, backupStatus.availability == .notConfigured {
-            backupStatus.lastErrorDescription = nil
-        }
-    }
-
-    private func backupAvailabilityValue(_ availability: BackupStatus.Availability) -> String {
-        switch availability {
-        case .notConfigured:
-            return "not_configured"
-        case .ready:
-            return "ready"
-        case .accessLost:
-            return "access_lost"
-        }
-    }
-
-    private func persistCurrentSnapshotIfNeeded() {
-        guard !hasPersistedSnapshot else {
-            return
-        }
-
-        let snapshot = currentSnapshot()
-        profile = snapshot.profile
-        localSnapshotModifiedAt = persistence.save(snapshot: snapshot)
-        hasPersistedSnapshot = true
+    private func persistSnapshot(_ snapshot: AppSnapshot) {
+        let metadata = persistence.save(snapshot: snapshot)
+        localSnapshotModifiedAt = metadata?.modifiedAt
+        localSnapshotBackupHash = metadata?.backupHash
     }
 
     private var isSeedBaselineSnapshot: Bool {
@@ -1634,11 +1455,6 @@ final class AppStore {
 
         let preferred = Locale.preferredLanguages.first?.lowercased() ?? "en"
         return preferred.hasPrefix("ru") ? "ru" : "en"
-    }
-
-    private static func shouldPromptForBackupSetup(defaults: UserDefaults, backupStatus: BackupStatus) -> Bool {
-        let isFirstLaunch = defaults.object(forKey: PreferenceKey.didCompleteFirstLaunch) == nil
-        return isFirstLaunch && !backupStatus.hasSelectedFolder
     }
 
     private static func normalizedExercises(_ exercises: [Exercise], referencedExerciseIDs: Set<UUID>) -> [Exercise] {
@@ -1806,10 +1622,6 @@ final class AppStore {
         }
     }
 
-    private enum PreferenceKey {
-        static let didCompleteFirstLaunch = "app.didCompleteFirstLaunch"
-    }
-
     private func weekInterval(containing date: Date, calendar: Calendar) -> DateInterval {
         calendar.dateInterval(of: .weekOfYear, for: date)
             ?? DateInterval(start: date, duration: 7 * 24 * 60 * 60)
@@ -1897,6 +1709,12 @@ extension AppSnapshot {
 struct StoredSnapshot: Sendable {
     var snapshot: AppSnapshot
     var modifiedAt: Date?
+    var backupHash: String?
+}
+
+struct StoredSnapshotMetadata: Codable, Sendable {
+    var modifiedAt: Date?
+    var backupHash: String?
 }
 
 struct PersistenceController {
@@ -1905,29 +1723,123 @@ struct PersistenceController {
         return base.appendingPathComponent("workout-app-snapshot.json")
     }
 
+    private var manifestURL: URL {
+        let base = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first ?? URL(fileURLWithPath: NSTemporaryDirectory())
+        return base.appendingPathComponent("workout-app-snapshot-manifest.json")
+    }
+
+    private var rollbackCheckpointURL: URL {
+        let base = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first ?? URL(fileURLWithPath: NSTemporaryDirectory())
+        return base.appendingPathComponent("workout-app-restore-checkpoint.json")
+    }
+
+    private var rollbackCheckpointManifestURL: URL {
+        let base = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first ?? URL(fileURLWithPath: NSTemporaryDirectory())
+        return base.appendingPathComponent("workout-app-restore-checkpoint-manifest.json")
+    }
+
     func loadStoredSnapshot() -> StoredSnapshot? {
+        loadSnapshot(from: fileURL, manifestURL: manifestURL)
+    }
+
+    @discardableResult
+    func save(snapshot: AppSnapshot) -> StoredSnapshotMetadata? {
+        writeSnapshot(snapshot, to: fileURL, manifestURL: manifestURL)
+    }
+
+    @discardableResult
+    func saveRollbackCheckpoint(snapshot: AppSnapshot) -> StoredSnapshotMetadata? {
+        writeSnapshot(
+            snapshot,
+            to: rollbackCheckpointURL,
+            manifestURL: rollbackCheckpointManifestURL
+        )
+    }
+
+    func loadRollbackCheckpoint() -> StoredSnapshot? {
+        loadSnapshot(from: rollbackCheckpointURL, manifestURL: rollbackCheckpointManifestURL)
+    }
+
+    func hasRollbackCheckpoint() -> Bool {
+        FileManager.default.fileExists(atPath: rollbackCheckpointURL.path)
+    }
+
+    func clearRollbackCheckpoint() {
+        try? FileManager.default.removeItem(at: rollbackCheckpointURL)
+        try? FileManager.default.removeItem(at: rollbackCheckpointManifestURL)
+    }
+
+    func snapshotModifiedAt() -> Date? {
+        modifiedAt(for: fileURL)
+    }
+
+    private func loadSnapshot(from fileURL: URL, manifestURL: URL) -> StoredSnapshot? {
         guard let data = try? Data(contentsOf: fileURL),
               let snapshot = try? JSONDecoder().decode(AppSnapshot.self, from: data) else {
             return nil
         }
 
-        return StoredSnapshot(snapshot: snapshot, modifiedAt: snapshotModifiedAt())
+        let metadata = loadManifest(from: manifestURL, fallbackSnapshot: snapshot, fileURL: fileURL)
+        return StoredSnapshot(
+            snapshot: snapshot,
+            modifiedAt: metadata.modifiedAt,
+            backupHash: metadata.backupHash
+        )
     }
 
     @discardableResult
-    func save(snapshot: AppSnapshot) -> Date? {
+    private func writeSnapshot(
+        _ snapshot: AppSnapshot,
+        to fileURL: URL,
+        manifestURL: URL
+    ) -> StoredSnapshotMetadata? {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        guard let data = try? encoder.encode(snapshot) else { return snapshotModifiedAt() }
+        guard let data = try? encoder.encode(snapshot) else {
+            return StoredSnapshotMetadata(
+                modifiedAt: modifiedAt(for: fileURL),
+                backupHash: nil
+            )
+        }
         try? data.write(to: fileURL, options: .atomic)
-        return snapshotModifiedAt()
+
+        let metadata = StoredSnapshotMetadata(
+            modifiedAt: modifiedAt(for: fileURL),
+            backupHash: try? CloudBackupHashing.hash(for: snapshot)
+        )
+        persistManifest(metadata, to: manifestURL)
+        return metadata
     }
 
-    func snapshotModifiedAt() -> Date? {
+    private func modifiedAt(for fileURL: URL) -> Date? {
         guard let values = try? fileURL.resourceValues(forKeys: [.contentModificationDateKey]) else {
             return nil
         }
         return values.contentModificationDate
+    }
+
+    private func loadManifest(
+        from manifestURL: URL,
+        fallbackSnapshot: AppSnapshot,
+        fileURL: URL
+    ) -> StoredSnapshotMetadata {
+        if let data = try? Data(contentsOf: manifestURL),
+           let metadata = try? JSONDecoder().decode(StoredSnapshotMetadata.self, from: data) {
+            return metadata
+        }
+
+        return StoredSnapshotMetadata(
+            modifiedAt: modifiedAt(for: fileURL),
+            backupHash: try? CloudBackupHashing.hash(for: fallbackSnapshot)
+        )
+    }
+
+    private func persistManifest(_ metadata: StoredSnapshotMetadata, to manifestURL: URL) {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        if let data = try? encoder.encode(metadata) {
+            try? data.write(to: manifestURL, options: .atomic)
+        }
     }
 }
 

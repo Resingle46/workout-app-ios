@@ -19,11 +19,13 @@ import { DEFAULT_MODEL_ROUTING_VERSION } from "./routing";
 import type {
   AppSnapshotPayload,
   CoachAIProvider,
+  BackupDeleteRequest,
   BackupDownloadResponse,
   BackupEnvelopeV2,
   BackupHead,
-  BackupReconcileRequest,
-  BackupReconcileResponse,
+  BackupRestoreDecisionRequest,
+  BackupStatusRequest,
+  BackupStatusResponse,
   BackupUploadRequest,
   BackupUploadResponse,
   CoachChatInferenceMode,
@@ -37,7 +39,7 @@ import type {
   CoachPreferencesUpdateResponse,
   CoachProfileInsightsRequest,
   CoachProfileInsightsResponse,
-  CoachSnapshotSyncRequest,
+  CoachMemoryClearRequest,
   CoachWorkoutSummaryInputMode,
   CoachWorkoutSummaryJobCreateRequest,
   CoachWorkoutSummaryJobResult,
@@ -47,7 +49,6 @@ import type {
   CoachRuntimeContextDelta,
 } from "./schemas";
 
-const LEGACY_SNAPSHOT_TTL_SECONDS = 30 * 24 * 60 * 60;
 const CHAT_MEMORY_TTL_SECONDS = 7 * 24 * 60 * 60;
 const INSIGHTS_CACHE_TTL_SECONDS = 6 * 60 * 60;
 const DEGRADED_INSIGHTS_CACHE_TTL_SECONDS = 10 * 60;
@@ -59,6 +60,11 @@ const BACKUP_SCHEMA_VERSION = 2;
 export interface CoachKVNamespace {
   get(key: string, type: "text"): Promise<string | null>;
   get<T = unknown>(key: string, type: "json"): Promise<T | null>;
+  list?(options?: { prefix?: string; limit?: number; cursor?: string }): Promise<{
+    keys: Array<{ name: string }>;
+    list_complete?: boolean;
+    cursor?: string;
+  }>;
   put(
     key: string,
     value: string,
@@ -104,17 +110,11 @@ export interface StoredChatMemory {
   recentTurns: CoachConversationTurn[];
 }
 
-export interface StoredLegacyCoachSnapshot {
-  hash: string;
-  updatedAt: string;
-  snapshot: CompactCoachSnapshot;
-}
-
 export interface ResolvedCoachContext {
   snapshot: CompactCoachSnapshot;
   contextHash: string;
   cacheAllowed: boolean;
-  source: "remote_full" | "inline_legacy" | "stored_legacy";
+  source: "remote_full" | "inline_legacy";
   backupHead?: BackupHead;
   contextVersion: string;
   analyticsVersion: string;
@@ -286,6 +286,7 @@ export interface ContextStorageKeyInput {
   contextProfile: CoachContextProfile;
   contextVersion: string;
   analyticsVersion: string;
+  providerID?: string;
   promptVersion?: string;
   model?: string;
   memoryProfile?: CoachMemoryProfile;
@@ -293,16 +294,25 @@ export interface ContextStorageKeyInput {
   memoryCompatibilityKey?: string;
 }
 
+export interface InstallAuthorizationResult {
+  authMode: "legacy_compat" | "secret_valid" | "unbound_secret";
+}
+
 export interface CoachStateStore {
-  storeLegacySnapshot(
-    request: CoachSnapshotSyncRequest
-  ): Promise<{ acceptedHash: string; storedAt: string }>;
+  authorizeInstallAccess(input: {
+    installID: string;
+    providedSecret?: string;
+    allowLegacyCompat?: boolean;
+    enrollIfMissing?: boolean;
+  }): Promise<InstallAuthorizationResult>;
+  bindInstallSecret(installID: string, providedSecret: string): Promise<void>;
   resolveCoachContext(
     request:
       | CoachProfileInsightsRequest
       | CoachChatRequest
       | {
           installID: string;
+          localBackupHash?: string;
           snapshotHash?: string;
           snapshot?: CompactCoachSnapshot;
           runtimeContextDelta?: CoachRuntimeContextDelta;
@@ -380,9 +390,7 @@ export interface CoachStateStore {
     jobID: string,
     input: FailWorkoutSummaryJobInput
   ): Promise<CoachWorkoutSummaryJobRecord>;
-  reconcileBackup(
-    request: BackupReconcileRequest
-  ): Promise<BackupReconcileResponse>;
+  getBackupStatus(request: BackupStatusRequest): Promise<BackupStatusResponse>;
   uploadBackup(request: BackupUploadRequest): Promise<BackupUploadResponse>;
   downloadBackup(input: {
     installID: string;
@@ -391,6 +399,9 @@ export interface CoachStateStore {
   updateCoachPreferences(
     request: CoachPreferencesUpdateRequest
   ): Promise<CoachPreferencesUpdateResponse>;
+  recordRestoreDecision(request: BackupRestoreDecisionRequest): Promise<void>;
+  clearRemoteAIMemory(request: CoachMemoryClearRequest): Promise<void>;
+  deleteRemoteBackup(request: BackupDeleteRequest): Promise<void>;
   deleteInstallState(installID: string): Promise<void>;
 }
 
@@ -407,6 +418,18 @@ interface InstallStateRow {
   coach_state_version: number;
   selected_program_id: string | null;
   program_comment: string;
+  install_secret_hash: string | null;
+  auth_enrolled_at: string | null;
+  last_seen_local_hash: string | null;
+  last_seen_local_modified_at: string | null;
+  last_status_sync_state: string | null;
+  last_status_context_state: string | null;
+  last_restore_offered_version: number | null;
+  last_restore_decision: string | null;
+  last_restore_decision_local_hash: string | null;
+  last_restore_decision_at: string | null;
+  context_ready_backup_hash: string | null;
+  context_ready_coach_state_version: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -507,36 +530,65 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
     private readonly now: () => Date = () => new Date()
   ) {}
 
-  async storeLegacySnapshot(
-    request: CoachSnapshotSyncRequest
-  ): Promise<{ acceptedHash: string; storedAt: string }> {
-    const acceptedHash =
-      request.snapshotHash || (await hashCoachContext(request.snapshot));
-    const storedAt = request.snapshotUpdatedAt;
+  async authorizeInstallAccess(input: {
+    installID: string;
+    providedSecret?: string;
+    allowLegacyCompat?: boolean;
+    enrollIfMissing?: boolean;
+  }): Promise<InstallAuthorizationResult> {
+    const current = await this.getCurrentInstallState(input.installID);
+    const providedSecret = input.providedSecret?.trim();
+    const storedSecretHash = current?.install_secret_hash?.trim() ?? null;
+
+    if (storedSecretHash) {
+      if (!providedSecret) {
+        throw new InstallAccessError("install_proof_required");
+      }
+
+      const providedHash = await sha256Hex(providedSecret);
+      if (providedHash !== storedSecretHash) {
+        throw new InstallAccessError("install_proof_invalid");
+      }
+
+      return { authMode: "secret_valid" };
+    }
+
+    if (providedSecret) {
+      if (current && input.enrollIfMissing !== false) {
+        await this.bindInstallSecret(input.installID, providedSecret);
+        return { authMode: "secret_valid" };
+      }
+
+      return { authMode: "unbound_secret" };
+    }
+
+    if (input.allowLegacyCompat !== false) {
+      return { authMode: "legacy_compat" };
+    }
+
+    throw new InstallAccessError("install_proof_required");
+  }
+
+  async bindInstallSecret(installID: string, providedSecret: string): Promise<void> {
+    const current = await this.getCurrentInstallState(installID);
+    if (!current) {
+      return;
+    }
+
+    const now = this.now().toISOString();
+    const secretHash = await sha256Hex(providedSecret.trim());
     await this.db
       .prepare(
         `
-          INSERT INTO legacy_compact_snapshots (
-            install_id,
-            snapshot_hash,
-            snapshot_json,
-            updated_at
-          ) VALUES (?, ?, ?, ?)
-          ON CONFLICT(install_id) DO UPDATE SET
-            snapshot_hash = excluded.snapshot_hash,
-            snapshot_json = excluded.snapshot_json,
-            updated_at = excluded.updated_at
+          UPDATE install_state
+          SET install_secret_hash = ?,
+              auth_enrolled_at = COALESCE(auth_enrolled_at, ?),
+              updated_at = ?
+          WHERE install_id = ?
         `
       )
-      .bind(
-        request.installID,
-        acceptedHash,
-        stableJSONStringify(request.snapshot),
-        storedAt
-      )
+      .bind(secretHash, now, now, installID)
       .run();
-
-    return { acceptedHash, storedAt };
   }
 
   async resolveCoachContext(
@@ -545,6 +597,7 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
       | CoachChatRequest
       | {
           installID: string;
+          localBackupHash?: string;
           snapshotHash?: string;
           snapshot?: CompactCoachSnapshot;
           runtimeContextDelta?: CoachRuntimeContextDelta;
@@ -552,6 +605,13 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
   ): Promise<ResolvedCoachContext> {
     const remoteState = await this.getCurrentInstallState(request.installID);
     if (remoteState?.current_backup_version && remoteState.current_backup_hash) {
+      if (
+        request.localBackupHash &&
+        request.localBackupHash !== remoteState.current_backup_hash &&
+        !request.snapshot
+      ) {
+        throw new StaleRemoteStateError(remoteState.current_backup_version);
+      }
       const backup = await this.readBackupRecord(
         request.installID,
         remoteState.current_backup_version
@@ -618,27 +678,6 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
       };
     }
 
-    const legacySnapshot = await this.getLegacySnapshot(request.installID);
-    if (
-      legacySnapshot &&
-      (!request.snapshotHash || legacySnapshot.hash === request.snapshotHash)
-    ) {
-      return {
-        snapshot: withRuntimeContext(
-          legacySnapshot.snapshot,
-          request.runtimeContextDelta
-        ),
-        contextHash: legacySnapshot.hash,
-        cacheAllowed: !request.runtimeContextDelta?.activeWorkout,
-        source: "stored_legacy",
-        contextVersion: DEFAULT_CONTEXT_VERSION,
-        analyticsVersion: DEFAULT_ANALYTICS_VERSION,
-        derivedAnalytics: buildDerivedCoachAnalyticsFromCompactSnapshot(
-          withRuntimeContext(legacySnapshot.snapshot, request.runtimeContextDelta)
-        ),
-      };
-    }
-
     throw new MissingCoachContextError();
   }
 
@@ -650,6 +689,7 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
     const resolvedModel = key.model ?? this.model;
     const resolvedRoutingVersion =
       key.routingVersion ?? DEFAULT_MODEL_ROUTING_VERSION;
+    const resolvedProviderID = key.providerID ?? "workers_ai";
     const primary = await this.kv.get<CoachProfileInsightsResponse>(
       insightsCacheKey(
         installID,
@@ -658,6 +698,7 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
         key.contextProfile,
         key.contextVersion,
         key.analyticsVersion,
+        resolvedProviderID,
         resolvedPromptVersion,
         resolvedRoutingVersion,
         resolvedModel
@@ -695,6 +736,7 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
     const resolvedModel = key.model ?? this.model;
     const resolvedRoutingVersion =
       key.routingVersion ?? DEFAULT_MODEL_ROUTING_VERSION;
+    const resolvedProviderID = key.providerID ?? "workers_ai";
     return this.kv.get<CoachProfileInsightsResponse>(
       degradedInsightsCacheKey(
         installID,
@@ -703,6 +745,7 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
         key.contextProfile,
         key.contextVersion,
         key.analyticsVersion,
+        resolvedProviderID,
         resolvedPromptVersion,
         resolvedRoutingVersion,
         resolvedModel
@@ -720,6 +763,7 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
     const resolvedModel = key.model ?? this.model;
     const resolvedRoutingVersion =
       key.routingVersion ?? DEFAULT_MODEL_ROUTING_VERSION;
+    const resolvedProviderID = key.providerID ?? "workers_ai";
     await this.kv.put(
       insightsCacheKey(
         installID,
@@ -728,6 +772,7 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
         key.contextProfile,
         key.contextVersion,
         key.analyticsVersion,
+        resolvedProviderID,
         resolvedPromptVersion,
         resolvedRoutingVersion,
         resolvedModel
@@ -746,6 +791,7 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
     const resolvedModel = key.model ?? this.model;
     const resolvedRoutingVersion =
       key.routingVersion ?? DEFAULT_MODEL_ROUTING_VERSION;
+    const resolvedProviderID = key.providerID ?? "workers_ai";
     await this.kv.put(
       degradedInsightsCacheKey(
         installID,
@@ -754,6 +800,7 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
         key.contextProfile,
         key.contextVersion,
         key.analyticsVersion,
+        resolvedProviderID,
         resolvedPromptVersion,
         resolvedRoutingVersion,
         resolvedModel
@@ -771,6 +818,7 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
     const resolvedModel = key.model ?? this.model;
     const resolvedRoutingVersion =
       key.routingVersion ?? DEFAULT_MODEL_ROUTING_VERSION;
+    const resolvedProviderID = key.providerID ?? "workers_ai";
     await this.kv.delete(
       degradedInsightsCacheKey(
         installID,
@@ -779,6 +827,7 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
         key.contextProfile,
         key.contextVersion,
         key.analyticsVersion,
+        resolvedProviderID,
         resolvedPromptVersion,
         resolvedRoutingVersion,
         resolvedModel
@@ -797,6 +846,7 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
     const resolvedMemoryProfile = key.memoryProfile ?? "compact_v1";
     const resolvedMemoryCompatibilityKey =
       key.memoryCompatibilityKey ?? resolvedModel;
+    const resolvedProviderID = key.providerID ?? "workers_ai";
     const primary = await this.kv.get<StoredChatMemory>(
       chatMemoryKey(
         installID,
@@ -805,6 +855,7 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
         key.contextProfile,
         key.contextVersion,
         key.analyticsVersion,
+        resolvedProviderID,
         resolvedPromptVersion,
         resolvedRoutingVersion,
         resolvedMemoryCompatibilityKey,
@@ -843,6 +894,7 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
     question: string,
     answerMarkdown: string
   ): Promise<StoredChatMemory> {
+    const resolvedProviderID = key.providerID ?? "workers_ai";
     const memory: StoredChatMemory = {
       updatedAt: this.now().toISOString(),
       recentTurns: normalizeChatTurns([
@@ -860,6 +912,7 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
         key.contextProfile,
         key.contextVersion,
         key.analyticsVersion,
+        resolvedProviderID,
         key.promptVersion ?? this.promptVersion,
         key.routingVersion ?? DEFAULT_MODEL_ROUTING_VERSION,
         key.memoryCompatibilityKey ?? key.model ?? this.model,
@@ -1301,46 +1354,14 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
     return job;
   }
 
-  async reconcileBackup(
-    request: BackupReconcileRequest
-  ): Promise<BackupReconcileResponse> {
+  async getBackupStatus(
+    request: BackupStatusRequest
+  ): Promise<BackupStatusResponse> {
     const current = await this.getCurrentInstallState(request.installID);
     const remote = current?.current_backup_version ? toBackupHead(current) : undefined;
-
-    if (!remote) {
-      return {
-        action:
-          request.localStateKind === "user_data" && request.localBackupHash
-            ? "upload"
-            : "noop",
-      };
-    }
-
-    if (request.localBackupHash && request.localBackupHash === remote.backupHash) {
-      return { action: "noop", remote };
-    }
-
-    if (request.localStateKind === "seed") {
-      return { action: "download", remote };
-    }
-
-    const remoteChangedSinceSync =
-      (request.lastSyncedRemoteVersion ?? null) !== remote.backupVersion &&
-      (request.lastSyncedBackupHash ?? null) !== remote.backupHash;
-
-    if (!remoteChangedSinceSync) {
-      return { action: "upload", remote };
-    }
-
-    if (
-      request.localBackupHash &&
-      request.lastSyncedBackupHash &&
-      request.localBackupHash === request.lastSyncedBackupHash
-    ) {
-      return { action: "download", remote };
-    }
-
-    return { action: "conflict", remote };
+    const status = buildBackupStatusDecision(request, current, remote);
+    await this.persistBackupStatus(request, status);
+    return status;
   }
 
   async uploadBackup(
@@ -1446,9 +1467,21 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
             coach_state_version,
             selected_program_id,
             program_comment,
+            install_secret_hash,
+            auth_enrolled_at,
+            last_seen_local_hash,
+            last_seen_local_modified_at,
+            last_status_sync_state,
+            last_status_context_state,
+            last_restore_offered_version,
+            last_restore_decision,
+            last_restore_decision_local_hash,
+            last_restore_decision_at,
+            context_ready_backup_hash,
+            context_ready_coach_state_version,
             created_at,
             updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(install_id) DO UPDATE SET
             current_backup_version = excluded.current_backup_version,
             current_backup_hash = excluded.current_backup_hash,
@@ -1461,6 +1494,8 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
             coach_state_version = excluded.coach_state_version,
             selected_program_id = excluded.selected_program_id,
             program_comment = excluded.program_comment,
+            context_ready_backup_hash = excluded.context_ready_backup_hash,
+            context_ready_coach_state_version = excluded.context_ready_coach_state_version,
             updated_at = excluded.updated_at
         `
       )
@@ -1477,10 +1512,24 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
         coachStateVersion,
         normalizedSettings.selectedProgramID ?? null,
         normalizedSettings.programComment,
+        current?.install_secret_hash ?? null,
+        current?.auth_enrolled_at ?? null,
+        backupHash,
+        request.clientSourceModifiedAt ?? null,
+        current?.last_status_sync_state ?? null,
+        current?.last_status_context_state ?? null,
+        current?.last_restore_offered_version ?? null,
+        current?.last_restore_decision ?? null,
+        current?.last_restore_decision_local_hash ?? null,
+        current?.last_restore_decision_at ?? null,
+        backupHash,
+        coachStateVersion,
         createdAt,
         uploadedAt
       )
       .run();
+
+    await this.enforceBackupRetention(request.installID, backupVersion);
 
     return {
       installID: request.installID,
@@ -1577,13 +1626,27 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
             coach_state_version,
             selected_program_id,
             program_comment,
+            install_secret_hash,
+            auth_enrolled_at,
+            last_seen_local_hash,
+            last_seen_local_modified_at,
+            last_status_sync_state,
+            last_status_context_state,
+            last_restore_offered_version,
+            last_restore_decision,
+            last_restore_decision_local_hash,
+            last_restore_decision_at,
+            context_ready_backup_hash,
+            context_ready_coach_state_version,
             created_at,
             updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(install_id) DO UPDATE SET
             coach_state_version = excluded.coach_state_version,
             selected_program_id = excluded.selected_program_id,
             program_comment = excluded.program_comment,
+            context_ready_backup_hash = excluded.context_ready_backup_hash,
+            context_ready_coach_state_version = excluded.context_ready_coach_state_version,
             updated_at = excluded.updated_at
         `
       )
@@ -1600,6 +1663,18 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
         coachStateVersion,
         selectedProgramID,
         normalizedProgramComment,
+        current?.install_secret_hash ?? null,
+        current?.auth_enrolled_at ?? null,
+        current?.last_seen_local_hash ?? null,
+        current?.last_seen_local_modified_at ?? null,
+        current?.last_status_sync_state ?? null,
+        current?.last_status_context_state ?? null,
+        current?.last_restore_offered_version ?? null,
+        current?.last_restore_decision ?? null,
+        current?.last_restore_decision_local_hash ?? null,
+        current?.last_restore_decision_at ?? null,
+        current?.current_backup_hash ?? null,
+        coachStateVersion,
         current?.created_at ?? now,
         now
       )
@@ -1614,7 +1689,87 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
     };
   }
 
+  async recordRestoreDecision(
+    request: BackupRestoreDecisionRequest
+  ): Promise<void> {
+    const current = await this.getCurrentInstallState(request.installID);
+    const now = this.now().toISOString();
+    await this.db
+      .prepare(
+        `
+          UPDATE install_state
+          SET
+            last_restore_offered_version = ?,
+            last_restore_decision = ?,
+            last_restore_decision_local_hash = ?,
+            last_restore_decision_at = ?,
+            updated_at = ?
+          WHERE install_id = ?
+        `
+      )
+      .bind(
+        request.remoteVersion,
+        request.action,
+        request.localBackupHash ?? null,
+        now,
+        now,
+        request.installID
+      )
+      .run();
+
+    if (!current) {
+      return;
+    }
+  }
+
+  async clearRemoteAIMemory(request: CoachMemoryClearRequest): Promise<void> {
+    await this.deleteKVPrefix(`${request.installID}:chat-memory:`, request.providerID);
+    if (request.clearInsightsCache) {
+      await this.deleteKVPrefix(`${request.installID}:insights:`, request.providerID);
+    }
+  }
+
+  async deleteRemoteBackup(request: BackupDeleteRequest): Promise<void> {
+    const backups = await this.listBackupVersions(request.installID);
+    if (backups.length > 0) {
+      await this.r2.delete(backups.map((backup) => backup.r2_key));
+    }
+
+    await this.db
+      .prepare(`DELETE FROM backup_versions WHERE install_id = ?`)
+      .bind(request.installID)
+      .run();
+    await this.db
+      .prepare(
+        `
+          UPDATE install_state
+          SET
+            current_backup_version = NULL,
+            current_backup_hash = NULL,
+            current_backup_r2_key = NULL,
+            current_backup_schema_version = NULL,
+            size_bytes = 0,
+            uploaded_at = NULL,
+            client_source_modified_at = NULL,
+            last_restore_offered_version = NULL,
+            last_restore_decision = NULL,
+            last_restore_decision_local_hash = NULL,
+            last_restore_decision_at = NULL,
+            context_ready_backup_hash = NULL,
+            context_ready_coach_state_version = NULL,
+            updated_at = ?
+          WHERE install_id = ?
+        `
+      )
+      .bind(this.now().toISOString(), request.installID)
+      .run();
+  }
+
   async deleteInstallState(installID: string): Promise<void> {
+    await this.clearRemoteAIMemory({
+      installID,
+      clearInsightsCache: true,
+    });
     const backups = await this.listBackupVersions(installID);
     if (backups.length > 0) {
       await this.r2.delete(backups.map((backup) => backup.r2_key));
@@ -1626,10 +1781,6 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
       .run();
     await this.db
       .prepare(`DELETE FROM install_state WHERE install_id = ?`)
-      .bind(installID)
-      .run();
-    await this.db
-      .prepare(`DELETE FROM legacy_compact_snapshots WHERE install_id = ?`)
       .bind(installID)
       .run();
     await this.db
@@ -1649,6 +1800,44 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
       .prepare(`SELECT * FROM install_state WHERE install_id = ?`)
       .bind(installID)
       .first<InstallStateRow>();
+  }
+
+  private async persistBackupStatus(
+    request: BackupStatusRequest,
+    status: BackupStatusResponse
+  ): Promise<void> {
+    const current = await this.getCurrentInstallState(request.installID);
+    if (!current) {
+      return;
+    }
+
+    const now = this.now().toISOString();
+    const shouldTrackRestoreVersion =
+      status.syncState === "restore_pending_decision" && status.remote?.backupVersion;
+    await this.db
+      .prepare(
+        `
+          UPDATE install_state
+          SET
+            last_seen_local_hash = ?,
+            last_seen_local_modified_at = ?,
+            last_status_sync_state = ?,
+            last_status_context_state = ?,
+            last_restore_offered_version = COALESCE(?, last_restore_offered_version),
+            updated_at = ?
+          WHERE install_id = ?
+        `
+      )
+      .bind(
+        request.localBackupHash ?? null,
+        request.localSourceModifiedAt ?? null,
+        status.syncState,
+        status.contextState,
+        shouldTrackRestoreVersion ? status.remote?.backupVersion ?? null : null,
+        now,
+        request.installID
+      )
+      .run();
   }
 
   private async listBackupVersions(
@@ -1703,23 +1892,64 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
     };
   }
 
-  private async getLegacySnapshot(
-    installID: string
-  ): Promise<StoredLegacyCoachSnapshot | null> {
-    const row = await this.db
-      .prepare(
-        `SELECT snapshot_hash, snapshot_json, updated_at FROM legacy_compact_snapshots WHERE install_id = ?`
-      )
-      .bind(installID)
-      .first<{ snapshot_hash: string; snapshot_json: string; updated_at: string }>();
-    if (!row) {
-      return null;
+  private async enforceBackupRetention(
+    installID: string,
+    currentBackupVersion: number
+  ): Promise<void> {
+    const backups = await this.listBackupVersions(installID);
+    const cutoff = this.now().getTime() - 90 * 24 * 60 * 60 * 1_000;
+    const deletable = backups.filter((backup, index) => {
+      if (backup.backup_version === currentBackupVersion) {
+        return false;
+      }
+
+      if (index >= 30) {
+        return true;
+      }
+
+      return Date.parse(backup.uploaded_at) < cutoff;
+    });
+
+    if (deletable.length === 0) {
+      return;
     }
-    return {
-      hash: row.snapshot_hash,
-      updatedAt: row.updated_at,
-      snapshot: JSON.parse(row.snapshot_json) as CompactCoachSnapshot,
-    };
+
+    await this.r2.delete(deletable.map((backup) => backup.r2_key));
+    for (const backup of deletable) {
+      await this.db
+        .prepare(
+          `DELETE FROM backup_versions WHERE install_id = ? AND backup_version = ?`
+        )
+        .bind(installID, backup.backup_version)
+        .run();
+    }
+  }
+
+  private async deleteKVPrefix(
+    prefix: string,
+    providerID?: string
+  ): Promise<void> {
+    if (!this.kv.list) {
+      return;
+    }
+
+    let cursor: string | undefined;
+    do {
+      const page = await this.kv.list({
+        prefix,
+        cursor,
+        limit: 100,
+      });
+      for (const key of page.keys) {
+        if (!providerID || key.name.includes(`:${providerID}:`)) {
+          await this.kv.delete(key.name);
+        }
+      }
+      cursor = page.cursor;
+      if (page.list_complete) {
+        break;
+      }
+    } while (cursor);
   }
 
   private async getChatJobByClientRequestID(
@@ -2113,7 +2343,6 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
 }
 
 export class InMemoryCoachStateRepository implements CoachStateStore {
-  private readonly legacySnapshots = new Map<string, StoredLegacyCoachSnapshot>();
   private readonly backupHeads = new Map<string, BackupHead>();
   private readonly backups = new Map<string, Map<number, BackupEnvelopeV2>>();
   private readonly insightsCache = new Map<string, CoachProfileInsightsResponse>();
@@ -2125,6 +2354,11 @@ export class InMemoryCoachStateRepository implements CoachStateStore {
   private readonly chatJobs = new Map<string, CoachChatJobRecord>();
   private readonly workoutSummaryJobs = new Map<string, CoachWorkoutSummaryJobRecord>();
   private readonly coachStateVersions = new Map<string, number>();
+  private readonly installSecretHashes = new Map<string, string>();
+  private readonly restoreDecisions = new Map<
+    string,
+    { remoteVersion: number; action: "apply" | "ignore"; localBackupHash?: string }
+  >();
 
   constructor(
     private readonly promptVersion: string,
@@ -2132,18 +2366,54 @@ export class InMemoryCoachStateRepository implements CoachStateStore {
     private readonly now: () => Date = () => new Date()
   ) {}
 
-  async storeLegacySnapshot(
-    request: CoachSnapshotSyncRequest
-  ): Promise<{ acceptedHash: string; storedAt: string }> {
-    const acceptedHash =
-      request.snapshotHash || (await hashCoachContext(request.snapshot));
-    const storedAt = request.snapshotUpdatedAt;
-    this.legacySnapshots.set(request.installID, {
-      hash: acceptedHash,
-      updatedAt: storedAt,
-      snapshot: request.snapshot,
-    });
-    return { acceptedHash, storedAt };
+  async authorizeInstallAccess(input: {
+    installID: string;
+    providedSecret?: string;
+    allowLegacyCompat?: boolean;
+    enrollIfMissing?: boolean;
+  }): Promise<InstallAuthorizationResult> {
+    const storedSecretHash = this.installSecretHashes.get(input.installID);
+    const providedSecret = input.providedSecret?.trim();
+
+    if (storedSecretHash) {
+      if (!providedSecret) {
+        throw new InstallAccessError("install_proof_required");
+      }
+      const providedHash = await sha256Hex(providedSecret);
+      if (providedHash !== storedSecretHash) {
+        throw new InstallAccessError("install_proof_invalid");
+      }
+      return { authMode: "secret_valid" };
+    }
+
+    if (providedSecret) {
+      if (
+        input.enrollIfMissing !== false &&
+        (this.backupHeads.has(input.installID) || this.coachStateVersions.has(input.installID))
+      ) {
+        await this.bindInstallSecret(input.installID, providedSecret);
+        return { authMode: "secret_valid" };
+      }
+      return { authMode: "unbound_secret" };
+    }
+
+    if (input.allowLegacyCompat !== false) {
+      return { authMode: "legacy_compat" };
+    }
+
+    throw new InstallAccessError("install_proof_required");
+  }
+
+  async bindInstallSecret(installID: string, providedSecret: string): Promise<void> {
+    if (
+      !this.backupHeads.has(installID) &&
+      !this.backups.has(installID) &&
+      !this.coachStateVersions.has(installID)
+    ) {
+      return;
+    }
+
+    this.installSecretHashes.set(installID, await sha256Hex(providedSecret.trim()));
   }
 
   async resolveCoachContext(
@@ -2152,6 +2422,7 @@ export class InMemoryCoachStateRepository implements CoachStateStore {
       | CoachChatRequest
       | {
           installID: string;
+          localBackupHash?: string;
           snapshotHash?: string;
           snapshot?: CompactCoachSnapshot;
           runtimeContextDelta?: CoachRuntimeContextDelta;
@@ -2159,6 +2430,13 @@ export class InMemoryCoachStateRepository implements CoachStateStore {
   ): Promise<ResolvedCoachContext> {
     const remote = this.backupHeads.get(request.installID);
     if (remote) {
+      if (
+        request.localBackupHash &&
+        request.localBackupHash !== remote.backupHash &&
+        !request.snapshot
+      ) {
+        throw new StaleRemoteStateError(remote.backupVersion);
+      }
       const backup = this.backups.get(request.installID)?.get(remote.backupVersion);
       if (backup) {
         const snapshot = overlayCoachAnalysisSettings(backup.snapshot, {
@@ -2215,20 +2493,6 @@ export class InMemoryCoachStateRepository implements CoachStateStore {
       };
     }
 
-    const stored = this.legacySnapshots.get(request.installID);
-    if (stored && (!request.snapshotHash || stored.hash === request.snapshotHash)) {
-      const snapshot = withRuntimeContext(stored.snapshot, request.runtimeContextDelta);
-      return {
-        snapshot,
-        contextHash: stored.hash,
-        cacheAllowed: !request.runtimeContextDelta?.activeWorkout,
-        source: "stored_legacy",
-        contextVersion: DEFAULT_CONTEXT_VERSION,
-        analyticsVersion: DEFAULT_ANALYTICS_VERSION,
-        derivedAnalytics: buildDerivedCoachAnalyticsFromCompactSnapshot(snapshot),
-      };
-    }
-
     throw new MissingCoachContextError();
   }
 
@@ -2245,6 +2509,7 @@ export class InMemoryCoachStateRepository implements CoachStateStore {
           key.contextProfile,
           key.contextVersion,
           key.analyticsVersion,
+          key.providerID ?? "workers_ai",
           key.promptVersion ?? this.promptVersion,
           key.routingVersion ?? DEFAULT_MODEL_ROUTING_VERSION,
           key.model ?? this.model
@@ -2278,6 +2543,7 @@ export class InMemoryCoachStateRepository implements CoachStateStore {
       key.contextProfile,
       key.contextVersion,
       key.analyticsVersion,
+      key.providerID ?? "workers_ai",
       key.promptVersion ?? this.promptVersion,
       key.routingVersion ?? DEFAULT_MODEL_ROUTING_VERSION,
       key.model ?? this.model
@@ -2306,6 +2572,7 @@ export class InMemoryCoachStateRepository implements CoachStateStore {
         key.contextProfile,
         key.contextVersion,
         key.analyticsVersion,
+        key.providerID ?? "workers_ai",
         key.promptVersion ?? this.promptVersion,
         key.routingVersion ?? DEFAULT_MODEL_ROUTING_VERSION,
         key.model ?? this.model
@@ -2327,6 +2594,7 @@ export class InMemoryCoachStateRepository implements CoachStateStore {
         key.contextProfile,
         key.contextVersion,
         key.analyticsVersion,
+        key.providerID ?? "workers_ai",
         key.promptVersion ?? this.promptVersion,
         key.routingVersion ?? DEFAULT_MODEL_ROUTING_VERSION,
         key.model ?? this.model
@@ -2351,6 +2619,7 @@ export class InMemoryCoachStateRepository implements CoachStateStore {
         key.contextProfile,
         key.contextVersion,
         key.analyticsVersion,
+        key.providerID ?? "workers_ai",
         key.promptVersion ?? this.promptVersion,
         key.routingVersion ?? DEFAULT_MODEL_ROUTING_VERSION,
         key.model ?? this.model
@@ -2371,6 +2640,7 @@ export class InMemoryCoachStateRepository implements CoachStateStore {
           key.contextProfile,
           key.contextVersion,
           key.analyticsVersion,
+          key.providerID ?? "workers_ai",
           key.promptVersion ?? this.promptVersion,
           key.routingVersion ?? DEFAULT_MODEL_ROUTING_VERSION,
           key.memoryCompatibilityKey ?? key.model ?? this.model,
@@ -2418,6 +2688,7 @@ export class InMemoryCoachStateRepository implements CoachStateStore {
         key.contextProfile,
         key.contextVersion,
         key.analyticsVersion,
+        key.providerID ?? "workers_ai",
         key.promptVersion ?? this.promptVersion,
         key.routingVersion ?? DEFAULT_MODEL_ROUTING_VERSION,
         key.memoryCompatibilityKey ?? key.model ?? this.model,
@@ -2741,44 +3012,19 @@ export class InMemoryCoachStateRepository implements CoachStateStore {
     return job;
   }
 
-  async reconcileBackup(
-    request: BackupReconcileRequest
-  ): Promise<BackupReconcileResponse> {
-    const remote = this.backupHeads.get(request.installID);
-    if (!remote) {
-      return {
-        action:
-          request.localStateKind === "user_data" && request.localBackupHash
-            ? "upload"
-            : "noop",
-      };
-    }
-
-    if (request.localBackupHash && request.localBackupHash === remote.backupHash) {
-      return { action: "noop", remote };
-    }
-
-    if (request.localStateKind === "seed") {
-      return { action: "download", remote };
-    }
-
-    const remoteChangedSinceSync =
-      (request.lastSyncedRemoteVersion ?? null) !== remote.backupVersion &&
-      (request.lastSyncedBackupHash ?? null) !== remote.backupHash;
-
-    if (!remoteChangedSinceSync) {
-      return { action: "upload", remote };
-    }
-
-    if (
-      request.localBackupHash &&
-      request.lastSyncedBackupHash &&
-      request.localBackupHash === request.lastSyncedBackupHash
-    ) {
-      return { action: "download", remote };
-    }
-
-    return { action: "conflict", remote };
+  async getBackupStatus(
+    request: BackupStatusRequest
+  ): Promise<BackupStatusResponse> {
+    return buildBackupStatusDecision(
+      request,
+      inMemoryInstallStateRow(
+        request.installID,
+        this.backupHeads.get(request.installID),
+        this.installSecretHashes.get(request.installID),
+        this.restoreDecisions.get(request.installID)
+      ),
+      this.backupHeads.get(request.installID)
+    );
   }
 
   async uploadBackup(
@@ -2908,11 +3154,58 @@ export class InMemoryCoachStateRepository implements CoachStateStore {
     };
   }
 
+  async recordRestoreDecision(
+    request: BackupRestoreDecisionRequest
+  ): Promise<void> {
+    this.restoreDecisions.set(request.installID, {
+      remoteVersion: request.remoteVersion,
+      action: request.action,
+      localBackupHash: request.localBackupHash,
+    });
+  }
+
+  async clearRemoteAIMemory(request: CoachMemoryClearRequest): Promise<void> {
+    for (const key of [...this.chatMemory.keys()]) {
+      if (
+        key.startsWith(`${request.installID}:chat-memory:`) &&
+        (!request.providerID || key.includes(`:${request.providerID}:`))
+      ) {
+        this.chatMemory.delete(key);
+      }
+    }
+
+    if (request.clearInsightsCache) {
+      for (const key of [...this.insightsCache.keys()]) {
+        if (
+          key.startsWith(`${request.installID}:insights:`) &&
+          (!request.providerID || key.includes(`:${request.providerID}:`))
+        ) {
+          this.insightsCache.delete(key);
+        }
+      }
+      for (const key of [...this.degradedInsightsCache.keys()]) {
+        if (
+          key.startsWith(`${request.installID}:insights:`) &&
+          (!request.providerID || key.includes(`:${request.providerID}:`))
+        ) {
+          this.degradedInsightsCache.delete(key);
+        }
+      }
+    }
+  }
+
+  async deleteRemoteBackup(request: BackupDeleteRequest): Promise<void> {
+    this.backupHeads.delete(request.installID);
+    this.backups.delete(request.installID);
+    this.restoreDecisions.delete(request.installID);
+  }
+
   async deleteInstallState(installID: string): Promise<void> {
-    this.legacySnapshots.delete(installID);
     this.backupHeads.delete(installID);
     this.backups.delete(installID);
     this.coachStateVersions.delete(installID);
+    this.installSecretHashes.delete(installID);
+    this.restoreDecisions.delete(installID);
     for (const [jobID, job] of this.chatJobs.entries()) {
       if (job.installID === installID) {
         this.chatJobs.delete(jobID);
@@ -2926,6 +3219,11 @@ export class InMemoryCoachStateRepository implements CoachStateStore {
     for (const key of [...this.insightsCache.keys()]) {
       if (key.startsWith(`${installID}:`)) {
         this.insightsCache.delete(key);
+      }
+    }
+    for (const key of [...this.degradedInsightsCache.keys()]) {
+      if (key.startsWith(`${installID}:`)) {
+        this.degradedInsightsCache.delete(key);
       }
     }
     for (const key of [...this.chatMemory.keys()]) {
@@ -2965,6 +3263,202 @@ export class ActiveCoachChatJobError extends Error {
     super("Coach chat job already in progress.");
     this.name = "ActiveCoachChatJobError";
   }
+}
+
+export class InstallAccessError extends Error {
+  constructor(readonly code: "install_proof_required" | "install_proof_invalid") {
+    super(
+      code === "install_proof_required"
+        ? "Install proof required."
+        : "Install proof invalid."
+    );
+    this.name = "InstallAccessError";
+  }
+}
+
+function buildBackupStatusDecision(
+  request: BackupStatusRequest,
+  current: InstallStateRow | null,
+  remote: BackupHead | undefined
+): BackupStatusResponse {
+  const reasonCodes: string[] = [];
+
+  if (!remote) {
+    reasonCodes.push("remote_head_missing");
+    return {
+      syncState: "no_remote_backup",
+      contextState: "reconcile_required",
+      reasonCodes,
+      actions: {
+        canUseRemoteAIContextNow: false,
+        shouldUpload:
+          request.localStateKind === "user_data" && Boolean(request.localBackupHash),
+        shouldOfferRestore: false,
+        shouldBuildInlineFallback: Boolean(request.localBackupHash),
+        shouldPromptUser: false,
+      },
+      authMode: "legacy_compat",
+    };
+  }
+
+  if (request.localBackupHash && request.localBackupHash === remote.backupHash) {
+    reasonCodes.push("hash_match");
+    return {
+      syncState: "remote_ready",
+      contextState: "context_ready",
+      reasonCodes,
+      actions: {
+        canUseRemoteAIContextNow: true,
+        shouldUpload: false,
+        shouldOfferRestore: false,
+        shouldBuildInlineFallback: false,
+        shouldPromptUser: false,
+      },
+      authMode: "legacy_compat",
+      remote,
+    };
+  }
+
+  if (request.localStateKind === "seed" || !request.localBackupHash) {
+    const ignored =
+      current?.last_restore_decision === "ignore" &&
+      current.last_restore_offered_version === remote.backupVersion;
+    reasonCodes.push("remote_head_newer");
+    if (ignored) {
+      reasonCodes.push("restore_previously_ignored");
+    }
+    return {
+      syncState: ignored ? "remote_newer_than_local" : "restore_pending_decision",
+      contextState: "context_stale",
+      reasonCodes,
+      actions: {
+        canUseRemoteAIContextNow: false,
+        shouldUpload: false,
+        shouldOfferRestore: true,
+        shouldBuildInlineFallback: Boolean(request.localBackupHash),
+        shouldPromptUser: !ignored,
+      },
+      authMode: "legacy_compat",
+      remote,
+    };
+  }
+
+  const localModifiedAt = request.localSourceModifiedAt
+    ? Date.parse(request.localSourceModifiedAt)
+    : Number.NaN;
+  const remoteModifiedAt = remote.clientSourceModifiedAt
+    ? Date.parse(remote.clientSourceModifiedAt)
+    : Date.parse(remote.uploadedAt);
+
+  if (Number.isFinite(localModifiedAt) && Number.isFinite(remoteModifiedAt)) {
+    if (localModifiedAt > remoteModifiedAt) {
+      reasonCodes.push("local_dirty_since_remote");
+      return {
+        syncState: "upload_required",
+        contextState: "context_stale",
+        reasonCodes,
+        actions: {
+          canUseRemoteAIContextNow: false,
+          shouldUpload: true,
+          shouldOfferRestore: false,
+          shouldBuildInlineFallback: true,
+          shouldPromptUser: false,
+        },
+        authMode: "legacy_compat",
+        remote,
+      };
+    }
+
+    if (localModifiedAt < remoteModifiedAt) {
+      const ignored =
+        current?.last_restore_decision === "ignore" &&
+        current.last_restore_offered_version === remote.backupVersion &&
+        current.last_restore_decision_local_hash === request.localBackupHash;
+      reasonCodes.push("remote_head_newer");
+      if (ignored) {
+        reasonCodes.push("restore_previously_ignored");
+      }
+      return {
+        syncState: ignored ? "remote_newer_than_local" : "restore_pending_decision",
+        contextState: "context_stale",
+        reasonCodes,
+        actions: {
+          canUseRemoteAIContextNow: false,
+          shouldUpload: false,
+          shouldOfferRestore: true,
+          shouldBuildInlineFallback: true,
+          shouldPromptUser: !ignored,
+        },
+        authMode: "legacy_compat",
+        remote,
+      };
+    }
+  }
+
+  reasonCodes.push("ambiguous_version_conflict");
+  return {
+    syncState: "conflict",
+    contextState: "context_stale",
+    reasonCodes,
+    actions: {
+      canUseRemoteAIContextNow: false,
+      shouldUpload: false,
+      shouldOfferRestore: true,
+      shouldBuildInlineFallback: true,
+      shouldPromptUser: true,
+    },
+    authMode: "legacy_compat",
+    remote,
+  };
+}
+
+function inMemoryInstallStateRow(
+  installID: string,
+  remote: BackupHead | undefined,
+  installSecretHash?: string,
+  restoreDecision?: { remoteVersion: number; action: "apply" | "ignore"; localBackupHash?: string }
+): InstallStateRow | null {
+  if (!remote && !installSecretHash && !restoreDecision) {
+    return null;
+  }
+
+  const now = new Date().toISOString();
+  return {
+    install_id: installID,
+    current_backup_version: remote?.backupVersion ?? null,
+    current_backup_hash: remote?.backupHash ?? null,
+    current_backup_r2_key: remote?.r2Key ?? null,
+    current_backup_schema_version: remote?.schemaVersion ?? null,
+    compression: (remote?.compression as "gzip" | "identity" | undefined) ?? "gzip",
+    size_bytes: remote?.sizeBytes ?? 0,
+    uploaded_at: remote?.uploadedAt ?? null,
+    client_source_modified_at: remote?.clientSourceModifiedAt ?? null,
+    coach_state_version: remote?.coachStateVersion ?? 0,
+    selected_program_id: remote?.selectedProgramID ?? null,
+    program_comment: remote?.programComment ?? "",
+    install_secret_hash: installSecretHash ?? null,
+    auth_enrolled_at: installSecretHash ? now : null,
+    last_seen_local_hash: null,
+    last_seen_local_modified_at: null,
+    last_status_sync_state: null,
+    last_status_context_state: null,
+    last_restore_offered_version: restoreDecision?.remoteVersion ?? null,
+    last_restore_decision: restoreDecision?.action ?? null,
+    last_restore_decision_local_hash: restoreDecision?.localBackupHash ?? null,
+    last_restore_decision_at: restoreDecision ? now : null,
+    context_ready_backup_hash: remote?.backupHash ?? null,
+    context_ready_coach_state_version: remote?.coachStateVersion ?? null,
+    created_at: now,
+    updated_at: now,
+  };
+}
+
+async function sha256Hex(input: string): Promise<string> {
+  const encoded = new TextEncoder().encode(input);
+  const digest = await crypto.subtle.digest("SHA-256", encoded);
+  return [...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
 }
 
 export function normalizeChatTurns(
@@ -3184,11 +3678,12 @@ function insightsCacheKey(
   contextProfile: CoachContextProfile,
   contextVersion: string,
   analyticsVersion: string,
+  providerID: string,
   promptVersion: string,
   routingVersion: string,
   model: string
 ): string {
-  return `${installID}:insights:${provider}:${contextHash}:${contextProfile}:${contextVersion}:${analyticsVersion}:${promptVersion}:${routingVersion}:${model}`;
+  return `${installID}:insights:${providerID}:${contextHash}:${contextProfile}:${contextVersion}:${analyticsVersion}:${promptVersion}:${routingVersion}:${model}`;
 }
 
 function legacyInsightsCacheKey(
@@ -3210,6 +3705,7 @@ function degradedInsightsCacheKey(
   contextProfile: CoachContextProfile,
   contextVersion: string,
   analyticsVersion: string,
+  providerID: string,
   promptVersion: string,
   routingVersion: string,
   model: string
@@ -3221,6 +3717,7 @@ function degradedInsightsCacheKey(
     contextProfile,
     contextVersion,
     analyticsVersion,
+    providerID,
     promptVersion,
     routingVersion,
     model
@@ -3234,12 +3731,13 @@ function chatMemoryKey(
   contextProfile: CoachContextProfile,
   contextVersion: string,
   analyticsVersion: string,
+  providerID: string,
   promptVersion: string,
   routingVersion: string,
   memoryCompatibilityKey: string,
   memoryProfile: CoachMemoryProfile
 ): string {
-  return `${installID}:chat-memory:${provider}:${contextHash}:${contextProfile}:${memoryProfile}:${contextVersion}:${analyticsVersion}:${promptVersion}:${routingVersion}:${memoryCompatibilityKey}`;
+  return `${installID}:chat-memory:${providerID}:${contextHash}:${contextProfile}:${memoryProfile}:${contextVersion}:${analyticsVersion}:${promptVersion}:${routingVersion}:${memoryCompatibilityKey}`;
 }
 
 function legacyChatMemoryKey(
@@ -3261,20 +3759,25 @@ export function storageKeyFromMetadata(
   promptVersion: string,
   model: string
 ): ContextStorageKeyInput {
+  const providerID = metadata?.providerID ?? "workers_ai";
   return {
     contextHash,
     provider: metadata?.provider ?? "workers_ai",
     contextProfile: metadata?.contextProfile ?? "compact_sync_v2",
     contextVersion: metadata?.contextVersion ?? DEFAULT_CONTEXT_VERSION,
     analyticsVersion: metadata?.analyticsVersion ?? DEFAULT_ANALYTICS_VERSION,
+    providerID,
     promptVersion,
     model,
     memoryProfile: metadata?.memoryProfile ?? "compact_v1",
     routingVersion: metadata?.routingVersion ?? DEFAULT_MODEL_ROUTING_VERSION,
     memoryCompatibilityKey:
+      `${providerID}:` +
+      (
       metadata?.memoryCompatibilityKey ??
       metadata?.selectedModel ??
-      model,
+      model
+      ),
   };
 }
 

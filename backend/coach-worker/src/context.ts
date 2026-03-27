@@ -97,6 +97,7 @@ export interface CoachExecutionMetadata {
   contextVersion: string;
   analyticsVersion: string;
   memoryProfile: CoachMemoryProfile;
+  providerID?: string;
   jobDeadlineAt?: string;
   derivedAnalytics?: CoachDerivedAnalytics;
   useCase?: string;

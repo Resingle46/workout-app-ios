@@ -5,11 +5,19 @@ Cloudflare Worker backend for the in-app AI Coach.
 ## Routes
 
 - `GET /health`
-- `PUT /v1/coach/snapshot`
+- `GET /v1/backup/status?installID=...`
+- `PUT /v1/backup`
+- `GET /v1/backup/download?installID=...&version=current`
+- `POST /v1/backup/restore-decision`
+- `DELETE /v1/backup`
 - `DELETE /v1/coach/state`
+- `PATCH /v1/coach/preferences`
+- `POST /v1/coach/memory/clear`
 - `POST /v1/coach/profile-insights`
 - `POST /v2/coach/chat-jobs`
+- `POST /v2/coach/workout-summary-jobs`
 - `GET /v2/coach/chat-jobs/:jobID?installID=...`
+- `GET /v2/coach/workout-summary-jobs/:jobID?installID=...`
 
 All `POST` routes require:
 
@@ -88,7 +96,7 @@ wrangler d1 migrations apply APP_META_DB --remote
 wrangler deploy
 ```
 
-If you deploy outside this script, make sure `migrations/0002_chat_jobs.sql` is applied remotely first.
+If you deploy outside this script, make sure all migrations in `migrations/` are applied remotely first.
 
 ## Cloudflare KV setup
 

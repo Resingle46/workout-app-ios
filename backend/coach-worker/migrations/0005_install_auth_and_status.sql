@@ -1,0 +1,12 @@
+ALTER TABLE install_state ADD COLUMN install_secret_hash TEXT;
+ALTER TABLE install_state ADD COLUMN auth_enrolled_at TEXT;
+ALTER TABLE install_state ADD COLUMN last_seen_local_hash TEXT;
+ALTER TABLE install_state ADD COLUMN last_seen_local_modified_at TEXT;
+ALTER TABLE install_state ADD COLUMN last_status_sync_state TEXT;
+ALTER TABLE install_state ADD COLUMN last_status_context_state TEXT;
+ALTER TABLE install_state ADD COLUMN last_restore_offered_version INTEGER;
+ALTER TABLE install_state ADD COLUMN last_restore_decision TEXT;
+ALTER TABLE install_state ADD COLUMN last_restore_decision_local_hash TEXT;
+ALTER TABLE install_state ADD COLUMN last_restore_decision_at TEXT;
+ALTER TABLE install_state ADD COLUMN context_ready_backup_hash TEXT;
+ALTER TABLE install_state ADD COLUMN context_ready_coach_state_version INTEGER;

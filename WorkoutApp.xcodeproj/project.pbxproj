@@ -7,7 +7,7 @@
 		8A50C2B8D8BC46819B6BAE3E /* WorkoutAppApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutApp/WorkoutAppApp.swift; sourceTree = "<group>"; };
 		A530C006CD884CCEA5DA921F /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutApp/Models/Models.swift; sourceTree = "<group>"; };
 		749F7F0EFDB9468F80DA5FDE /* AppStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutApp/Store/AppStore.swift; sourceTree = "<group>"; };
-		4C1E0E7F8A1B4C5D9E0F1001 /* BackupCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutApp/Store/BackupCoordinator.swift; sourceTree = "<group>"; };
+		4C1E0E7F8A1B4C5D9E0F1001 /* AppBuildInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutApp/AppBuildInfo.swift; sourceTree = "<group>"; };
 		E286E1D981424BBE83661AD5 /* SeedData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutApp/Store/SeedData.swift; sourceTree = "<group>"; };
 		560D95C72800469AAF55ECB7 /* RootTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutApp/Views/RootTabView.swift; sourceTree = "<group>"; };
 		72F1E96EDE854E4980CAA3AA /* ProgramsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutApp/Views/ProgramsView.swift; sourceTree = "<group>"; };
@@ -30,7 +30,7 @@
 		642C075E19EA4A5BB0FD202E /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = WorkoutApp/Assets.xcassets; sourceTree = "<group>"; };
 		991B5C2ABA0B4DEB9309BE49 /* Preview Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "WorkoutApp/Preview Content/Preview Assets.xcassets"; sourceTree = "<group>"; };
 		674284CD9C1E4E13A05FE9AF /* WorkoutApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WorkoutApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		4C1E0E7F8A1B4C5D9E0F1005 /* BackupCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutAppTests/BackupCoordinatorTests.swift; sourceTree = "<group>"; };
+		4C1E0E7F8A1B4C5D9E0F1005 /* CoachCloudMigrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutAppTests/CoachCloudMigrationTests.swift; sourceTree = "<group>"; };
 		C1B2C3D4E5F60718293A4B5E /* WorkoutSummaryFeatureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutAppTests/WorkoutSummaryFeatureTests.swift; sourceTree = "<group>"; };
 		D0A100000000000000000005 /* DebugDiagnosticsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutAppTests/DebugDiagnosticsTests.swift; sourceTree = "<group>"; };
 		4C1E0E7F8A1B4C5D9E0F1007 /* WorkoutAppTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = WorkoutAppTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -38,7 +38,7 @@
 		77D74ABA2DBA47DF8A2ED498 /* WorkoutAppApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A50C2B8D8BC46819B6BAE3E /* WorkoutAppApp.swift */; };
 		7AA401E5ACE54D92917EF7F2 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = A530C006CD884CCEA5DA921F /* Models.swift */; };
 		F88EFF6F57E94556A2CEA8D4 /* AppStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 749F7F0EFDB9468F80DA5FDE /* AppStore.swift */; };
-		4C1E0E7F8A1B4C5D9E0F1002 /* BackupCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C1E0E7F8A1B4C5D9E0F1001 /* BackupCoordinator.swift */; };
+		4C1E0E7F8A1B4C5D9E0F1002 /* AppBuildInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C1E0E7F8A1B4C5D9E0F1001 /* AppBuildInfo.swift */; };
 		EEDCFB7917044A589E8A4F21 /* SeedData.swift in Sources */ = {isa = PBXBuildFile; fileRef = E286E1D981424BBE83661AD5 /* SeedData.swift */; };
 		8BF7CE7CE37342BC868EED66 /* RootTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 560D95C72800469AAF55ECB7 /* RootTabView.swift */; };
 		11F5B6B9B7C340558D59C6F2 /* ProgramsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72F1E96EDE854E4980CAA3AA /* ProgramsView.swift */; };
@@ -58,7 +58,7 @@
 		A0A4B3D1C4E54F27A11B2014 /* Onest-wght.ttf in Resources */ = {isa = PBXBuildFile; fileRef = A0A4B3D1C4E54F27A11B2004 /* Onest-wght.ttf */; };
 		C04FB29A4A1C49F1997E498F /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 642C075E19EA4A5BB0FD202E /* Assets.xcassets */; };
 		CC1010CBA1E2478CB2D2F7DC /* Preview Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 991B5C2ABA0B4DEB9309BE49 /* Preview Assets.xcassets */; };
-		4C1E0E7F8A1B4C5D9E0F1006 /* BackupCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C1E0E7F8A1B4C5D9E0F1005 /* BackupCoordinatorTests.swift */; };
+		4C1E0E7F8A1B4C5D9E0F1006 /* CoachCloudMigrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C1E0E7F8A1B4C5D9E0F1005 /* CoachCloudMigrationTests.swift */; };
 		C1B2C3D4E5F60718293A4B5F /* WorkoutSummaryFeatureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1B2C3D4E5F60718293A4B5E /* WorkoutSummaryFeatureTests.swift */; };
 		D0A100000000000000000006 /* DebugDiagnosticsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0A100000000000000000005 /* DebugDiagnosticsTests.swift */; };
 		4C1E0E7F8A1B4C5D9E0F1009 /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4C1E0E7F8A1B4C5D9E0F1008 /* XCTest.framework */; };

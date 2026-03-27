@@ -1,6 +1,6 @@
 # WorkoutApp iOS
 
-A SwiftUI-based workout tracking app for iPhone with a companion Cloudflare Worker backend for AI coaching, cloud backup reconciliation, and async coach/workout-summary jobs.
+A SwiftUI-based workout tracking app for iPhone with a companion Cloudflare Worker backend for AI coaching, remote backup, and async coach/workout-summary jobs.
 
 This repository contains **both sides of the product**:
 
@@ -20,7 +20,7 @@ WorkoutApp helps you manage your training workflow end to end:
 - review workout history and exercise progress charts
 - maintain a user profile with training goals and body metrics
 - get AI-generated profile insights and coach responses
-- keep local backups and optionally sync state through the backend
+- keep fast local app data on-device while using remote backup and server-side AI context when enabled
 
 The UI is localized for **English and Russian** and currently targets **iPhone** with a dark-first visual design.
 
@@ -34,20 +34,19 @@ The UI is localized for **English and Russian** and currently targets **iPhone**
 - **Statistics**: per-exercise charting and historical summaries
 - **Profile insights**: progress, consistency, PR, goal, metabolism, and recommendation summaries
 - **Coach tab**: AI profile insights, quick prompts, and chat
-- **Local persistence**: snapshot-based storage on-device
-- **Local backups**: export/restore through Files folder access
-- **Cloud sync**: optional backup reconciliation and restore flow against backend state
+- **Local persistence**: snapshot-based cache on-device for offline use and fast boot
+- **Remote backup**: backend-owned backup upload/status/download/restore flow
+- **Cloud sync**: server-owned backup status and AI context readiness
 
 ### Backend
 - **Health endpoint**
-- **Coach snapshot sync**
 - **Profile insights generation**
 - **Chat**
 - **Async chat jobs**
 - **Async workout summary jobs**
-- **Backup reconcile / upload / download**
+- **Backup status / upload / download / restore decision**
 - **Coach preferences update**
-- **Remote state deletion**
+- **Remote memory clearing and remote state deletion**
 - **Caching and job state management** using Cloudflare services
 
 ## Architecture overview
@@ -62,13 +61,13 @@ The app centers around `AppStore`, which owns:
 - user profile
 - coach analysis settings
 
-State is serialized into a local JSON snapshot, so the app can work without a backend for the core training flow.
+State is serialized into a local JSON snapshot cache, so the app can work without a backend for the core training flow.
 
 ### 2) iOS: coach and cloud sync layer
 The coach/cloud path is split into dedicated stores:
 
 - `CoachStore` handles profile insights, coach chat, polling, resume logic, and coach preferences
-- `CloudSyncStore` handles backup reconciliation and server-side context readiness
+- `CloudSyncStore` handles remote backup status, restore decisions, and server-side context readiness
 - `WorkoutSummaryStore` handles async workout summary generation
 - `CoachContextBuilder` compacts app state into a coach-friendly payload
 
@@ -76,6 +75,8 @@ The client can either:
 
 - send an **inline compact snapshot**
 - or rely on **server-side context** when the backend already has the required synchronized backup state
+
+The normal path is server-first. Inline compact snapshots are built lazily only when the backend reports that remote context is stale or missing.
 
 ### 3) Backend: Cloudflare Worker
 The backend lives under `backend/coach-worker` and exposes HTTP endpoints for the iOS app.
@@ -155,35 +156,29 @@ This keeps the product usable even without remote services.
 
 ## Backup model
 
-There are **two different backup layers** in this repository:
+There is **one backup source of truth** in this repository:
 
-### 1) Local user-controlled backups
-The app can ask the user to choose a folder through the Files picker and then write/read backup files there.
-
-Use this when you want:
-- manual restore
-- offline backup portability
-- local export/import behavior
-
-### 2) Remote cloud backups
-When backend support is enabled, the app can reconcile local state with remote backup metadata.
+### Remote backup
+When backend support is enabled, the app keeps a full remote backup per install namespace. The iOS app keeps only local app data/cache for offline work and fast startup.
 
 High level flow:
-1. App calculates a local backup hash
-2. App asks backend whether it should upload, download, noop, or resolve a conflict
-3. Backup payloads are stored remotely
-4. The app can restore a remote backup when appropriate
+1. The app computes or reuses the current local snapshot hash
+2. The app asks the backend for normalized backup/context status
+3. The backend decides whether remote context is ready, upload is needed, or restore should be offered
+4. Full backup payloads are stored remotely in R2, indexed by D1 metadata
+5. Restore uses the backend download path and creates a temporary on-device rollback checkpoint before applying remote data
 
-This remote flow is tied to an install identifier and is also used to decide whether the backend already has enough context for server-side coach requests.
+Remote backup identity is same-device only and is tied to a Keychain-backed `installID` plus `installSecret`.
 
 ## AI Coach flow
 
 The coach feature is intentionally layered so it degrades gracefully.
 
 ### When backend is available
-- the app builds a compact coach context from local data
-- the client syncs or references snapshot state
+- the app checks remote backup/context status first
+- the client uploads full backup only when needed
 - the Worker resolves context
+- the Worker reuses remote backup, coach preferences, and chat memory
 - Workers AI generates profile insights and chat responses
 - async operations can run through Cloudflare Workflows
 - the app polls job state and can resume pending jobs
@@ -237,11 +232,13 @@ npm test
 Current backend routes include:
 
 - `GET /health`
-- `POST /v1/backup/reconcile`
+- `GET /v1/backup/status`
 - `PUT /v1/backup`
 - `GET /v1/backup/download`
+- `POST /v1/backup/restore-decision`
+- `DELETE /v1/backup`
 - `PATCH /v1/coach/preferences`
-- `PUT /v1/coach/snapshot`
+- `POST /v1/coach/memory/clear`
 - `DELETE /v1/coach/state`
 - `POST /v1/coach/profile-insights`
 - `POST /v1/coach/chat`

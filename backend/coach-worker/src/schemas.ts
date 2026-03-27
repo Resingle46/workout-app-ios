@@ -9,6 +9,7 @@ const nonEmptyStringSchema = z.string().trim().min(1);
 const optionalTrimmedStringSchema = z.string().trim().min(1).optional();
 const installIDSchema = z.string().trim().min(1).max(200);
 const snapshotHashSchema = z.string().trim().min(1).max(200);
+const providerIDSchema = z.string().trim().min(1).max(80);
 const workoutSummaryGroupKindSchema = z.enum(["regular", "superset"]);
 export const aiProviderSchema = z.enum(["workers_ai", "gemini"]);
 const COACH_CHAT_MARKDOWN_MAX_LENGTH = 6_000;
@@ -307,11 +308,13 @@ export const profileInsightsRequestSchema = z
     locale: nonEmptyStringSchema,
     installID: installIDSchema,
     provider: aiProviderSchema.optional().default("workers_ai"),
+    localBackupHash: snapshotHashSchema.optional(),
     snapshotHash: snapshotHashSchema.optional(),
     snapshot: coachContextPayloadSchema.optional(),
     snapshotUpdatedAt: isoDateTimeSchema.optional(),
     runtimeContextDelta: runtimeContextDeltaSchema.optional(),
     capabilityScope: capabilityScopeSchema,
+    providerID: providerIDSchema.optional(),
     forceRefresh: z.boolean().optional().default(false),
   })
   .strict();
@@ -322,12 +325,14 @@ export const chatRequestSchema = z
     question: nonEmptyStringSchema,
     installID: installIDSchema,
     provider: aiProviderSchema.optional().default("workers_ai"),
+    localBackupHash: snapshotHashSchema.optional(),
     snapshotHash: snapshotHashSchema.optional(),
     snapshot: coachContextPayloadSchema.optional(),
     snapshotUpdatedAt: isoDateTimeSchema.optional(),
     runtimeContextDelta: runtimeContextDeltaSchema.optional(),
     clientRecentTurns: z.array(coachConversationTurnSchema).max(12).default([]),
     capabilityScope: capabilityScopeSchema,
+    providerID: providerIDSchema.optional(),
   })
   .strict();
 
@@ -410,6 +415,7 @@ const jobMetadataSchema = z
     contextVersion: nonEmptyStringSchema.max(80).optional(),
     analyticsVersion: nonEmptyStringSchema.max(80).optional(),
     memoryProfile: nonEmptyStringSchema.max(80).optional(),
+    providerID: providerIDSchema.optional(),
   })
   .strict();
 
@@ -430,35 +436,38 @@ export const workoutSummaryJobCreateRequestSchema = z
     installID: installIDSchema,
     provider: aiProviderSchema.optional().default("workers_ai"),
     clientRequestID: z.uuid(),
+    localBackupHash: snapshotHashSchema.optional(),
+    providerID: providerIDSchema.optional(),
     sessionID: uuidSchema,
     fingerprint: snapshotHashSchema,
     requestMode: workoutSummaryRequestModeSchema,
     trigger: workoutSummaryTriggerSchema,
     inputMode: workoutSummaryInputModeSchema,
     currentWorkout: workoutSummaryCurrentWorkoutSchema,
-    recentExerciseHistory: z.array(workoutSummaryExerciseHistorySchema),
-  })
-  .strict();
-
-export const snapshotSyncRequestSchema = z
-  .object({
-    installID: installIDSchema,
-    snapshotHash: snapshotHashSchema,
-    snapshot: coachContextPayloadSchema,
-    snapshotUpdatedAt: isoDateTimeSchema,
-  })
-  .strict();
-
-export const snapshotSyncResponseSchema = z
-  .object({
-    acceptedHash: snapshotHashSchema,
-    storedAt: isoDateTimeSchema,
+    recentExerciseHistory: z.array(workoutSummaryExerciseHistorySchema).default([]),
   })
   .strict();
 
 const groupKindSchema = z.enum(["regular", "superset"]);
 const localStateKindSchema = z.enum(["seed", "user_data"]);
 const compressionSchema = z.enum(["gzip", "identity"]);
+const backupStatusSyncStateSchema = z.enum([
+  "no_remote_backup",
+  "remote_ready",
+  "remote_newer_than_local",
+  "local_newer_than_remote",
+  "conflict",
+  "restore_pending_decision",
+  "reconcile_required",
+  "upload_required",
+  "remote_unavailable",
+]);
+const backupStatusContextStateSchema = z.enum([
+  "context_ready",
+  "context_stale",
+  "reconcile_required",
+  "remote_unavailable",
+]);
 
 const exerciseSchema = z
   .object({
@@ -578,24 +587,6 @@ export const backupEnvelopeV2Schema = z
   })
   .strict();
 
-export const backupReconcileRequestSchema = z
-  .object({
-    installID: installIDSchema,
-    localBackupHash: snapshotHashSchema.optional(),
-    localSourceModifiedAt: isoDateTimeSchema.optional(),
-    lastSyncedRemoteVersion: z.int().min(1).optional(),
-    lastSyncedBackupHash: snapshotHashSchema.optional(),
-    localStateKind: localStateKindSchema,
-  })
-  .strict();
-
-export const backupReconcileResponseSchema = z
-  .object({
-    action: z.enum(["upload", "download", "noop", "conflict"]),
-    remote: backupHeadSchema.optional(),
-  })
-  .strict();
-
 export const backupUploadRequestSchema = z
   .object({
     installID: installIDSchema,
@@ -635,6 +626,29 @@ export const coachPreferencesUpdateResponseSchema = z
   })
   .strict();
 
+export const backupRestoreDecisionRequestSchema = z
+  .object({
+    installID: installIDSchema,
+    remoteVersion: z.int().min(1),
+    localBackupHash: snapshotHashSchema.optional(),
+    action: z.enum(["apply", "ignore"]),
+  })
+  .strict();
+
+export const coachMemoryClearRequestSchema = z
+  .object({
+    installID: installIDSchema,
+    providerID: providerIDSchema.optional(),
+    clearInsightsCache: z.boolean().optional().default(true),
+  })
+  .strict();
+
+export const backupDeleteRequestSchema = z
+  .object({
+    installID: installIDSchema,
+  })
+  .strict();
+
 export const stateDeleteRequestSchema = z
   .object({
     installID: installIDSchema,
@@ -670,6 +684,36 @@ export const chatResponseSchema = z
     responseID: nonEmptyStringSchema.max(200),
     followUps: z.array(nonEmptyStringSchema.max(160)).max(3),
     generationStatus: coachResponseGenerationStatusSchema.default("fallback"),
+  })
+  .strict();
+
+export const backupStatusRequestSchema = z
+  .object({
+    installID: installIDSchema,
+    localBackupHash: snapshotHashSchema.optional(),
+    localSourceModifiedAt: isoDateTimeSchema.optional(),
+    localStateKind: localStateKindSchema.default("user_data"),
+  })
+  .strict();
+
+export const backupStatusResponseSchema = z
+  .object({
+    syncState: backupStatusSyncStateSchema,
+    contextState: backupStatusContextStateSchema,
+    reasonCodes: z.array(nonEmptyStringSchema.max(120)).default([]),
+    actions: z
+      .object({
+        canUseRemoteAIContextNow: z.boolean(),
+        shouldUpload: z.boolean(),
+        shouldOfferRestore: z.boolean(),
+        shouldBuildInlineFallback: z.boolean(),
+        shouldPromptUser: z.boolean(),
+      })
+      .strict(),
+    authMode: z.enum(["legacy_compat", "secret_valid", "unbound_secret"]).default(
+      "legacy_compat"
+    ),
+    remote: backupHeadSchema.optional(),
   })
   .strict();
 
@@ -804,16 +848,8 @@ export type CoachProfileInsightsRequest = z.infer<
 export type CoachChatRequest = z.infer<typeof chatRequestSchema>;
 export type CoachChatJobCreateRequest = z.infer<typeof chatJobCreateRequestSchema>;
 export type CoachAIProvider = z.infer<typeof aiProviderSchema>;
-export type CoachSnapshotSyncRequest = z.infer<typeof snapshotSyncRequestSchema>;
-export type CoachSnapshotSyncResponse = z.infer<
-  typeof snapshotSyncResponseSchema
->;
-export type BackupReconcileRequest = z.infer<
-  typeof backupReconcileRequestSchema
->;
-export type BackupReconcileResponse = z.infer<
-  typeof backupReconcileResponseSchema
->;
+export type BackupStatusRequest = z.infer<typeof backupStatusRequestSchema>;
+export type BackupStatusResponse = z.infer<typeof backupStatusResponseSchema>;
 export type BackupUploadRequest = z.infer<typeof backupUploadRequestSchema>;
 export type BackupUploadResponse = z.infer<typeof backupUploadResponseSchema>;
 export type BackupDownloadResponse = z.infer<
@@ -827,6 +863,13 @@ export type CoachPreferencesUpdateRequest = z.infer<
 export type CoachPreferencesUpdateResponse = z.infer<
   typeof coachPreferencesUpdateResponseSchema
 >;
+export type BackupRestoreDecisionRequest = z.infer<
+  typeof backupRestoreDecisionRequestSchema
+>;
+export type CoachMemoryClearRequest = z.infer<
+  typeof coachMemoryClearRequestSchema
+>;
+export type BackupDeleteRequest = z.infer<typeof backupDeleteRequestSchema>;
 export type CoachStateDeleteRequest = z.infer<typeof stateDeleteRequestSchema>;
 export type CoachProfileInsightsResponse = z.infer<
   typeof profileInsightsResponseSchema

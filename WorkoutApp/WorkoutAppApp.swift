@@ -22,16 +22,18 @@ struct WorkoutAppApp: App {
 
         let configurationStore = CoachRuntimeConfigurationStore(bundle: .main)
         let configuration = configurationStore.runtimeConfiguration
-        let localStateStore = CoachLocalStateStore()
+        let localStateStore = CoachLocalStateStore(debugRecorder: debugRecorder)
         let cloudSyncLocalStateStore = CloudSyncLocalStateStore(defaults: localStateStore.userDefaults)
         let client = CoachAPIHTTPClient(
             configuration: configuration,
+            installSecretProvider: { localStateStore.installSecret },
             debugRecorder: debugRecorder
         )
         let cloudSyncStore = CloudSyncStore(
             client: client,
             configuration: configuration,
             installID: localStateStore.installID,
+            installSecretProvider: { localStateStore.installSecret },
             localStateStore: cloudSyncLocalStateStore,
             debugRecorder: debugRecorder
         )
@@ -48,6 +50,7 @@ struct WorkoutAppApp: App {
             client: client,
             configuration: configuration,
             localStateStore: localStateStore,
+            cloudSyncStore: cloudSyncStore,
             debugRecorder: debugRecorder
         )
         _workoutSummaryStore = State(initialValue: workoutSummaryStore)
@@ -62,7 +65,6 @@ struct WorkoutAppApp: App {
             workoutSummaryStoreProvider: { workoutSummaryStore },
             cloudSyncStoreProvider: { cloudSyncStore },
             coachLocalStateStoreProvider: { localStateStore },
-            cloudSyncLocalStateStoreProvider: { cloudSyncLocalStateStore },
             runtimeConfigurationProvider: runtimeConfigurationProvider
         )
         let healthCheckService = DebugHealthCheckService(
@@ -98,6 +100,8 @@ struct WorkoutAppApp: App {
                 .task {
                     await store.handleAppLaunch()
                     await cloudSyncStore.handleAppLaunch(using: store)
+                    await workoutSummaryStore.resumePendingJobsIfNeeded()
+                    await coachStore.resumePendingChatJobIfNeeded(using: store)
                     debugDiagnosticsController.refreshReport()
                 }
         }
@@ -113,6 +117,7 @@ struct WorkoutAppApp: App {
                     if store.selectedTab == .coach {
                         await coachStore.resumePendingChatJobIfNeeded(using: store)
                     }
+                    await workoutSummaryStore.resumePendingJobsIfNeeded()
                 case .background:
                     await cloudSyncStore.handleSceneDidEnterBackground(using: store)
                     await store.handleSceneDidEnterBackground()

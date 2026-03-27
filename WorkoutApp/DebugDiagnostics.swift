@@ -447,15 +447,18 @@ struct DebugDiagnosticsReport: Codable, Hashable, Sendable {
         var appVersion: String
         var buildNumber: String
         var installID: DebugMaskedValue?
+        var installSecretReady: Bool
+        var identityStorageMode: String?
         var backendBaseURL: String?
         var remoteCoachAvailable: Bool
         var selectedAIProvider: String?
     }
 
     struct CloudSyncSection: Codable, Hashable, Sendable {
-        var lastSyncedRemoteVersion: Int?
-        var lastKnownRemoteVersion: Int?
-        var lastSyncedBackupHash: DebugMaskedValue?
+        var syncState: String?
+        var contextState: String?
+        var remoteBackupVersion: Int?
+        var installAuthMode: String?
         var pendingRemoteRestoreState: String?
         var lastSyncError: String?
     }
@@ -485,14 +488,17 @@ struct DebugDiagnosticsReport: Codable, Hashable, Sendable {
             appVersion: BackupConstants.appVersion,
             buildNumber: BackupConstants.buildNumber,
             installID: nil,
+            installSecretReady: false,
+            identityStorageMode: nil,
             backendBaseURL: nil,
             remoteCoachAvailable: false,
             selectedAIProvider: nil
         ),
         cloudSync: CloudSyncSection(
-            lastSyncedRemoteVersion: nil,
-            lastKnownRemoteVersion: nil,
-            lastSyncedBackupHash: nil,
+            syncState: nil,
+            contextState: nil,
+            remoteBackupVersion: nil,
+            installAuthMode: nil,
             pendingRemoteRestoreState: nil,
             lastSyncError: nil
         ),
@@ -517,15 +523,18 @@ struct DebugDiagnosticsExportPayload: Codable, Hashable, Sendable {
         var appVersion: String
         var buildNumber: String
         var installID: String?
+        var installSecretReady: Bool
+        var identityStorageMode: String?
         var backendBaseURL: String?
         var remoteCoachAvailable: Bool
         var selectedAIProvider: String?
     }
 
     struct CloudSyncSection: Codable, Hashable, Sendable {
-        var lastSyncedRemoteVersion: Int?
-        var lastKnownRemoteVersion: Int?
-        var lastSyncedBackupHash: String?
+        var syncState: String?
+        var contextState: String?
+        var remoteBackupVersion: Int?
+        var installAuthMode: String?
         var pendingRemoteRestoreState: String?
         var lastSyncError: String?
     }
@@ -558,7 +567,6 @@ final class DebugDiagnosticsReportBuilder {
     private let workoutSummaryStoreProvider: @MainActor () -> WorkoutSummaryStore
     private let cloudSyncStoreProvider: @MainActor () -> CloudSyncStore
     private let coachLocalStateStoreProvider: () -> CoachLocalStateStore
-    private let cloudSyncLocalStateStoreProvider: () -> CloudSyncLocalStateStore
     private let runtimeConfigurationProvider: () -> CoachRuntimeConfiguration
 
     init(
@@ -568,7 +576,6 @@ final class DebugDiagnosticsReportBuilder {
         workoutSummaryStoreProvider: @escaping @MainActor () -> WorkoutSummaryStore,
         cloudSyncStoreProvider: @escaping @MainActor () -> CloudSyncStore,
         coachLocalStateStoreProvider: @escaping () -> CoachLocalStateStore,
-        cloudSyncLocalStateStoreProvider: @escaping () -> CloudSyncLocalStateStore,
         runtimeConfigurationProvider: @escaping () -> CoachRuntimeConfiguration
     ) {
         self.eventStore = eventStore
@@ -577,7 +584,6 @@ final class DebugDiagnosticsReportBuilder {
         self.workoutSummaryStoreProvider = workoutSummaryStoreProvider
         self.cloudSyncStoreProvider = cloudSyncStoreProvider
         self.coachLocalStateStoreProvider = coachLocalStateStoreProvider
-        self.cloudSyncLocalStateStoreProvider = cloudSyncLocalStateStoreProvider
         self.runtimeConfigurationProvider = runtimeConfigurationProvider
     }
 
@@ -589,7 +595,6 @@ final class DebugDiagnosticsReportBuilder {
         let workoutSummaryStore = workoutSummaryStoreProvider()
         let cloudSyncStore = cloudSyncStoreProvider()
         let coachLocalStateStore = coachLocalStateStoreProvider()
-        let cloudSyncLocalStateStore = cloudSyncLocalStateStoreProvider()
 
         return DebugDiagnosticsReport(
             generatedAt: .now,
@@ -597,16 +602,17 @@ final class DebugDiagnosticsReportBuilder {
                 appVersion: BackupConstants.appVersion,
                 buildNumber: BackupConstants.buildNumber,
                 installID: DebugDiagnosticsSanitizer.mask(coachLocalStateStore.installID),
+                installSecretReady: coachLocalStateStore.isKeychainBackedIdentityReady,
+                identityStorageMode: coachLocalStateStore.identityStorageMode,
                 backendBaseURL: runtimeConfiguration.backendBaseURL?.absoluteString,
                 remoteCoachAvailable: runtimeConfiguration.canUseRemoteCoach,
                 selectedAIProvider: runtimeConfiguration.provider.rawValue
             ),
             cloudSync: DebugDiagnosticsReport.CloudSyncSection(
-                lastSyncedRemoteVersion: cloudSyncLocalStateStore.lastSyncedRemoteVersion,
-                lastKnownRemoteVersion: cloudSyncLocalStateStore.lastKnownRemoteVersion,
-                lastSyncedBackupHash: DebugDiagnosticsSanitizer.mask(
-                    cloudSyncLocalStateStore.lastSyncedBackupHash
-                ),
+                syncState: cloudSyncStore.lastBackupStatus?.syncState.rawValue,
+                contextState: cloudSyncStore.lastBackupStatus?.contextState.rawValue,
+                remoteBackupVersion: cloudSyncStore.lastBackupStatus?.remote?.backupVersion,
+                installAuthMode: cloudSyncStore.lastBackupStatus?.authMode.rawValue,
                 pendingRemoteRestoreState: pendingRestoreState(from: cloudSyncStore.pendingRemoteRestore),
                 lastSyncError: DebugDiagnosticsSanitizer.sanitizeMessage(
                     cloudSyncStore.lastSyncErrorDescription
@@ -640,7 +646,6 @@ final class DebugDiagnosticsReportBuilder {
         let workoutSummaryStore = workoutSummaryStoreProvider()
         let cloudSyncStore = cloudSyncStoreProvider()
         let coachLocalStateStore = coachLocalStateStoreProvider()
-        let cloudSyncLocalStateStore = cloudSyncLocalStateStoreProvider()
 
         return DebugDiagnosticsExportPayload(
             generatedAt: .now,
@@ -648,14 +653,17 @@ final class DebugDiagnosticsReportBuilder {
                 appVersion: BackupConstants.appVersion,
                 buildNumber: BackupConstants.buildNumber,
                 installID: coachLocalStateStore.installID,
+                installSecretReady: coachLocalStateStore.isKeychainBackedIdentityReady,
+                identityStorageMode: coachLocalStateStore.identityStorageMode,
                 backendBaseURL: runtimeConfiguration.backendBaseURL?.absoluteString,
                 remoteCoachAvailable: runtimeConfiguration.canUseRemoteCoach,
                 selectedAIProvider: runtimeConfiguration.provider.rawValue
             ),
             cloudSync: DebugDiagnosticsExportPayload.CloudSyncSection(
-                lastSyncedRemoteVersion: cloudSyncLocalStateStore.lastSyncedRemoteVersion,
-                lastKnownRemoteVersion: cloudSyncLocalStateStore.lastKnownRemoteVersion,
-                lastSyncedBackupHash: cloudSyncLocalStateStore.lastSyncedBackupHash,
+                syncState: cloudSyncStore.lastBackupStatus?.syncState.rawValue,
+                contextState: cloudSyncStore.lastBackupStatus?.contextState.rawValue,
+                remoteBackupVersion: cloudSyncStore.lastBackupStatus?.remote?.backupVersion,
+                installAuthMode: cloudSyncStore.lastBackupStatus?.authMode.rawValue,
                 pendingRemoteRestoreState: pendingRestoreState(from: cloudSyncStore.pendingRemoteRestore),
                 lastSyncError: DebugDiagnosticsSanitizer.sanitizeMessage(
                     cloudSyncStore.lastSyncErrorDescription
