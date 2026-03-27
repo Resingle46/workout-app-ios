@@ -1371,7 +1371,10 @@ interface AttemptAccumulator {
 
 type ProfileInsightsStructuredParseResult = {
   response: CoachProfileInsightsContent;
-  parseMode: "strict_json_schema" | "lenient_json_coercion";
+  parseMode:
+    | "strict_json_schema"
+    | "lenient_json_coercion"
+    | "lenient_plain_text_coercion";
 };
 
 function createAttemptAccumulator(): AttemptAccumulator {
@@ -1863,15 +1866,15 @@ function parseProfileInsightsStructuredResponse(
     }
 
     return {
-      response: normalizeProfileInsightsResponse(coerced),
-      parseMode: "lenient_json_coercion",
+      response: normalizeProfileInsightsResponse(coerced.response),
+      parseMode: coerced.parseMode,
     };
   }
 }
 
 function tryCoerceProfileInsightsStructuredResponse(
   rawResponse: unknown
-): CoachProfileInsightsContent | undefined {
+): ProfileInsightsStructuredParseResult | undefined {
   let rawPayload: unknown;
   try {
     rawPayload = extractResponsePayload(rawResponse, "profile insights");
@@ -1879,15 +1882,48 @@ function tryCoerceProfileInsightsStructuredResponse(
     return undefined;
   }
 
-  const candidate =
-    typeof rawPayload === "string"
-      ? safeJSONParse(normalizePotentialJSON(rawPayload))
-      : rawPayload;
+  if (typeof rawPayload === "string") {
+    const normalizedPayload = normalizePotentialJSON(rawPayload);
+    const parsedJSON = safeJSONParse(normalizedPayload);
+    if (isRecord(parsedJSON)) {
+      const coercedFromJSON = coerceProfileInsightsResponseRecord(parsedJSON);
+      if (coercedFromJSON) {
+        return {
+          response: coercedFromJSON,
+          parseMode: "lenient_json_coercion",
+        };
+      }
+    }
 
-  if (!isRecord(candidate)) {
+    const coercedFromPlainText = coerceProfileInsightsFromPlainText(rawPayload);
+    if (coercedFromPlainText) {
+      return {
+        response: coercedFromPlainText,
+        parseMode: "lenient_plain_text_coercion",
+      };
+    }
+
     return undefined;
   }
 
+  if (!isRecord(rawPayload)) {
+    return undefined;
+  }
+
+  const coerced = coerceProfileInsightsResponseRecord(rawPayload);
+  if (!coerced) {
+    return undefined;
+  }
+
+  return {
+    response: coerced,
+    parseMode: "lenient_json_coercion",
+  };
+}
+
+function coerceProfileInsightsResponseRecord(
+  candidate: Record<string, unknown>
+): CoachProfileInsightsContent | undefined {
   const summary = firstNonEmptyText([
     candidate.summary,
     candidate.coachSummary,
@@ -1910,6 +1946,23 @@ function tryCoerceProfileInsightsStructuredResponse(
         candidate.suggestions ??
         candidate.highlights
     ),
+  };
+}
+
+function coerceProfileInsightsFromPlainText(
+  rawPayload: string
+): CoachProfileInsightsContent | undefined {
+  const parsed = parsePlainProfileInsights(rawPayload);
+  const summary = cleanPlainParagraph(parsed.summary).slice(0, 1200);
+  const recommendations = dedupeText(parsed.recommendations).slice(0, 8);
+
+  if (!summary || recommendations.length === 0) {
+    return undefined;
+  }
+
+  return {
+    summary,
+    recommendations,
   };
 }
 

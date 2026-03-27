@@ -3436,6 +3436,71 @@ describe("WorkersAICoachService", () => {
     }
   });
 
+  it("salvages Gemini structured profile insights when the structured attempt returns plain text", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () =>
+        JSON.stringify({
+          candidates: [
+            {
+              content: {
+                parts: [
+                  {
+                    text: [
+                      "Summary: The current rotation is working and recovery looks stable.",
+                      "",
+                      "- Keep the current weekly rhythm.",
+                      "- Add load only on lifts that felt repeatable.",
+                    ].join("\n"),
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    try {
+      const service = createInferenceServiceForProvider(
+        makeEnv({
+          GEMINI_API_KEY: "test-gemini-key",
+        }),
+        "gemini"
+      );
+      const result = await service.generateProfileInsights({
+        ...makeProfileInsightsRequestFixture(),
+        provider: "gemini",
+      });
+
+      expect(result.provider).toBe("gemini");
+      expect(result.mode).toBe("structured");
+      expect(result.data).toMatchObject({
+        summary: "The current rotation is working and recovery looks stable.",
+        recommendations: [
+          "Keep the current weekly rhythm.",
+          "Add load only on lifts that felt repeatable.",
+        ],
+        generationStatus: "model",
+        insightSource: "fresh_model",
+      });
+      expect(parseLoggedPayloads(logSpy)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            event: "coach_profile_attempt_succeeded",
+            provider: "gemini",
+            structuredParseMode: "lenient_plain_text_coercion",
+          }),
+        ])
+      );
+    } finally {
+      logSpy.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("retries Gemini profile insights after a rate limit response", async () => {
     const fetchSpy = vi
       .fn()
