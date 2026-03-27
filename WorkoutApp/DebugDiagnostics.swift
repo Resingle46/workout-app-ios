@@ -713,12 +713,12 @@ final class DebugDiagnosticsReportBuilder {
 struct DebugSharePayload: Identifiable, Hashable, Sendable {
     let id: UUID
     let title: String
-    let text: String
+    let fileURL: URL
 
-    init(title: String, text: String) {
+    init(title: String, fileURL: URL) {
         self.id = UUID()
         self.title = title
-        self.text = text
+        self.fileURL = fileURL
     }
 }
 
@@ -858,17 +858,20 @@ final class DebugDiagnosticsController {
     @ObservationIgnored private let eventStore: DebugEventStore
     @ObservationIgnored private let healthCheckService: DebugHealthCheckService
     @ObservationIgnored private let defaults: UserDefaults
+    @ObservationIgnored private let fileManager: FileManager
 
     init(
         reportBuilder: DebugDiagnosticsReportBuilder,
         eventStore: DebugEventStore,
         healthCheckService: DebugHealthCheckService,
-        defaults: UserDefaults = .standard
+        defaults: UserDefaults = .standard,
+        fileManager: FileManager = .default
     ) {
         self.reportBuilder = reportBuilder
         self.eventStore = eventStore
         self.healthCheckService = healthCheckService
         self.defaults = defaults
+        self.fileManager = fileManager
         self.report = reportBuilder.buildReport()
     }
 
@@ -909,9 +912,15 @@ final class DebugDiagnosticsController {
 
     func prepareDebugPayloadExport() {
         do {
+            clearPreparedExport()
+            let title = "WorkoutApp-DebugReport.json"
+            let fileURL = try writeTemporaryExportFile(
+                title: title,
+                text: reportBuilder.buildExportJSON()
+            )
             sharePayload = DebugSharePayload(
-                title: "WorkoutApp-DebugReport.json",
-                text: try reportBuilder.buildExportJSON()
+                title: title,
+                fileURL: fileURL
             )
             actionStatusMessage = debugDiagnosticsLocalizedString("developer.status.payload_prepared")
         } catch {
@@ -920,7 +929,23 @@ final class DebugDiagnosticsController {
     }
 
     func clearPreparedExport() {
+        if let fileURL = sharePayload?.fileURL {
+            try? fileManager.removeItem(at: fileURL.deletingLastPathComponent())
+            try? fileManager.removeItem(at: fileURL)
+        }
         sharePayload = nil
+    }
+
+    private func writeTemporaryExportFile(title: String, text: String) throws -> URL {
+        let directoryURL = fileManager.temporaryDirectory
+            .appendingPathComponent("WorkoutApp-DebugExport-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        let fileURL = directoryURL.appendingPathComponent(title, isDirectory: false)
+        guard let data = text.data(using: .utf8) else {
+            throw CocoaError(.fileWriteInapplicableStringEncoding)
+        }
+        try data.write(to: fileURL, options: .atomic)
+        return fileURL
     }
 
     func pingHealth() async {

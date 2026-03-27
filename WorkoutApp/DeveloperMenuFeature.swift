@@ -145,8 +145,11 @@ struct DeveloperMenuView: View {
             )
         ) { payload in
             DebugActivityShareSheet(
-                activityItems: [payload.text],
-                subject: payload.title
+                activityItems: [payload.fileURL],
+                subject: payload.title,
+                onComplete: {
+                    debugController.clearPreparedExport()
+                }
             )
         }
         .task {
@@ -635,6 +638,7 @@ private struct DeveloperMenuEmptyState: View {
 private struct DebugActivityShareSheet: UIViewControllerRepresentable {
     let activityItems: [Any]
     let subject: String
+    var onComplete: (() -> Void)? = nil
 
     func makeUIViewController(context _: Context) -> UIActivityViewController {
         let controller = UIActivityViewController(
@@ -642,6 +646,9 @@ private struct DebugActivityShareSheet: UIViewControllerRepresentable {
             applicationActivities: nil
         )
         controller.setValue(subject, forKey: "subject")
+        controller.completionWithItemsHandler = { _, _, _, _ in
+            onComplete?()
+        }
         return controller
     }
 

@@ -339,6 +339,77 @@ final class DebugDiagnosticsTests: XCTestCase {
         XCTAssertEqual(traces[2].requestID, "req-500")
     }
 
+    @MainActor
+    func testPrepareDebugPayloadExportCreatesTemporaryFileAndCleanupRemovesIt() throws {
+        let eventStore = DebugEventStore()
+        let builder = DebugDiagnosticsReportBuilder(
+            eventStore: eventStore,
+            appStoreProvider: { AppStore() },
+            coachStoreProvider: {
+                CoachStore(
+                    client: DebugDiagnosticsTestClient(),
+                    configuration: CoachRuntimeConfiguration(
+                        isFeatureEnabled: true,
+                        backendBaseURL: URL(string: "https://example.com"),
+                        internalBearerToken: "token"
+                    )
+                )
+            },
+            workoutSummaryStoreProvider: {
+                WorkoutSummaryStore(
+                    client: DebugDiagnosticsTestClient(),
+                    configuration: CoachRuntimeConfiguration(
+                        isFeatureEnabled: true,
+                        backendBaseURL: URL(string: "https://example.com"),
+                        internalBearerToken: "token"
+                    )
+                )
+            },
+            cloudSyncStoreProvider: {
+                CloudSyncStore(
+                    client: DebugDiagnosticsTestClient(),
+                    configuration: CoachRuntimeConfiguration(
+                        isFeatureEnabled: true,
+                        backendBaseURL: URL(string: "https://example.com"),
+                        internalBearerToken: "token"
+                    ),
+                    installID: "install-1"
+                )
+            },
+            coachLocalStateStoreProvider: { CoachLocalStateStore(generatedInstallID: "install-1") },
+            cloudSyncLocalStateStoreProvider: { CloudSyncLocalStateStore() },
+            runtimeConfigurationProvider: {
+                CoachRuntimeConfiguration(
+                    isFeatureEnabled: true,
+                    backendBaseURL: URL(string: "https://example.com"),
+                    internalBearerToken: "token"
+                )
+            }
+        )
+        let controller = DebugDiagnosticsController(
+            reportBuilder: builder,
+            eventStore: eventStore,
+            healthCheckService: DebugHealthCheckService(
+                runtimeConfigurationProvider: {
+                    CoachRuntimeConfiguration(
+                        isFeatureEnabled: true,
+                        backendBaseURL: URL(string: "https://example.com"),
+                        internalBearerToken: "token"
+                    )
+                },
+                debugRecorder: NoopDebugEventRecorder()
+            )
+        )
+
+        controller.prepareDebugPayloadExport()
+        let payload = try XCTUnwrap(controller.sharePayload)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: payload.fileURL.path))
+        XCTAssertEqual(payload.fileURL.pathExtension, "json")
+
+        controller.clearPreparedExport()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: payload.fileURL.path))
+    }
+
     private func makeStubSession(
         handler: @escaping StubURLProtocol.Handler
     ) -> URLSession {
