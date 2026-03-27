@@ -2022,6 +2022,51 @@ describe("WorkersAICoachService", () => {
     expect(result.data.responseID).toMatch(/^coach-turn_/);
   });
 
+  it("uses the GLM response_format adapter for fast-tier chat routing", async () => {
+    const aiRun = vi.fn().mockResolvedValue({
+      choices: [
+        {
+          message: {
+            content: JSON.stringify({
+              answerMarkdown: "Stay at the same load this week.",
+              followUps: ["Want a rep-target version?"],
+            }),
+          },
+        },
+      ],
+      usage: { total_tokens: 111 },
+    });
+
+    const service = new WorkersAICoachService(
+      makeEnv({
+        AI: { run: aiRun },
+        MODEL_ROUTING_ENABLED: "true",
+      })
+    );
+    const request = makeChatRequestFixture();
+    request.clientRecentTurns = [];
+
+    const result = await service.generateChat(request);
+
+    expect(aiRun).toHaveBeenCalledTimes(1);
+    const [model, payload] = aiRun.mock.calls[0] ?? [];
+    expect(model).toBe("@cf/zai-org/glm-4.7-flash");
+    expect(payload).toMatchObject({
+      response_format: {
+        type: "json_schema",
+        json_schema: {
+          name: "coach_response",
+          schema: expect.any(Object),
+        },
+      },
+    });
+    expect(payload).not.toHaveProperty("guided_json");
+    expect(result.model).toBe("@cf/zai-org/glm-4.7-flash");
+    expect(result.modelRole).toBe("chat_fast");
+    expect(result.data.answerMarkdown).toBe("Stay at the same load this week.");
+    expect(result.data.followUps).toEqual(["Want a rep-target version?"]);
+  });
+
   it("builds a sanitized raw-first prompt and surfaces high-priority comment constraints", async () => {
     const aiRun = vi.fn().mockResolvedValue({
       response: {
@@ -2105,6 +2150,55 @@ describe("WorkersAICoachService", () => {
     );
     expect(result.data.followUps).toEqual([]);
     expect(result.data.generationStatus).toBe("model");
+  });
+
+  it("applies the async chat fallback order before dropping to plain text", async () => {
+    const aiRun = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Request timed out"))
+      .mockResolvedValueOnce({ response: "not valid json" })
+      .mockResolvedValueOnce({ response: "not valid json" })
+      .mockResolvedValueOnce({ response: "not valid json" })
+      .mockResolvedValueOnce({
+        response:
+          "Use the last repeatable load once more, then add a rep only if the final set still looks controlled.",
+      });
+
+    const service = new WorkersAICoachService(
+      makeEnv({
+        AI: { run: aiRun },
+        MODEL_ROUTING_ENABLED: "true",
+      })
+    );
+    const request = makeChatRequestFixture();
+    request.clientRecentTurns = [];
+
+    const result = await service.generateChat(request, {
+      timeoutProfile: "async_job",
+    });
+
+    expect(aiRun).toHaveBeenCalledTimes(5);
+    expect(aiRun.mock.calls.map(([model]) => model)).toEqual([
+      "@cf/zai-org/glm-4.7-flash",
+      "@cf/zai-org/glm-4.7-flash",
+      DEFAULT_AI_MODEL,
+      "@cf/meta/llama-3.1-8b-instruct-fast",
+      "@cf/meta/llama-3.1-8b-instruct-fast",
+    ]);
+    expect(aiRun.mock.calls[0]?.[1]).toHaveProperty("response_format");
+    expect(aiRun.mock.calls[1]?.[1]).toHaveProperty("response_format");
+    expect(aiRun.mock.calls[2]?.[1]).toHaveProperty("guided_json");
+    expect(aiRun.mock.calls[3]?.[1]).toHaveProperty("response_format");
+    expect(aiRun.mock.calls[4]?.[1]).not.toHaveProperty("guided_json");
+    expect(aiRun.mock.calls[4]?.[1]).not.toHaveProperty("response_format");
+    expect(aiRun.mock.calls[0]?.[1]).toMatchObject({ max_tokens: 1400 });
+    expect(aiRun.mock.calls[1]?.[1]).toMatchObject({ max_tokens: 700 });
+    expect(result.mode).toBe("plain_text_fallback");
+    expect(result.model).toBe("@cf/meta/llama-3.1-8b-instruct-fast");
+    expect(result.modelRole).toBe("chat_reduced_context");
+    expect(result.data.answerMarkdown).toContain(
+      "Use the last repeatable load once more"
+    );
   });
 
   it("removes leaked suggested-changes markdown from the chat answer", async () => {
@@ -2306,6 +2400,58 @@ describe("WorkersAICoachService", () => {
       vi.useRealTimers();
     }
   });
+
+  it("reuses chat memory across routed model swaps when the compatibility key stays stable", async () => {
+    const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
+    const memoryCompatibilityKey =
+      "chat_markdown_v1:chat_async_default_v1:rich_async_family:compact_v1:phase1.v1";
+    const fastKey = storageKeyFromMetadata(
+      "ctx_hash_shared",
+      {
+        contextProfile: "rich_async_v1",
+        routingVersion: "phase1.v1",
+        memoryCompatibilityKey,
+        selectedModel: "@cf/zai-org/glm-4.7-flash",
+      },
+      "test.v1",
+      "@cf/zai-org/glm-4.7-flash"
+    );
+    const balancedKey = storageKeyFromMetadata(
+      "ctx_hash_shared",
+      {
+        contextProfile: "rich_async_v1",
+        routingVersion: "phase1.v1",
+        memoryCompatibilityKey,
+        selectedModel: DEFAULT_AI_MODEL,
+      },
+      "test.v1",
+      DEFAULT_AI_MODEL
+    );
+
+    await repository.appendChatMemory(
+      "install_001",
+      fastKey,
+      [],
+      "How should I progress next week?",
+      "Stay at the same load."
+    );
+
+    const reusedMemory = await repository.getChatMemory(
+      "install_001",
+      balancedKey
+    );
+
+    expect(reusedMemory?.recentTurns).toEqual([
+      {
+        role: "user",
+        content: "How should I progress next week?",
+      },
+      {
+        role: "assistant",
+        content: "Stay at the same load.",
+      },
+    ]);
+  });
 });
 
 function stubInferenceService(overrides?: {
@@ -2384,6 +2530,16 @@ function makeEnv(overrides: Partial<Env> = {}): Env {
     COACH_INTERNAL_TOKEN: "internal-token",
     AI_MODEL: DEFAULT_AI_MODEL,
     COACH_PROMPT_VERSION: "test.v1",
+    MODEL_ROUTING_ENABLED: "false",
+    MODEL_ROUTING_VERSION: "phase1.v1",
+    CHAT_FAST_MODEL: "@cf/zai-org/glm-4.7-flash",
+    CHAT_BALANCED_MODEL: DEFAULT_AI_MODEL,
+    CHAT_REDUCED_CONTEXT_MODEL: "@cf/meta/llama-3.1-8b-instruct-fast",
+    SUMMARY_FAST_MODEL: "@cf/zai-org/glm-4.7-flash",
+    SUMMARY_BALANCED_MODEL: DEFAULT_AI_MODEL,
+    SYNC_FALLBACK_MODEL: "@cf/meta/llama-3.1-8b-instruct-fast",
+    INSIGHTS_BALANCED_MODEL: DEFAULT_AI_MODEL,
+    QUALITY_ESCALATION_ENABLED: "false",
     ...overrides,
   };
 }

@@ -30,8 +30,22 @@ import type {
   CoachKVNamespace,
   CoachR2Bucket,
 } from "./state";
+import {
+  DEFAULT_AI_MODEL,
+  buildChatRoutingAttempts,
+  buildChatRoutingDecision,
+  buildProfileInsightsRoutingDecision,
+  buildWorkoutSummaryRoutingAttempts,
+  buildWorkoutSummaryRoutingDecision,
+  type ChatRoutingAttempt,
+  type CoachModelRole,
+  type CoachPayloadTier,
+  type CoachRoutingUseCase,
+  type StructuredAdapter,
+  type WorkoutSummaryRoutingAttempt,
+} from "./routing";
 
-export const DEFAULT_AI_MODEL = "@cf/mistralai/mistral-small-3.1-24b-instruct";
+export { DEFAULT_AI_MODEL } from "./routing";
 const PROFILE_INSIGHTS_STRUCTURED_MAX_TOKENS = 550;
 const PROFILE_INSIGHTS_ASYNC_STRUCTURED_MAX_TOKENS = 1_000;
 const PROFILE_INSIGHTS_PLAIN_TEXT_MAX_TOKENS = 260;
@@ -87,12 +101,31 @@ export interface Env {
   COACH_INTERNAL_TOKEN: string;
   AI_MODEL?: string;
   COACH_PROMPT_VERSION?: string;
+  MODEL_ROUTING_ENABLED?: string;
+  MODEL_ROUTING_VERSION?: string;
+  CHAT_FAST_MODEL?: string;
+  CHAT_BALANCED_MODEL?: string;
+  CHAT_REDUCED_CONTEXT_MODEL?: string;
+  SUMMARY_FAST_MODEL?: string;
+  SUMMARY_BALANCED_MODEL?: string;
+  INSIGHTS_BALANCED_MODEL?: string;
+  INSIGHTS_FAST_MODEL?: string;
+  SYNC_FALLBACK_MODEL?: string;
+  QUALITY_ESCALATION_MODEL?: string;
+  QUALITY_ESCALATION_ENABLED?: string;
 }
 
 export interface InferenceResult<T> {
   data: T;
   responseId?: string;
   model: string;
+  selectedModel?: string;
+  modelRole?: CoachModelRole;
+  useCase?: CoachRoutingUseCase;
+  routingVersion?: string;
+  payloadTier?: CoachPayloadTier;
+  contextProfile?: CoachContextProfile;
+  memoryCompatibilityKey?: string;
   mode?: string;
   usage?: unknown;
   promptBytes?: number;
@@ -179,6 +212,7 @@ export class WorkersAICoachService implements CoachInferenceService {
     const timeoutProfile = options.timeoutProfile ?? "sync";
     const timeouts =
       timeoutProfile === "async_job" ? ASYNC_LONG_TIMEOUTS : PROFILE_INSIGHTS_TIMEOUTS;
+    const routingDecision = buildProfileInsightsRoutingDecision(this.env, request);
     const promptExecution = resolvePromptExecution(
       request,
       options,
@@ -213,12 +247,19 @@ export class WorkersAICoachService implements CoachInferenceService {
 
     try {
       const invocation = await this.runStructured({
+        selectedModel: routingDecision.selectedModel,
+        structuredAdapter: routingDecision.structuredAdapter,
         operation,
         messages: buildProfileInsightsMessages(request, promptExecution),
         schema: profileInsightsResponseJsonSchema,
         maxTokens: structuredMaxTokens,
         timeoutMs: timeouts.structuredTimeoutMs,
-        extraDetails: sharedDetails,
+        extraDetails: {
+          ...sharedDetails,
+          useCase: routingDecision.useCase,
+          modelRole: routingDecision.modelRole,
+          routingVersion: routingDecision.routingVersion,
+        },
       });
       const parsed = normalizeProfileInsightsResponse(
         parseStructuredOutput(
@@ -227,7 +268,7 @@ export class WorkersAICoachService implements CoachInferenceService {
           "profile insights",
           {
             operation,
-            model: this.modelName,
+            model: routingDecision.selectedModel,
           }
         )
       );
@@ -243,7 +284,14 @@ export class WorkersAICoachService implements CoachInferenceService {
           localFallback,
           promptExecution.derivedAnalytics
         ),
-        model: this.modelName,
+        model: routingDecision.selectedModel,
+        selectedModel: routingDecision.selectedModel,
+        modelRole: routingDecision.modelRole,
+        useCase: routingDecision.useCase,
+        routingVersion: routingDecision.routingVersion,
+        payloadTier: routingDecision.payloadTier,
+        contextProfile: promptExecution.contextProfile,
+        memoryCompatibilityKey: routingDecision.memoryCompatibilityKey,
         mode: "structured",
         usage: extractUsage(invocation.rawResponse),
         promptBytes: invocation.promptBytes,
@@ -259,16 +307,26 @@ export class WorkersAICoachService implements CoachInferenceService {
           JSON.stringify({
             event: "coach_profile_local_fallback",
             operation,
-            model: this.modelName,
+            model: routingDecision.selectedModel,
             promptVariant: sharedDetails.promptVariant,
             reasonCode: error.code,
             reasonDetails: error.details,
+            useCase: routingDecision.useCase,
+            modelRole: routingDecision.modelRole,
+            routingVersion: routingDecision.routingVersion,
           })
         );
 
         return {
           data: localFallback,
-          model: this.modelName,
+          model: routingDecision.selectedModel,
+          selectedModel: routingDecision.selectedModel,
+          modelRole: routingDecision.modelRole,
+          useCase: routingDecision.useCase,
+          routingVersion: routingDecision.routingVersion,
+          payloadTier: routingDecision.payloadTier,
+          contextProfile: promptExecution.contextProfile,
+          memoryCompatibilityKey: routingDecision.memoryCompatibilityKey,
           mode: "local_fallback",
         };
       }
@@ -282,11 +340,14 @@ export class WorkersAICoachService implements CoachInferenceService {
         JSON.stringify({
           event: "coach_profile_structured_fallback",
           operation,
-          model: this.modelName,
+          model: routingDecision.selectedModel,
           promptVariant: sharedDetails.promptVariant,
           reasonCode: error.code,
           reasonDetails: error.details,
           remainingBudgetMs,
+          useCase: routingDecision.useCase,
+          modelRole: routingDecision.modelRole,
+          routingVersion: routingDecision.routingVersion,
         })
       );
 
@@ -295,24 +356,35 @@ export class WorkersAICoachService implements CoachInferenceService {
           JSON.stringify({
             event: "coach_profile_local_fallback",
             operation,
-            model: this.modelName,
+            model: routingDecision.selectedModel,
             promptVariant: sharedDetails.promptVariant,
             reasonCode: error.code,
             reasonDetails: error.details,
             degradedReason: "insufficient_fallback_budget",
             remainingBudgetMs,
+            useCase: routingDecision.useCase,
+            modelRole: routingDecision.modelRole,
+            routingVersion: routingDecision.routingVersion,
           })
         );
 
         return {
           data: localFallback,
-          model: this.modelName,
+          model: routingDecision.selectedModel,
+          selectedModel: routingDecision.selectedModel,
+          modelRole: routingDecision.modelRole,
+          useCase: routingDecision.useCase,
+          routingVersion: routingDecision.routingVersion,
+          payloadTier: routingDecision.payloadTier,
+          contextProfile: promptExecution.contextProfile,
+          memoryCompatibilityKey: routingDecision.memoryCompatibilityKey,
           mode: "local_fallback",
         };
       }
 
       try {
         const fallbackInvocation = await this.runPlainText({
+          selectedModel: routingDecision.selectedModel,
           operation,
           messages: buildFallbackProfileInsightsMessages(request, promptExecution),
           maxTokens: fallbackMaxTokens,
@@ -338,7 +410,14 @@ export class WorkersAICoachService implements CoachInferenceService {
             localFallback,
             promptExecution.derivedAnalytics
           ),
-          model: this.modelName,
+          model: routingDecision.selectedModel,
+          selectedModel: routingDecision.selectedModel,
+          modelRole: routingDecision.modelRole,
+          useCase: routingDecision.useCase,
+          routingVersion: routingDecision.routingVersion,
+          payloadTier: routingDecision.payloadTier,
+          contextProfile: promptExecution.contextProfile,
+          memoryCompatibilityKey: routingDecision.memoryCompatibilityKey,
           mode: "plain_text_fallback",
           usage: extractUsage(fallbackInvocation.rawResponse),
           promptBytes: fallbackInvocation.promptBytes,
@@ -353,22 +432,32 @@ export class WorkersAICoachService implements CoachInferenceService {
           JSON.stringify({
             event: "coach_profile_local_fallback",
             operation,
-            model: this.modelName,
+            model: routingDecision.selectedModel,
             promptVariant: sharedDetails.promptVariant,
             remainingBudgetMs,
             structuredReasonCode: error.code,
             structuredReasonDetails: error.details,
             reasonCode: fallbackError.code,
             reasonDetails: fallbackError.details,
+            useCase: routingDecision.useCase,
+            modelRole: routingDecision.modelRole,
+            routingVersion: routingDecision.routingVersion,
           })
         );
       }
 
-        return {
-          data: localFallback,
-          model: this.modelName,
-          mode: "local_fallback",
-        };
+      return {
+        data: localFallback,
+        model: routingDecision.selectedModel,
+        selectedModel: routingDecision.selectedModel,
+        modelRole: routingDecision.modelRole,
+        useCase: routingDecision.useCase,
+        routingVersion: routingDecision.routingVersion,
+        payloadTier: routingDecision.payloadTier,
+        contextProfile: promptExecution.contextProfile,
+        memoryCompatibilityKey: routingDecision.memoryCompatibilityKey,
+        mode: "local_fallback",
+      };
     }
   }
 
@@ -378,120 +467,99 @@ export class WorkersAICoachService implements CoachInferenceService {
     const operation = "workout_summary";
     const startedAt = Date.now();
     const localFallback = buildNeutralWorkoutSummary(request);
-    const promptExecution = resolvePromptExecution(
-      request as CoachWorkoutSummaryJobCreateRequest & CoachMetadataCarrier,
-      {},
-      "rich_async_v1",
-      "workout_summary_rich_async_v1"
-    );
-    const sharedDetails = {
-      promptVariant: promptExecution.promptProfile,
-      contextProfile: promptExecution.contextProfile,
-      sessionID: request.sessionID,
-      fingerprint: request.fingerprint,
-      requestMode: request.requestMode,
-      trigger: request.trigger,
-      inputMode: request.inputMode,
-      currentExerciseCount: request.currentWorkout.exerciseCount,
-      historyExerciseCount: request.recentExerciseHistory.length,
-      historySessionCount: request.recentExerciseHistory.reduce(
-        (total, exerciseHistory) => total + exerciseHistory.sessions.length,
-        0
-      ),
-    };
+    const routingDecision = buildWorkoutSummaryRoutingDecision(this.env, request);
+    const attempts = buildWorkoutSummaryRoutingAttempts(this.env, routingDecision);
+    const stats = createAttemptAccumulator();
+    const errors: CoachInferenceServiceError[] = [];
 
-    try {
-      const invocation = await this.runStructured({
-        operation,
-        messages: buildWorkoutSummaryMessages(request),
-        schema: workoutSummaryResponseJsonSchema,
-        maxTokens: WORKOUT_SUMMARY_ASYNC_STRUCTURED_MAX_TOKENS,
-        timeoutMs: ASYNC_LONG_TIMEOUTS.structuredTimeoutMs,
-        extraDetails: sharedDetails,
-      });
-      const parsed = normalizeWorkoutSummaryResponse(
-        parseStructuredOutput(
-          invocation.rawResponse,
-          workoutSummaryModelOutputSchema,
-          "workout summary",
-          {
-            operation,
-            model: this.modelName,
-            sessionID: request.sessionID,
-            fingerprint: request.fingerprint,
-          }
-        )
-      );
-
-      return {
-        data: {
-          ...parsed,
-          generationStatus: "model",
-        },
-        model: this.modelName,
-        mode: "structured",
-        usage: extractUsage(invocation.rawResponse),
-        promptBytes: invocation.promptBytes,
-        modelDurationMs: invocation.modelDurationMs,
-      };
-    } catch (error) {
-      if (!(error instanceof CoachInferenceServiceError)) {
-        throw error;
-      }
-
-      if (!shouldAttemptWorkoutSummaryPlainTextFallback(error)) {
-        return {
-          data: localFallback,
-          model: this.modelName,
-          mode: "degraded_fallback",
-          promptBytes: resolvePromptBytes(error.details),
-          modelDurationMs: Date.now() - startedAt,
-        };
-      }
-
+    for (const attempt of attempts) {
       const remainingBudgetMs = remainingWorkoutSummaryBudgetMs(
         startedAt,
         ASYNC_LONG_TIMEOUTS.totalBudgetMs
       );
-
-      console.warn(
-        JSON.stringify({
-          event: "coach_workout_summary_structured_fallback",
-          operation,
-          model: this.modelName,
-          reasonCode: error.code,
-          reasonDetails: error.details,
-          remainingBudgetMs,
-          ...sharedDetails,
-        })
+      const timeoutMs = resolveWorkoutSummaryAttemptTimeoutMs(
+        attempt,
+        remainingBudgetMs
       );
 
-      if (remainingBudgetMs < ASYNC_LONG_TIMEOUTS.fallbackMinTimeoutMs) {
-        return {
-          data: localFallback,
-          model: this.modelName,
-          mode: "degraded_fallback",
-          promptBytes: resolvePromptBytes(error.details),
-          modelDurationMs: Date.now() - startedAt,
-        };
+      if (timeoutMs < 1_500) {
+        break;
       }
 
+      const attemptRequest = buildWorkoutSummaryAttemptRequest(
+        request,
+        attempt.payloadTier
+      );
+
       try {
+        if (attempt.mode === "structured") {
+          const invocation = await this.runStructured({
+            selectedModel: attempt.selectedModel,
+            structuredAdapter: attempt.structuredAdapter,
+            operation,
+            messages: buildWorkoutSummaryMessages(attemptRequest),
+            schema: workoutSummaryResponseJsonSchema,
+            maxTokens:
+              attempt.payloadTier === "full"
+                ? WORKOUT_SUMMARY_ASYNC_STRUCTURED_MAX_TOKENS
+                : WORKOUT_SUMMARY_STRUCTURED_MAX_TOKENS,
+            timeoutMs,
+            extraDetails: buildWorkoutSummaryAttemptDetails(
+              attemptRequest,
+              attempt,
+              remainingBudgetMs
+            ),
+          });
+          stats.structuredPromptBytes += invocation.promptBytes;
+          stats.structuredModelDurationMs += invocation.modelDurationMs;
+          const parsed = normalizeWorkoutSummaryResponse(
+            parseStructuredOutput(
+              invocation.rawResponse,
+              workoutSummaryModelOutputSchema,
+              "workout summary",
+              {
+                operation,
+                model: attempt.selectedModel,
+                sessionID: request.sessionID,
+                fingerprint: request.fingerprint,
+              }
+            )
+          );
+
+          return {
+            data: {
+              ...parsed,
+              generationStatus: "model",
+            },
+            model: attempt.selectedModel,
+            selectedModel: attempt.selectedModel,
+            modelRole: attempt.modelRole,
+            useCase: attempt.useCase,
+            routingVersion: attempt.routingVersion,
+            payloadTier: attempt.payloadTier,
+            contextProfile: attempt.contextProfile,
+            mode: "structured",
+            usage: extractUsage(invocation.rawResponse),
+            promptBytes: stats.structuredPromptBytes,
+            modelDurationMs: stats.structuredModelDurationMs,
+          };
+        }
+
         const fallbackInvocation = await this.runPlainText({
+          selectedModel: attempt.selectedModel,
           operation,
-          messages: buildFallbackWorkoutSummaryMessages(request),
-          maxTokens: WORKOUT_SUMMARY_ASYNC_PLAIN_TEXT_MAX_TOKENS,
-          timeoutMs: Math.min(
-            ASYNC_LONG_TIMEOUTS.fallbackTimeoutMs,
+          messages: buildFallbackWorkoutSummaryMessages(attemptRequest),
+          maxTokens: WORKOUT_SUMMARY_PLAIN_TEXT_MAX_TOKENS,
+          timeoutMs,
+          includeFallbackNotice: false,
+          extraDetails: buildWorkoutSummaryAttemptDetails(
+            attemptRequest,
+            attempt,
             remainingBudgetMs
           ),
-          includeFallbackNotice: false,
-          extraDetails: {
-            ...sharedDetails,
-            fallbackTrigger: error.code,
-            remainingBudgetMs,
-          },
         });
+        stats.fallbackPromptBytes = fallbackInvocation.promptBytes;
+        stats.fallbackModelDurationMs = fallbackInvocation.modelDurationMs;
 
         return {
           data: {
@@ -503,42 +571,67 @@ export class WorkersAICoachService implements CoachInferenceService {
             ),
             generationStatus: "model",
           },
-          model: this.modelName,
+          model: attempt.selectedModel,
+          selectedModel: attempt.selectedModel,
+          modelRole: attempt.modelRole,
+          useCase: attempt.useCase,
+          routingVersion: attempt.routingVersion,
+          payloadTier: attempt.payloadTier,
+          contextProfile: attempt.contextProfile,
           mode: "plain_text_fallback",
           usage: extractUsage(fallbackInvocation.rawResponse),
-          promptBytes: resolvePromptBytes(error.details),
-          fallbackPromptBytes: fallbackInvocation.promptBytes,
-          modelDurationMs: resolveModelDurationMs(error.details),
-          fallbackModelDurationMs: fallbackInvocation.modelDurationMs,
+          promptBytes: stats.structuredPromptBytes || undefined,
+          fallbackPromptBytes: stats.fallbackPromptBytes,
+          modelDurationMs: stats.structuredModelDurationMs || undefined,
+          fallbackModelDurationMs: stats.fallbackModelDurationMs,
         };
-      } catch (fallbackError) {
-        if (!(fallbackError instanceof CoachInferenceServiceError)) {
-          throw fallbackError;
+      } catch (error) {
+        if (!(error instanceof CoachInferenceServiceError)) {
+          throw error;
         }
+
+        errors.push(error);
+        stats.structuredPromptBytes += resolvePromptBytes(error.details) ?? 0;
+        stats.structuredModelDurationMs +=
+          resolveModelDurationMs(error.details) ?? 0;
 
         console.warn(
           JSON.stringify({
-            event: "coach_workout_summary_degraded_response",
+            event: "coach_workout_summary_attempt_failed",
             operation,
-            model: this.modelName,
-            reasonCode: fallbackError.code,
-            reasonDetails: fallbackError.details,
-            originalReasonCode: error.code,
-            originalReasonDetails: error.details,
-            ...sharedDetails,
+            model: attempt.selectedModel,
+            modelRole: attempt.modelRole,
+            useCase: attempt.useCase,
+            routingVersion: attempt.routingVersion,
+            fallbackStage: attempt.fallbackStage,
+            mode: attempt.mode,
+            reasonCode: error.code,
+            reasonDetails: error.details,
+            remainingBudgetMs,
           })
         );
-
-        return {
-          data: localFallback,
-          model: this.modelName,
-          mode: "degraded_fallback",
-          promptBytes: resolvePromptBytes(error.details),
-          fallbackPromptBytes: resolvePromptBytes(fallbackError.details),
-          modelDurationMs: Date.now() - startedAt,
-        };
       }
     }
+
+    return {
+      data: localFallback,
+      model:
+        (errors.at(-1)?.details?.model as string | undefined) ??
+        routingDecision.selectedModel,
+      selectedModel:
+        (errors.at(-1)?.details?.model as string | undefined) ??
+        routingDecision.selectedModel,
+      modelRole: routingDecision.modelRole,
+      useCase: routingDecision.useCase,
+      routingVersion: routingDecision.routingVersion,
+      payloadTier: "reduced",
+      contextProfile: "rich_async_v1",
+      mode: "degraded_fallback",
+      promptBytes: stats.structuredPromptBytes || undefined,
+      fallbackPromptBytes: stats.fallbackPromptBytes,
+      modelDurationMs: stats.structuredModelDurationMs || undefined,
+      fallbackModelDurationMs: stats.fallbackModelDurationMs,
+    };
   }
 
   async generateChat(
@@ -547,202 +640,222 @@ export class WorkersAICoachService implements CoachInferenceService {
   ): Promise<InferenceResult<CoachChatResponse>> {
     const operation = "chat";
     const turnID = options.responseId ?? buildOpaqueResponseID();
+    const routingDecision = buildChatRoutingDecision(this.env, request, {
+      timeoutProfile: options.timeoutProfile,
+    });
+    const attempts = buildChatRoutingAttempts(this.env, routingDecision);
     const promptExecution = resolvePromptExecution(
       request,
       options,
-      options.timeoutProfile === "async_job"
-        ? "rich_async_analytics_v1"
-        : "compact_sync_v2",
-      options.timeoutProfile === "async_job"
-        ? "chat_rich_async_analytics_v1"
-        : "chat_compact_sync_v2"
+      routingDecision.allowedContextProfiles[0] ?? "compact_sync_v2",
+      resolveDefaultChatPromptProfile(options.timeoutProfile)
     );
-    const messages = buildChatMessages(request, promptExecution);
-    const localFallback = buildNeutralChatResponse(
-      request,
-      promptExecution.derivedAnalytics
-    );
+    const localFallback = buildNeutralChatResponse(request, promptExecution.derivedAnalytics);
     const startedAt = Date.now();
     const timeouts =
       options.timeoutProfile === "async_job"
         ? ASYNC_LONG_TIMEOUTS
         : SYNC_CHAT_TIMEOUTS;
-    const sharedDetails = {
-      promptVariant: promptExecution.promptProfile,
-      contextProfile: promptExecution.contextProfile,
-      turnID,
-      recentTurnCount: request.clientRecentTurns.length,
-      recentTurnChars: totalTurnCharacters(request.clientRecentTurns),
-      questionChars: request.question.trim().length,
-    };
-    const structuredMaxTokens = isRichContextProfile(promptExecution.contextProfile)
-      ? CHAT_ASYNC_STRUCTURED_MAX_TOKENS
-      : CHAT_STRUCTURED_MAX_TOKENS;
-    const fallbackMaxTokens = isRichContextProfile(promptExecution.contextProfile)
-      ? CHAT_ASYNC_FALLBACK_MAX_TOKENS
-      : CHAT_FALLBACK_MAX_TOKENS;
+    const stats = createAttemptAccumulator();
+    const errors: CoachInferenceServiceError[] = [];
 
-    try {
-      const rawResponse = await this.runStructured({
-        operation,
-        messages,
-        schema: chatResponseJsonSchema,
-        maxTokens: structuredMaxTokens,
-        timeoutMs: timeouts.structuredTimeoutMs,
-        extraDetails: sharedDetails,
-      });
-      const parsed = normalizeChatResponse(
-        parseStructuredOutput(
-          rawResponse.rawResponse,
-          chatResponseModelOutputSchema,
-          "chat",
-          {
-            operation,
-            model: this.modelName,
-            turnID,
-          }
-        )
+    for (const attempt of attempts) {
+      const remainingBudgetMs = remainingChatBudgetMs(startedAt, timeouts.totalBudgetMs);
+      const timeoutMs = resolveChatAttemptTimeoutMs(
+        attempt,
+        remainingBudgetMs,
+        options.timeoutProfile
       );
 
-      return {
-        data: {
-          ...applyChatGuardrails(request, {
-            ...parsed,
-            generationStatus: "model",
-          }, promptExecution.derivedAnalytics),
-          responseID: turnID,
-        },
-        responseId: turnID,
-        model: this.modelName,
-        mode: "structured",
-        usage: extractUsage(rawResponse.rawResponse),
-        promptBytes: rawResponse.promptBytes,
-        modelDurationMs: rawResponse.modelDurationMs,
+      if (timeoutMs < timeouts.fallbackMinTimeoutMs) {
+        break;
+      }
+
+      const attemptExecution = {
+        ...promptExecution,
+        contextProfile: attempt.contextProfile,
+        promptProfile: attempt.promptProfile,
       };
-    } catch (error) {
-      if (!(error instanceof CoachInferenceServiceError)) {
-        throw error;
-      }
-      if (!shouldAttemptChatPlainTextFallback(error)) {
-        throw error;
-      }
-
-      const remainingBudgetMs = remainingChatBudgetMs(
-        startedAt,
-        timeouts.totalBudgetMs
-      );
-
-      console.warn(
-        JSON.stringify({
-          event: "coach_chat_structured_fallback",
-          operation,
-          model: this.modelName,
-          turnID,
-          reasonCode: error.code,
-          reasonDetails: error.details,
-          remainingBudgetMs,
-        })
-      );
-
-      if (remainingBudgetMs < timeouts.fallbackMinTimeoutMs) {
-        console.warn(
-          JSON.stringify({
-            event: "coach_chat_degraded_response",
-            operation,
-            model: this.modelName,
-            turnID,
-            degradedReason: "insufficient_fallback_budget",
-            reasonCode: error.code,
-            reasonDetails: error.details,
-            remainingBudgetMs,
-          })
-        );
-
-        return buildDegradedChatResult({
-          request,
-          responseId: turnID,
-          fallback: localFallback,
-          model: this.modelName,
-          mode: "degraded_fallback",
-          startedAt,
-          derivedAnalytics: promptExecution.derivedAnalytics,
-          errors: [error],
-        });
-      }
+      const structuredMaxTokens = isRichContextProfile(attempt.contextProfile)
+        ? CHAT_ASYNC_STRUCTURED_MAX_TOKENS
+        : CHAT_STRUCTURED_MAX_TOKENS;
+      const fallbackMaxTokens = isRichContextProfile(attempt.contextProfile)
+        ? CHAT_ASYNC_FALLBACK_MAX_TOKENS
+        : CHAT_FALLBACK_MAX_TOKENS;
 
       try {
+        if (attempt.mode === "structured") {
+          const rawResponse = await this.runStructured({
+            selectedModel: attempt.selectedModel,
+            structuredAdapter: attempt.structuredAdapter,
+            operation,
+            messages: buildChatMessages(request, attemptExecution),
+            schema: chatResponseJsonSchema,
+            maxTokens: structuredMaxTokens,
+            timeoutMs,
+            extraDetails: buildChatAttemptDetails(
+              request,
+              attempt,
+              turnID,
+              remainingBudgetMs
+            ),
+          });
+          stats.structuredPromptBytes += rawResponse.promptBytes;
+          stats.structuredModelDurationMs += rawResponse.modelDurationMs;
+          const parsed = normalizeChatResponse(
+            parseStructuredOutput(
+              rawResponse.rawResponse,
+              chatResponseModelOutputSchema,
+              "chat",
+              {
+                operation,
+                model: attempt.selectedModel,
+                turnID,
+              }
+            )
+          );
+
+          return {
+            data: {
+              ...applyChatGuardrails(
+                request,
+                {
+                  ...parsed,
+                  generationStatus: "model",
+                },
+                attemptExecution.derivedAnalytics
+              ),
+              responseID: turnID,
+            },
+            responseId: turnID,
+            model: attempt.selectedModel,
+            selectedModel: attempt.selectedModel,
+            modelRole: attempt.modelRole,
+            useCase: attempt.useCase,
+            routingVersion: attempt.routingVersion,
+            payloadTier: attempt.payloadTier,
+            contextProfile: attempt.contextProfile,
+            memoryCompatibilityKey: attempt.memoryCompatibilityKey,
+            mode: "structured",
+            usage: extractUsage(rawResponse.rawResponse),
+            promptBytes: stats.structuredPromptBytes,
+            modelDurationMs: stats.structuredModelDurationMs,
+          };
+        }
+
         const fallbackResponse = await this.runPlainText({
+          selectedModel: attempt.selectedModel,
           operation,
-          messages: buildFallbackChatMessages(request, promptExecution),
+          messages: buildFallbackChatMessages(request, attemptExecution),
           maxTokens: fallbackMaxTokens,
-          timeoutMs: Math.min(timeouts.fallbackTimeoutMs, remainingBudgetMs),
-          extraDetails: {
-            ...sharedDetails,
-            fallbackTrigger: error.code,
-            remainingBudgetMs,
-          },
+          timeoutMs,
+          extraDetails: buildChatAttemptDetails(
+            request,
+            attempt,
+            turnID,
+            remainingBudgetMs
+          ),
         });
         const answerMarkdown = extractPlainText(
           fallbackResponse.rawResponse,
           "chat fallback"
         );
+        stats.fallbackPromptBytes = fallbackResponse.promptBytes;
+        stats.fallbackModelDurationMs = fallbackResponse.modelDurationMs;
 
         return {
           data: {
-            ...applyChatGuardrails(request, {
-              answerMarkdown,
-              followUps: [],
-              generationStatus: "model",
-            }, promptExecution.derivedAnalytics),
+            ...applyChatGuardrails(
+              request,
+              {
+                answerMarkdown,
+                followUps: [],
+                generationStatus: "model",
+              },
+              attemptExecution.derivedAnalytics
+            ),
             responseID: turnID,
           },
           responseId: turnID,
-          model: this.modelName,
+          model: attempt.selectedModel,
+          selectedModel: attempt.selectedModel,
+          modelRole: attempt.modelRole,
+          useCase: attempt.useCase,
+          routingVersion: attempt.routingVersion,
+          payloadTier: attempt.payloadTier,
+          contextProfile: attempt.contextProfile,
+          memoryCompatibilityKey: attempt.memoryCompatibilityKey,
           mode: "plain_text_fallback",
           usage: extractUsage(fallbackResponse.rawResponse),
-          promptBytes: resolvePromptBytes(error.details),
-          fallbackPromptBytes: fallbackResponse.promptBytes,
-          modelDurationMs: resolveModelDurationMs(error.details),
-          fallbackModelDurationMs: fallbackResponse.modelDurationMs,
+          promptBytes: stats.structuredPromptBytes || undefined,
+          fallbackPromptBytes: stats.fallbackPromptBytes,
+          modelDurationMs: stats.structuredModelDurationMs || undefined,
+          fallbackModelDurationMs: stats.fallbackModelDurationMs,
         };
-      } catch (fallbackError) {
-        if (!(fallbackError instanceof CoachInferenceServiceError)) {
-          throw fallbackError;
+      } catch (error) {
+        if (!(error instanceof CoachInferenceServiceError)) {
+          throw error;
         }
+        errors.push(error);
+        stats.structuredPromptBytes += resolvePromptBytes(error.details) ?? 0;
+        stats.structuredModelDurationMs +=
+          resolveModelDurationMs(error.details) ?? 0;
 
         console.warn(
           JSON.stringify({
-            event: "coach_chat_degraded_response",
+            event: "coach_chat_attempt_failed",
             operation,
-            model: this.modelName,
+            model: attempt.selectedModel,
+            modelRole: attempt.modelRole,
+            useCase: attempt.useCase,
+            routingVersion: attempt.routingVersion,
+            contextProfile: attempt.contextProfile,
             turnID,
-            degradedReason: "fallback_failed",
-            reasonCode: fallbackError.code,
-            reasonDetails: fallbackError.details,
-            originalReasonCode: error.code,
-            originalReasonDetails: error.details,
+            fallbackStage: attempt.fallbackStage,
+            mode: attempt.mode,
+            reasonCode: error.code,
+            reasonDetails: error.details,
+            remainingBudgetMs,
           })
         );
-
-        return buildDegradedChatResult({
-          request,
-          responseId: turnID,
-          fallback: localFallback,
-          model: this.modelName,
-          mode: "degraded_fallback",
-          startedAt,
-          derivedAnalytics: promptExecution.derivedAnalytics,
-          errors: [fallbackError, error],
-        });
       }
     }
-  }
 
-  private get modelName(): string {
-    return this.env.AI_MODEL?.trim() || DEFAULT_AI_MODEL;
+    return buildDegradedChatResult({
+      request,
+      responseId: turnID,
+      fallback: localFallback,
+      model:
+        (errors.at(-1)?.details?.model as string | undefined) ??
+        routingDecision.selectedModel,
+      mode: "degraded_fallback",
+      startedAt,
+      derivedAnalytics: promptExecution.derivedAnalytics,
+      errors,
+      selectedModel:
+        (errors.at(-1)?.details?.model as string | undefined) ??
+        routingDecision.selectedModel,
+      modelRole: routingDecision.modelRole,
+      useCase: routingDecision.useCase,
+      routingVersion: routingDecision.routingVersion,
+      payloadTier:
+        attempts.at(-1)?.payloadTier ??
+        routingDecision.payloadTier,
+      contextProfile:
+        attempts.at(-1)?.contextProfile ??
+        routingDecision.allowedContextProfiles.at(-1) ??
+        promptExecution.contextProfile,
+      memoryCompatibilityKey: routingDecision.memoryCompatibilityKey,
+      promptBytes: stats.structuredPromptBytes || undefined,
+      fallbackPromptBytes: stats.fallbackPromptBytes,
+      modelDurationMs: stats.structuredModelDurationMs || undefined,
+      fallbackModelDurationMs: stats.fallbackModelDurationMs,
+    });
   }
 
   private async runStructured(input: {
+    selectedModel: string;
+    structuredAdapter: StructuredAdapter;
     operation: "profile_insights" | "workout_summary" | "chat";
     messages: PromptMessage[];
     schema: Record<string, unknown>;
@@ -751,14 +864,11 @@ export class WorkersAICoachService implements CoachInferenceService {
     extraDetails?: Record<string, unknown>;
   }): Promise<ModelInvocationResult> {
     return this.runModel(
-      {
-        messages: input.messages,
-        guided_json: input.schema,
-        max_tokens: input.maxTokens,
-        temperature: 0.2,
-      },
+      input.selectedModel,
+      buildStructuredPayload(input),
       {
         ...input.extraDetails,
+        model: input.selectedModel,
         operation: input.operation,
         mode: "structured",
         messageCount: input.messages.length,
@@ -769,6 +879,7 @@ export class WorkersAICoachService implements CoachInferenceService {
   }
 
   private async runPlainText(input: {
+    selectedModel: string;
     operation: "profile_insights" | "workout_summary" | "chat";
     messages: PromptMessage[];
     maxTokens: number;
@@ -788,6 +899,7 @@ export class WorkersAICoachService implements CoachInferenceService {
         ];
 
     return this.runModel(
+      input.selectedModel,
       {
         messages,
         max_tokens: input.maxTokens,
@@ -795,6 +907,7 @@ export class WorkersAICoachService implements CoachInferenceService {
       },
       {
         ...input.extraDetails,
+        model: input.selectedModel,
         operation: input.operation,
         mode: "plain_text_fallback",
         messageCount: messages.length,
@@ -805,6 +918,7 @@ export class WorkersAICoachService implements CoachInferenceService {
   }
 
   private async runModel(
+    selectedModel: string,
     payload: Record<string, unknown>,
     details: Record<string, unknown>
   ): Promise<ModelInvocationResult> {
@@ -823,7 +937,7 @@ export class WorkersAICoachService implements CoachInferenceService {
 
     try {
       const rawResponse = await withTimeout(
-        this.env.AI.run(this.modelName, payload),
+        this.env.AI.run(selectedModel, payload),
         timeoutMs
       );
       return {
@@ -834,7 +948,7 @@ export class WorkersAICoachService implements CoachInferenceService {
     } catch (error) {
       throw normalizeWorkersAIError(error, {
         ...details,
-        model: this.modelName,
+        model: selectedModel,
         promptBytes,
         modelDurationMs: Date.now() - startedAt,
       });
@@ -846,6 +960,169 @@ interface ModelInvocationResult {
   rawResponse: unknown;
   promptBytes: number;
   modelDurationMs: number;
+}
+
+interface AttemptAccumulator {
+  structuredPromptBytes: number;
+  fallbackPromptBytes?: number;
+  structuredModelDurationMs: number;
+  fallbackModelDurationMs?: number;
+}
+
+function createAttemptAccumulator(): AttemptAccumulator {
+  return {
+    structuredPromptBytes: 0,
+    structuredModelDurationMs: 0,
+  };
+}
+
+function buildStructuredPayload(input: {
+  messages: PromptMessage[];
+  schema: Record<string, unknown>;
+  maxTokens: number;
+  structuredAdapter: StructuredAdapter;
+}): Record<string, unknown> {
+  if (input.structuredAdapter === "response_format_json_schema") {
+    return {
+      messages: input.messages,
+      response_format: {
+        type: "json_schema",
+        json_schema: {
+          name: "coach_response",
+          schema: input.schema,
+        },
+      },
+      max_tokens: input.maxTokens,
+      temperature: 0.2,
+    };
+  }
+
+  return {
+    messages: input.messages,
+    guided_json: input.schema,
+    max_tokens: input.maxTokens,
+    temperature: 0.2,
+  };
+}
+
+function resolveDefaultChatPromptProfile(
+  timeoutProfile: "sync" | "async_job" | undefined
+): string {
+  return timeoutProfile === "async_job"
+    ? "chat_rich_async_analytics_v1"
+    : "chat_compact_sync_v2";
+}
+
+function buildChatAttemptDetails(
+  request: CoachChatRequest,
+  attempt: ChatRoutingAttempt,
+  turnID: string,
+  remainingBudgetMs: number
+): Record<string, unknown> {
+  return {
+    promptVariant: attempt.promptProfile,
+    contextProfile: attempt.contextProfile,
+    modelRole: attempt.modelRole,
+    useCase: attempt.useCase,
+    routingVersion: attempt.routingVersion,
+    fallbackStage: attempt.fallbackStage,
+    turnID,
+    recentTurnCount: request.clientRecentTurns.length,
+    recentTurnChars: totalTurnCharacters(request.clientRecentTurns),
+    questionChars: request.question.trim().length,
+    remainingBudgetMs,
+  };
+}
+
+function buildWorkoutSummaryAttemptDetails(
+  request: CoachWorkoutSummaryJobCreateRequest,
+  attempt: WorkoutSummaryRoutingAttempt,
+  remainingBudgetMs: number
+): Record<string, unknown> {
+  return {
+    promptVariant: attempt.promptProfile,
+    contextProfile: attempt.contextProfile,
+    modelRole: attempt.modelRole,
+    useCase: attempt.useCase,
+    routingVersion: attempt.routingVersion,
+    fallbackStage: attempt.fallbackStage,
+    payloadTier: attempt.payloadTier,
+    sessionID: request.sessionID,
+    fingerprint: request.fingerprint,
+    requestMode: request.requestMode,
+    trigger: request.trigger,
+    inputMode: request.inputMode,
+    currentExerciseCount: request.currentWorkout.exerciseCount,
+    historyExerciseCount: request.recentExerciseHistory.length,
+    historySessionCount: request.recentExerciseHistory.reduce(
+      (total, exerciseHistory) => total + exerciseHistory.sessions.length,
+      0
+    ),
+    remainingBudgetMs,
+  };
+}
+
+function buildWorkoutSummaryAttemptRequest(
+  request: CoachWorkoutSummaryJobCreateRequest,
+  payloadTier: CoachPayloadTier
+): CoachWorkoutSummaryJobCreateRequest {
+  if (payloadTier === "full") {
+    return request;
+  }
+
+  return {
+    ...request,
+    recentExerciseHistory: request.recentExerciseHistory
+      .slice(0, 4)
+      .map((exerciseHistory) => ({
+        ...exerciseHistory,
+        sessions: exerciseHistory.sessions.slice(0, 2).map((session) => ({
+          ...session,
+          completedSets: session.completedSets.slice(0, 4),
+        })),
+      })),
+  };
+}
+
+function resolveChatAttemptTimeoutMs(
+  attempt: ChatRoutingAttempt,
+  remainingBudgetMs: number,
+  timeoutProfile: "sync" | "async_job" | undefined
+): number {
+  const preferred =
+    timeoutProfile === "async_job"
+      ? {
+          primary: 300_000,
+          same_model_reduced_context: 120_000,
+          alternate_model_reduced_context: 90_000,
+          reduced_model_structured: 45_000,
+          reduced_model_plain_text: 30_000,
+        }
+      : {
+          primary: 12_000,
+          same_model_reduced_context: 5_000,
+          alternate_model_reduced_context: 4_000,
+          reduced_model_structured: 3_000,
+          reduced_model_plain_text: 3_000,
+        };
+
+  const stageBudget = preferred[attempt.fallbackStage];
+  return Math.max(Math.min(stageBudget, remainingBudgetMs), 0);
+}
+
+function resolveWorkoutSummaryAttemptTimeoutMs(
+  attempt: WorkoutSummaryRoutingAttempt,
+  remainingBudgetMs: number
+): number {
+  const preferred = {
+    primary: 300_000,
+    same_model_reduced_payload: 120_000,
+    alternate_model_reduced_payload: 90_000,
+    sync_fallback_structured: 45_000,
+    sync_fallback_plain_text: 30_000,
+  };
+
+  return Math.max(Math.min(preferred[attempt.fallbackStage], remainingBudgetMs), 0);
 }
 
 function shouldAttemptPlainTextFallback(
@@ -1609,6 +1886,18 @@ function extractResponsePayload(rawResponse: unknown, label: string): unknown {
     if (typeof rawResponse.output_text === "string" && rawResponse.output_text.trim()) {
       return rawResponse.output_text;
     }
+
+    const choiceContent = extractChoiceMessageContent(rawResponse);
+    if (choiceContent !== undefined) {
+      return choiceContent;
+    }
+
+    if (isRecord(rawResponse.result)) {
+      const nestedChoiceContent = extractChoiceMessageContent(rawResponse.result);
+      if (nestedChoiceContent !== undefined) {
+        return nestedChoiceContent;
+      }
+    }
   }
 
   throw new CoachInferenceServiceError(
@@ -1643,6 +1932,47 @@ function parseJSONPayload(payload: string, label: string): unknown {
       }
     );
   }
+}
+
+function extractChoiceMessageContent(payload: unknown): unknown {
+  if (!isRecord(payload) || !Array.isArray(payload.choices)) {
+    return undefined;
+  }
+
+  const firstChoice = payload.choices[0];
+  if (!isRecord(firstChoice)) {
+    return undefined;
+  }
+
+  const message = firstChoice.message;
+  if (!isRecord(message)) {
+    return undefined;
+  }
+
+  const content = message.content;
+  if (typeof content === "string") {
+    const trimmed = content.trim();
+    return trimmed ? trimmed : undefined;
+  }
+
+  if (Array.isArray(content)) {
+    const text = content
+      .map((item) => {
+        if (typeof item === "string") {
+          return item;
+        }
+        if (isRecord(item) && typeof item.text === "string") {
+          return item.text;
+        }
+        return "";
+      })
+      .join("")
+      .trim();
+
+    return text || undefined;
+  }
+
+  return undefined;
 }
 
 function normalizeWorkersAIError(
@@ -1790,12 +2120,23 @@ function buildDegradedChatResult(input: {
   responseId: string;
   fallback: Omit<CoachChatResponse, "responseID">;
   model: string;
+  selectedModel?: string;
+  modelRole?: CoachModelRole;
+  useCase?: CoachRoutingUseCase;
+  routingVersion?: string;
+  payloadTier?: CoachPayloadTier;
+  contextProfile?: CoachContextProfile;
+  memoryCompatibilityKey?: string;
   mode: string;
   startedAt: number;
   derivedAnalytics?: CoachDerivedAnalytics;
   errors: CoachInferenceServiceError[];
+  promptBytes?: number;
+  fallbackPromptBytes?: number;
+  modelDurationMs?: number;
+  fallbackModelDurationMs?: number;
 }): InferenceResult<CoachChatResponse> {
-  const promptBytes = input.errors
+  const promptBytes = input.promptBytes ?? input.errors
     .map((error) => resolvePromptBytes(error.details))
     .find((value): value is number => value !== undefined);
 
@@ -1810,9 +2151,19 @@ function buildDegradedChatResult(input: {
     },
     responseId: input.responseId,
     model: input.model,
+    selectedModel: input.selectedModel ?? input.model,
+    modelRole: input.modelRole,
+    useCase: input.useCase,
+    routingVersion: input.routingVersion,
+    payloadTier: input.payloadTier,
+    contextProfile: input.contextProfile,
+    memoryCompatibilityKey: input.memoryCompatibilityKey,
     mode: input.mode,
     promptBytes,
-    modelDurationMs: Date.now() - input.startedAt,
+    fallbackPromptBytes: input.fallbackPromptBytes,
+    modelDurationMs:
+      input.modelDurationMs ?? Date.now() - input.startedAt,
+    fallbackModelDurationMs: input.fallbackModelDurationMs,
   };
 }
 

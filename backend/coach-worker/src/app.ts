@@ -23,12 +23,17 @@ import {
 } from "./schemas";
 import {
   CoachInferenceServiceError,
-  DEFAULT_AI_MODEL,
   buildOpaqueResponseID,
   createWorkersAICoachService,
   type CoachInferenceService,
   type Env,
 } from "./openai";
+import {
+  DEFAULT_AI_MODEL,
+  buildChatRoutingDecision,
+  buildProfileInsightsRoutingDecision,
+  buildWorkoutSummaryRoutingDecision,
+} from "./routing";
 import {
   ActiveCoachChatJobError,
   CloudflareCoachStateRepository,
@@ -219,6 +224,13 @@ export function createApp(
           const contextResolveStartedAt = deps.now();
           const context = await stateRepository.resolveCoachContext(body);
           const contextResolveMs = deps.now() - contextResolveStartedAt;
+          const routingDecision = buildProfileInsightsRoutingDecision(env, {
+            ...body,
+            snapshotHash: context.contextHash,
+            snapshot: context.snapshot,
+            snapshotUpdatedAt:
+              context.backupHead?.uploadedAt ?? body.snapshotUpdatedAt,
+          });
           const executionMetadata = buildExecutionMetadata({
             contextProfile: "compact_sync_v2",
             promptProfile: "profile_compact_context_v2",
@@ -226,12 +238,21 @@ export function createApp(
             analyticsVersion: context.analyticsVersion,
             memoryProfile: "compact_v1",
             derivedAnalytics: context.derivedAnalytics,
+            useCase: routingDecision.useCase,
+            modelRole: routingDecision.modelRole,
+            selectedModel: routingDecision.selectedModel,
+            allowedContextProfiles: routingDecision.allowedContextProfiles,
+            payloadTier: routingDecision.payloadTier,
+            routingVersion: routingDecision.routingVersion,
+            memoryCompatibilityKey: routingDecision.memoryCompatibilityKey,
+            promptFamily: routingDecision.promptFamily,
+            contextFamily: routingDecision.contextFamily,
           });
           const storageKey = storageKeyFromMetadata(
             context.contextHash,
             executionMetadata,
             resolvePromptVersion(env),
-            resolveModel(env)
+            routingDecision.selectedModel
           );
           const snapshotBytes = jsonByteLength(context.snapshot);
           const programCommentChars =
@@ -246,6 +267,10 @@ export function createApp(
             installID: body.installID,
             contextSource: context.source,
             profileContextVariant: executionMetadata.promptProfile,
+            useCase: routingDecision.useCase,
+            modelRole: routingDecision.modelRole,
+            selectedModel: routingDecision.selectedModel,
+            routingVersion: routingDecision.routingVersion,
             forceRefresh: body.forceRefresh,
             snapshotBytes,
             programCommentChars,
@@ -281,6 +306,10 @@ export function createApp(
               contextResolveMs,
               insightSource: reusableCachedResponse.insightSource,
               modelInferenceExecuted: false,
+              useCase: routingDecision.useCase,
+              modelRole: routingDecision.modelRole,
+              selectedModel: routingDecision.selectedModel,
+              routingVersion: routingDecision.routingVersion,
               snapshotBytes,
               programCommentChars,
               recentPrCount,
@@ -330,6 +359,11 @@ export function createApp(
             durationMs: deps.now() - startedAt,
             installID: body.installID,
             model: result.model,
+            useCase: result.useCase ?? routingDecision.useCase,
+            modelRole: result.modelRole ?? routingDecision.modelRole,
+            selectedModel: result.selectedModel ?? routingDecision.selectedModel,
+            routingVersion:
+              result.routingVersion ?? routingDecision.routingVersion,
             responseID: result.responseId,
             usage: result.usage,
             inferenceMode: result.mode,
@@ -359,6 +393,17 @@ export function createApp(
           const body = chatJobCreateRequestSchema.parse(rawBody);
           validationRequestPreview = undefined;
           const context = await stateRepository.resolveCoachContext(body);
+          const routingDecision = buildChatRoutingDecision(
+            env,
+            {
+              ...body,
+              snapshotHash: context.contextHash,
+              snapshot: context.snapshot,
+              snapshotUpdatedAt:
+                context.backupHead?.uploadedAt ?? body.snapshotUpdatedAt,
+            },
+            { timeoutProfile: "async_job" }
+          );
           const executionMetadata = buildExecutionMetadata({
             contextProfile: "rich_async_analytics_v1",
             promptProfile: "chat_rich_async_analytics_v1",
@@ -367,12 +412,21 @@ export function createApp(
             memoryProfile: "rich_async_v1",
             jobDeadlineAt: new Date(deps.now() + ASYNC_CHAT_JOB_TTL_MS).toISOString(),
             derivedAnalytics: context.derivedAnalytics,
+            useCase: routingDecision.useCase,
+            modelRole: routingDecision.modelRole,
+            selectedModel: routingDecision.selectedModel,
+            allowedContextProfiles: routingDecision.allowedContextProfiles,
+            payloadTier: routingDecision.payloadTier,
+            routingVersion: routingDecision.routingVersion,
+            memoryCompatibilityKey: routingDecision.memoryCompatibilityKey,
+            promptFamily: routingDecision.promptFamily,
+            contextFamily: routingDecision.contextFamily,
           });
           const storageKey = storageKeyFromMetadata(
             context.contextHash,
             executionMetadata,
             resolvePromptVersion(env),
-            resolveModel(env)
+            routingDecision.selectedModel
           );
           const storedMemory = context.cacheAllowed
             ? await stateRepository.getChatMemory(body.installID, storageKey)
@@ -399,6 +453,10 @@ export function createApp(
             recentTurnChars,
             questionChars,
             clientRequestID: body.clientRequestID,
+            useCase: routingDecision.useCase,
+            modelRole: routingDecision.modelRole,
+            selectedModel: routingDecision.selectedModel,
+            routingVersion: routingDecision.routingVersion,
           };
 
           const job = await stateRepository.createChatJob({
@@ -406,6 +464,7 @@ export function createApp(
             installID: body.installID,
             clientRequestID: body.clientRequestID,
             createdAt,
+            model: routingDecision.selectedModel,
             preparedRequest: {
               ...body,
               snapshotHash: context.contextHash,
@@ -503,6 +562,10 @@ export function createApp(
               questionChars: job.questionChars,
               promptVersion: job.promptVersion,
               model: job.model,
+              useCase: job.preparedRequest.metadata?.useCase,
+              modelRole: job.preparedRequest.metadata?.modelRole,
+              selectedModel: job.preparedRequest.metadata?.selectedModel,
+              routingVersion: job.preparedRequest.metadata?.routingVersion,
             })
           );
 
@@ -520,6 +583,10 @@ export function createApp(
             recentTurnCount,
             recentTurnChars,
             questionChars,
+            useCase: routingDecision.useCase,
+            modelRole: routingDecision.modelRole,
+            selectedModel: routingDecision.selectedModel,
+            routingVersion: routingDecision.routingVersion,
           });
           return json(response, 202);
         }
@@ -530,6 +597,17 @@ export function createApp(
           const body = chatRequestSchema.parse(rawBody);
           validationRequestPreview = undefined;
           const context = await stateRepository.resolveCoachContext(body);
+          const routingDecision = buildChatRoutingDecision(
+            env,
+            {
+              ...body,
+              snapshotHash: context.contextHash,
+              snapshot: context.snapshot,
+              snapshotUpdatedAt:
+                context.backupHead?.uploadedAt ?? body.snapshotUpdatedAt,
+            },
+            { timeoutProfile: "sync" }
+          );
           const executionMetadata = buildExecutionMetadata({
             contextProfile: "compact_sync_v2",
             promptProfile: "chat_compact_sync_v2",
@@ -537,12 +615,21 @@ export function createApp(
             analyticsVersion: context.analyticsVersion,
             memoryProfile: "compact_v1",
             derivedAnalytics: context.derivedAnalytics,
+            useCase: routingDecision.useCase,
+            modelRole: routingDecision.modelRole,
+            selectedModel: routingDecision.selectedModel,
+            allowedContextProfiles: routingDecision.allowedContextProfiles,
+            payloadTier: routingDecision.payloadTier,
+            routingVersion: routingDecision.routingVersion,
+            memoryCompatibilityKey: routingDecision.memoryCompatibilityKey,
+            promptFamily: routingDecision.promptFamily,
+            contextFamily: routingDecision.contextFamily,
           });
           const storageKey = storageKeyFromMetadata(
             context.contextHash,
             executionMetadata,
             resolvePromptVersion(env),
-            resolveModel(env)
+            routingDecision.selectedModel
           );
           const storedMemory = context.cacheAllowed
             ? await stateRepository.getChatMemory(body.installID, storageKey)
@@ -564,6 +651,10 @@ export function createApp(
             recentTurnCount,
             recentTurnChars,
             questionChars,
+            useCase: routingDecision.useCase,
+            modelRole: routingDecision.modelRole,
+            selectedModel: routingDecision.selectedModel,
+            routingVersion: routingDecision.routingVersion,
           };
 
           const inferenceStartedAt = deps.now();
@@ -599,6 +690,11 @@ export function createApp(
             durationMs: deps.now() - startedAt,
             installID: body.installID,
             model: result.model,
+            useCase: result.useCase ?? routingDecision.useCase,
+            modelRole: result.modelRole ?? routingDecision.modelRole,
+            selectedModel: result.selectedModel ?? routingDecision.selectedModel,
+            routingVersion:
+              result.routingVersion ?? routingDecision.routingVersion,
             responseID: result.responseId,
             usage: result.usage,
             inferenceMode: result.mode,
@@ -618,6 +714,7 @@ export function createApp(
           const body = workoutSummaryJobCreateRequestSchema.parse(
             await readJSON(request)
           );
+          const routingDecision = buildWorkoutSummaryRoutingDecision(env, body);
           const executionMetadata = buildExecutionMetadata({
             contextProfile: "rich_async_v1",
             promptProfile: "workout_summary_rich_async_v1",
@@ -627,6 +724,14 @@ export function createApp(
             jobDeadlineAt: new Date(
               deps.now() + ASYNC_WORKOUT_SUMMARY_JOB_TTL_MS
             ).toISOString(),
+            useCase: routingDecision.useCase,
+            modelRole: routingDecision.modelRole,
+            selectedModel: routingDecision.selectedModel,
+            allowedContextProfiles: routingDecision.allowedContextProfiles,
+            payloadTier: routingDecision.payloadTier,
+            routingVersion: routingDecision.routingVersion,
+            promptFamily: routingDecision.promptFamily,
+            contextFamily: routingDecision.contextFamily,
           });
           const currentExerciseCount = body.currentWorkout.exerciseCount;
           const historyExerciseCount = body.recentExerciseHistory.length;
@@ -646,6 +751,10 @@ export function createApp(
             currentExerciseCount,
             historyExerciseCount,
             historySessionCount,
+            useCase: routingDecision.useCase,
+            modelRole: routingDecision.modelRole,
+            selectedModel: routingDecision.selectedModel,
+            routingVersion: routingDecision.routingVersion,
           };
 
           const job = await stateRepository.createWorkoutSummaryJob({
@@ -655,6 +764,7 @@ export function createApp(
             sessionID: body.sessionID,
             fingerprint: body.fingerprint,
             createdAt,
+            model: routingDecision.selectedModel,
             preparedRequest: {
               ...body,
               metadata: executionMetadata,
@@ -733,6 +843,10 @@ export function createApp(
               historySessionCount: job.historySessionCount,
               promptVersion: job.promptVersion,
               model: job.model,
+              useCase: job.preparedRequest.metadata?.useCase,
+              modelRole: job.preparedRequest.metadata?.modelRole,
+              selectedModel: job.preparedRequest.metadata?.selectedModel,
+              routingVersion: job.preparedRequest.metadata?.routingVersion,
               reusedExistingJob,
             })
           );
@@ -755,6 +869,10 @@ export function createApp(
             currentExerciseCount,
             historyExerciseCount,
             historySessionCount,
+            useCase: routingDecision.useCase,
+            modelRole: routingDecision.modelRole,
+            selectedModel: routingDecision.selectedModel,
+            routingVersion: routingDecision.routingVersion,
             reusedExistingJob,
           });
           return json(response, statusCode);
@@ -1673,6 +1791,15 @@ function buildExecutionMetadata(input: {
   memoryProfile: CoachExecutionMetadata["memoryProfile"];
   jobDeadlineAt?: string;
   derivedAnalytics?: CoachExecutionMetadata["derivedAnalytics"];
+  useCase?: CoachExecutionMetadata["useCase"];
+  modelRole?: CoachExecutionMetadata["modelRole"];
+  selectedModel?: CoachExecutionMetadata["selectedModel"];
+  allowedContextProfiles?: CoachExecutionMetadata["allowedContextProfiles"];
+  payloadTier?: CoachExecutionMetadata["payloadTier"];
+  routingVersion?: CoachExecutionMetadata["routingVersion"];
+  memoryCompatibilityKey?: CoachExecutionMetadata["memoryCompatibilityKey"];
+  promptFamily?: CoachExecutionMetadata["promptFamily"];
+  contextFamily?: CoachExecutionMetadata["contextFamily"];
 }): CoachExecutionMetadata {
   return {
     contextProfile: input.contextProfile,
@@ -1682,6 +1809,15 @@ function buildExecutionMetadata(input: {
     memoryProfile: input.memoryProfile,
     jobDeadlineAt: input.jobDeadlineAt,
     derivedAnalytics: input.derivedAnalytics,
+    useCase: input.useCase,
+    modelRole: input.modelRole,
+    selectedModel: input.selectedModel,
+    allowedContextProfiles: input.allowedContextProfiles,
+    payloadTier: input.payloadTier,
+    routingVersion: input.routingVersion,
+    memoryCompatibilityKey: input.memoryCompatibilityKey,
+    promptFamily: input.promptFamily,
+    contextFamily: input.contextFamily,
   };
 }
 

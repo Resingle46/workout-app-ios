@@ -15,6 +15,7 @@ import {
   type CoachExecutionMetadata,
   type CoachMemoryProfile,
 } from "./context";
+import { DEFAULT_MODEL_ROUTING_VERSION } from "./routing";
 import type {
   AppSnapshotPayload,
   BackupDownloadResponse,
@@ -134,6 +135,7 @@ export interface CreateCoachChatJobInput {
   installID: string;
   clientRequestID: string;
   createdAt: string;
+  model: string;
   preparedRequest: PreparedCoachChatJobRequest;
   contextHash: string;
   contextSource: ResolvedCoachContext["source"];
@@ -174,6 +176,7 @@ export interface CreateWorkoutSummaryJobInput {
   sessionID: string;
   fingerprint: string;
   createdAt: string;
+  model: string;
   preparedRequest: PreparedWorkoutSummaryJobRequest;
   requestMode: CoachWorkoutSummaryRequestMode;
   trigger: CoachWorkoutSummaryTrigger;
@@ -279,6 +282,8 @@ export interface ContextStorageKeyInput {
   promptVersion?: string;
   model?: string;
   memoryProfile?: CoachMemoryProfile;
+  routingVersion?: string;
+  memoryCompatibilityKey?: string;
 }
 
 export interface CoachStateStore {
@@ -616,15 +621,37 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
     installID: string,
     key: ContextStorageKeyInput
   ): Promise<CoachProfileInsightsResponse | null> {
-    return this.kv.get<CoachProfileInsightsResponse>(
+    const resolvedPromptVersion = key.promptVersion ?? this.promptVersion;
+    const resolvedModel = key.model ?? this.model;
+    const resolvedRoutingVersion =
+      key.routingVersion ?? DEFAULT_MODEL_ROUTING_VERSION;
+    const primary = await this.kv.get<CoachProfileInsightsResponse>(
       insightsCacheKey(
         installID,
         key.contextHash,
         key.contextProfile,
         key.contextVersion,
         key.analyticsVersion,
-        key.promptVersion ?? this.promptVersion,
-        key.model ?? this.model
+        resolvedPromptVersion,
+        resolvedRoutingVersion,
+        resolvedModel
+      ),
+      "json"
+    );
+
+    if (primary) {
+      return primary;
+    }
+
+    return this.kv.get<CoachProfileInsightsResponse>(
+      legacyInsightsCacheKey(
+        installID,
+        key.contextHash,
+        key.contextProfile,
+        key.contextVersion,
+        key.analyticsVersion,
+        resolvedPromptVersion,
+        resolvedModel
       ),
       "json"
     );
@@ -635,6 +662,10 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
     key: ContextStorageKeyInput,
     response: CoachProfileInsightsResponse
   ): Promise<void> {
+    const resolvedPromptVersion = key.promptVersion ?? this.promptVersion;
+    const resolvedModel = key.model ?? this.model;
+    const resolvedRoutingVersion =
+      key.routingVersion ?? DEFAULT_MODEL_ROUTING_VERSION;
     await this.kv.put(
       insightsCacheKey(
         installID,
@@ -642,8 +673,9 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
         key.contextProfile,
         key.contextVersion,
         key.analyticsVersion,
-        key.promptVersion ?? this.promptVersion,
-        key.model ?? this.model
+        resolvedPromptVersion,
+        resolvedRoutingVersion,
+        resolvedModel
       ),
       JSON.stringify(response),
       { expirationTtl: INSIGHTS_CACHE_TTL_SECONDS }
@@ -654,16 +686,42 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
     installID: string,
     key: ContextStorageKeyInput
   ): Promise<StoredChatMemory | null> {
-    return this.kv.get<StoredChatMemory>(
+    const resolvedPromptVersion = key.promptVersion ?? this.promptVersion;
+    const resolvedModel = key.model ?? this.model;
+    const resolvedRoutingVersion =
+      key.routingVersion ?? DEFAULT_MODEL_ROUTING_VERSION;
+    const resolvedMemoryProfile = key.memoryProfile ?? "compact_v1";
+    const resolvedMemoryCompatibilityKey =
+      key.memoryCompatibilityKey ?? resolvedModel;
+    const primary = await this.kv.get<StoredChatMemory>(
       chatMemoryKey(
         installID,
         key.contextHash,
         key.contextProfile,
         key.contextVersion,
         key.analyticsVersion,
-        key.promptVersion ?? this.promptVersion,
-        key.model ?? this.model,
-        key.memoryProfile ?? "compact_v1"
+        resolvedPromptVersion,
+        resolvedRoutingVersion,
+        resolvedMemoryCompatibilityKey,
+        resolvedMemoryProfile
+      ),
+      "json"
+    );
+
+    if (primary) {
+      return primary;
+    }
+
+    return this.kv.get<StoredChatMemory>(
+      legacyChatMemoryKey(
+        installID,
+        key.contextHash,
+        key.contextProfile,
+        key.contextVersion,
+        key.analyticsVersion,
+        resolvedPromptVersion,
+        resolvedModel,
+        resolvedMemoryProfile
       ),
       "json"
     );
@@ -693,7 +751,8 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
         key.contextVersion,
         key.analyticsVersion,
         key.promptVersion ?? this.promptVersion,
-        key.model ?? this.model,
+        key.routingVersion ?? DEFAULT_MODEL_ROUTING_VERSION,
+        key.memoryCompatibilityKey ?? key.model ?? this.model,
         key.memoryProfile ?? "compact_v1"
       ),
       JSON.stringify(memory),
@@ -727,11 +786,11 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
               context_source,
               chat_memory_hit,
               snapshot_bytes,
-              recent_turn_count,
-              recent_turn_chars,
-              question_chars,
-              prompt_version,
-              model
+            recent_turn_count,
+            recent_turn_chars,
+            question_chars,
+            prompt_version,
+            model
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `
         )
@@ -750,7 +809,7 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
           input.recentTurnChars,
           input.questionChars,
           this.promptVersion,
-          this.model
+          input.model
         )
         .run();
     } catch (error) {
@@ -944,7 +1003,7 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
           job.contextHash,
           job.preparedRequest.metadata,
           job.promptVersion,
-          job.model
+          job.preparedRequest.metadata?.selectedModel ?? job.model
         ),
         job.preparedRequest.clientRecentTurns,
         job.preparedRequest.question,
@@ -981,7 +1040,7 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
       input.sessionID,
       input.fingerprint,
       this.promptVersion,
-      this.model
+      input.model
     );
     if (existingByFingerprint) {
       return existingByFingerprint;
@@ -1027,7 +1086,7 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
           input.historyExerciseCount,
           input.historySessionCount,
           this.promptVersion,
-          this.model
+          input.model
         )
         .run();
     } catch {
@@ -1045,7 +1104,7 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
         input.sessionID,
         input.fingerprint,
         this.promptVersion,
-        this.model
+        input.model
       );
       if (duplicatedByFingerprint) {
         return duplicatedByFingerprint;
@@ -1817,9 +1876,22 @@ export class InMemoryCoachStateRepository implements CoachStateStore {
           key.contextVersion,
           key.analyticsVersion,
           key.promptVersion ?? this.promptVersion,
+          key.routingVersion ?? DEFAULT_MODEL_ROUTING_VERSION,
           key.model ?? this.model
         )
-      ) ?? null
+      ) ??
+      this.insightsCache.get(
+        legacyInsightsCacheKey(
+          installID,
+          key.contextHash,
+          key.contextProfile,
+          key.contextVersion,
+          key.analyticsVersion,
+          key.promptVersion ?? this.promptVersion,
+          key.model ?? this.model
+        )
+      ) ??
+      null
     );
   }
 
@@ -1836,6 +1908,7 @@ export class InMemoryCoachStateRepository implements CoachStateStore {
         key.contextVersion,
         key.analyticsVersion,
         key.promptVersion ?? this.promptVersion,
+        key.routingVersion ?? DEFAULT_MODEL_ROUTING_VERSION,
         key.model ?? this.model
       ),
       response
@@ -1855,10 +1928,24 @@ export class InMemoryCoachStateRepository implements CoachStateStore {
           key.contextVersion,
           key.analyticsVersion,
           key.promptVersion ?? this.promptVersion,
+          key.routingVersion ?? DEFAULT_MODEL_ROUTING_VERSION,
+          key.memoryCompatibilityKey ?? key.model ?? this.model,
+          key.memoryProfile ?? "compact_v1"
+        )
+      ) ??
+      this.chatMemory.get(
+        legacyChatMemoryKey(
+          installID,
+          key.contextHash,
+          key.contextProfile,
+          key.contextVersion,
+          key.analyticsVersion,
+          key.promptVersion ?? this.promptVersion,
           key.model ?? this.model,
           key.memoryProfile ?? "compact_v1"
         )
-      ) ?? null
+      ) ??
+      null
     );
   }
 
@@ -1885,7 +1972,8 @@ export class InMemoryCoachStateRepository implements CoachStateStore {
         key.contextVersion,
         key.analyticsVersion,
         key.promptVersion ?? this.promptVersion,
-        key.model ?? this.model,
+        key.routingVersion ?? DEFAULT_MODEL_ROUTING_VERSION,
+        key.memoryCompatibilityKey ?? key.model ?? this.model,
         key.memoryProfile ?? "compact_v1"
       ),
       memory
@@ -1927,7 +2015,7 @@ export class InMemoryCoachStateRepository implements CoachStateStore {
       recentTurnChars: input.recentTurnChars,
       questionChars: input.questionChars,
       promptVersion: this.promptVersion,
-      model: this.model,
+      model: input.model,
     };
     this.chatJobs.set(created.jobID, created);
     return created;
@@ -2050,7 +2138,7 @@ export class InMemoryCoachStateRepository implements CoachStateStore {
           job.contextHash,
           job.preparedRequest.metadata,
           job.promptVersion,
-          job.model
+          job.preparedRequest.metadata?.selectedModel ?? job.model
         ),
         job.preparedRequest.clientRecentTurns,
         job.preparedRequest.question,
@@ -2080,7 +2168,7 @@ export class InMemoryCoachStateRepository implements CoachStateStore {
           job.sessionID === input.sessionID &&
           job.fingerprint === input.fingerprint &&
           job.promptVersion === this.promptVersion &&
-          job.model === this.model &&
+          job.model === input.model &&
           isReusableWorkoutSummaryJobStatus(job.status)
       )
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
@@ -2104,7 +2192,7 @@ export class InMemoryCoachStateRepository implements CoachStateStore {
       historyExerciseCount: input.historyExerciseCount,
       historySessionCount: input.historySessionCount,
       promptVersion: this.promptVersion,
-      model: this.model,
+      model: input.model,
     };
     this.workoutSummaryJobs.set(created.jobID, created);
     return created;
@@ -2581,12 +2669,39 @@ function insightsCacheKey(
   contextVersion: string,
   analyticsVersion: string,
   promptVersion: string,
+  routingVersion: string,
+  model: string
+): string {
+  return `${installID}:insights:${contextHash}:${contextProfile}:${contextVersion}:${analyticsVersion}:${promptVersion}:${routingVersion}:${model}`;
+}
+
+function legacyInsightsCacheKey(
+  installID: string,
+  contextHash: string,
+  contextProfile: CoachContextProfile,
+  contextVersion: string,
+  analyticsVersion: string,
+  promptVersion: string,
   model: string
 ): string {
   return `${installID}:insights:${contextHash}:${contextProfile}:${contextVersion}:${analyticsVersion}:${promptVersion}:${model}`;
 }
 
 function chatMemoryKey(
+  installID: string,
+  contextHash: string,
+  contextProfile: CoachContextProfile,
+  contextVersion: string,
+  analyticsVersion: string,
+  promptVersion: string,
+  routingVersion: string,
+  memoryCompatibilityKey: string,
+  memoryProfile: CoachMemoryProfile
+): string {
+  return `${installID}:chat-memory:${contextHash}:${contextProfile}:${memoryProfile}:${contextVersion}:${analyticsVersion}:${promptVersion}:${routingVersion}:${memoryCompatibilityKey}`;
+}
+
+function legacyChatMemoryKey(
   installID: string,
   contextHash: string,
   contextProfile: CoachContextProfile,
@@ -2613,6 +2728,11 @@ export function storageKeyFromMetadata(
     promptVersion,
     model,
     memoryProfile: metadata?.memoryProfile ?? "compact_v1",
+    routingVersion: metadata?.routingVersion ?? DEFAULT_MODEL_ROUTING_VERSION,
+    memoryCompatibilityKey:
+      metadata?.memoryCompatibilityKey ??
+      metadata?.selectedModel ??
+      model,
   };
 }
 

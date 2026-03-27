@@ -97,6 +97,15 @@ export interface CoachExecutionMetadata {
   memoryProfile: CoachMemoryProfile;
   jobDeadlineAt?: string;
   derivedAnalytics?: CoachDerivedAnalytics;
+  useCase?: string;
+  modelRole?: string;
+  selectedModel?: string;
+  allowedContextProfiles?: CoachContextProfile[];
+  payloadTier?: "full" | "reduced" | "compact";
+  routingVersion?: string;
+  memoryCompatibilityKey?: string;
+  promptFamily?: string;
+  contextFamily?: string;
 }
 
 interface PromptLimitProfile {
