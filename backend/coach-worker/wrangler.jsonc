@@ -56,7 +56,7 @@
   "vars": {
     "AI_MODEL": "@cf/mistralai/mistral-small-3.1-24b-instruct",
     "COACH_PROMPT_VERSION": "2026-03-25.v1",
-    "MODEL_ROUTING_ENABLED": "false",
+    "MODEL_ROUTING_ENABLED": "true",
     "MODEL_ROUTING_VERSION": "phase1.v1",
     "CHAT_FAST_MODEL": "@cf/zai-org/glm-4.7-flash",
     "CHAT_BALANCED_MODEL": "@cf/mistralai/mistral-small-3.1-24b-instruct",

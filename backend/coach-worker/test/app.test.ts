@@ -828,8 +828,8 @@ describe("coach worker app", () => {
       status: "queued",
       pollAfterMs: 1500,
       metadata: {
-        contextProfile: "rich_async_analytics_v1",
-        promptProfile: "chat_rich_async_analytics_v1",
+        contextProfile: "rich_async_v1",
+        promptProfile: "chat_rich_async_v1",
         memoryProfile: "rich_async_v1",
       },
     });
@@ -840,8 +840,8 @@ describe("coach worker app", () => {
     expect(storedJob?.preparedRequest.clientRequestID).toBe(request.clientRequestID);
     expect(storedJob?.preparedRequest.responseID).toMatch(/^coach-turn_/);
     expect(storedJob?.preparedRequest.metadata).toMatchObject({
-      contextProfile: "rich_async_analytics_v1",
-      promptProfile: "chat_rich_async_analytics_v1",
+      contextProfile: "rich_async_v1",
+      promptProfile: "chat_rich_async_v1",
       memoryProfile: "rich_async_v1",
     });
   });

@@ -59,6 +59,7 @@ export interface RoutingDecision {
   promptFamily: string;
   contextFamily: string;
   escalationEligible: boolean;
+  routingReasonTags: string[];
 }
 
 export interface ChatRoutingAttempt {
@@ -78,6 +79,9 @@ export interface ChatRoutingAttempt {
   memoryCompatibilityKey: string;
   routingVersion: string;
   useCase: CoachRoutingUseCase;
+  routingReasonTags: string[];
+  attemptReason: string;
+  fallbackHopCount: number;
 }
 
 export interface WorkoutSummaryRoutingAttempt {
@@ -96,6 +100,9 @@ export interface WorkoutSummaryRoutingAttempt {
   structuredAdapter: StructuredAdapter;
   routingVersion: string;
   useCase: "workout_summary";
+  routingReasonTags: string[];
+  attemptReason: string;
+  fallbackHopCount: number;
 }
 
 type EnvLike = {
@@ -216,6 +223,16 @@ export function buildChatRoutingDecision(
   const routingVersion =
     metadata?.routingVersion ?? resolveModelRoutingVersion(env);
   const memoryProfile = metadata?.memoryProfile ?? "compact_v1";
+  const routingReasonTags =
+    metadata?.routingReasonTags ??
+    buildChatRoutingReasonTags(
+      env,
+      request,
+      useCase,
+      modelRole,
+      allowedContextProfiles,
+      options.timeoutProfile
+    );
 
   return {
     operation: "chat",
@@ -240,6 +257,7 @@ export function buildChatRoutingDecision(
     promptFamily,
     contextFamily,
     escalationEligible: false,
+    routingReasonTags,
   };
 }
 
@@ -257,6 +275,12 @@ export function buildWorkoutSummaryRoutingDecision(
     });
   const routingVersion =
     metadata?.routingVersion ?? resolveModelRoutingVersion(env);
+  const routingReasonTags =
+    metadata?.routingReasonTags ??
+    buildSummaryRoutingReasonTags(
+      env,
+      coerceModelRole(metadata?.modelRole, "summary_fast")
+    );
 
   return {
     operation: "workout_summary",
@@ -271,6 +295,7 @@ export function buildWorkoutSummaryRoutingDecision(
     promptFamily: metadata?.promptFamily ?? "summary_async_v1",
     contextFamily: metadata?.contextFamily ?? "rich_async_family",
     escalationEligible: false,
+    routingReasonTags,
   };
 }
 
@@ -289,6 +314,12 @@ export function buildProfileInsightsRoutingDecision(
   const routingVersion =
     metadata?.routingVersion ?? resolveModelRoutingVersion(env);
   const memoryProfile = metadata?.memoryProfile ?? "compact_v1";
+  const routingReasonTags =
+    metadata?.routingReasonTags ??
+    buildProfileInsightsRoutingReasonTags(
+      env,
+      coerceModelRole(metadata?.modelRole, "insights_balanced")
+    );
 
   return {
     operation: "profile_insights",
@@ -312,6 +343,7 @@ export function buildProfileInsightsRoutingDecision(
     promptFamily: metadata?.promptFamily ?? "profile_sync_v1",
     contextFamily: metadata?.contextFamily ?? "compact_sync_family",
     escalationEligible: false,
+    routingReasonTags,
   };
 }
 
@@ -346,6 +378,9 @@ export function buildChatRoutingAttempts(
       memoryCompatibilityKey: decision.memoryCompatibilityKey ?? "chat-memory",
       routingVersion: decision.routingVersion,
       useCase: decision.useCase,
+      routingReasonTags: decision.routingReasonTags,
+      attemptReason: "primary_selected_route",
+      fallbackHopCount: 0,
     },
   ];
 
@@ -367,6 +402,9 @@ export function buildChatRoutingAttempts(
       memoryCompatibilityKey: decision.memoryCompatibilityKey ?? "chat-memory",
       routingVersion: decision.routingVersion,
       useCase: decision.useCase,
+      routingReasonTags: decision.routingReasonTags,
+      attemptReason: "same_model_reduced_context_after_failure",
+      fallbackHopCount: 1,
     });
   }
 
@@ -388,6 +426,9 @@ export function buildChatRoutingAttempts(
     memoryCompatibilityKey: decision.memoryCompatibilityKey ?? "chat-memory",
     routingVersion: decision.routingVersion,
     useCase: decision.useCase,
+    routingReasonTags: decision.routingReasonTags,
+    attemptReason: "alternate_main_tier_after_reduced_context_failure",
+    fallbackHopCount: attempts.length,
   });
 
   const reducedModel = resolveModelForRole(env, "chat_reduced_context");
@@ -408,6 +449,9 @@ export function buildChatRoutingAttempts(
     memoryCompatibilityKey: decision.memoryCompatibilityKey ?? "chat-memory",
     routingVersion: decision.routingVersion,
     useCase: decision.useCase,
+    routingReasonTags: decision.routingReasonTags,
+    attemptReason: "reduced_context_model_after_main_tier_failures",
+    fallbackHopCount: attempts.length,
   });
   attempts.push({
     modelRole: "chat_reduced_context",
@@ -426,6 +470,9 @@ export function buildChatRoutingAttempts(
     memoryCompatibilityKey: decision.memoryCompatibilityKey ?? "chat-memory",
     routingVersion: decision.routingVersion,
     useCase: decision.useCase,
+    routingReasonTags: decision.routingReasonTags,
+    attemptReason: "plain_text_after_structured_failures",
+    fallbackHopCount: attempts.length,
   });
 
   return dedupeChatAttempts(attempts);
@@ -452,6 +499,9 @@ export function buildWorkoutSummaryRoutingAttempts(
       structuredAdapter: decision.structuredAdapter,
       routingVersion: decision.routingVersion,
       useCase: "workout_summary",
+      routingReasonTags: decision.routingReasonTags,
+      attemptReason: "primary_selected_route",
+      fallbackHopCount: 0,
     },
     {
       modelRole: decision.modelRole,
@@ -464,6 +514,9 @@ export function buildWorkoutSummaryRoutingAttempts(
       structuredAdapter: decision.structuredAdapter,
       routingVersion: decision.routingVersion,
       useCase: "workout_summary",
+      routingReasonTags: decision.routingReasonTags,
+      attemptReason: "same_model_reduced_payload_after_failure",
+      fallbackHopCount: 1,
     },
     {
       modelRole: alternateRole,
@@ -476,6 +529,9 @@ export function buildWorkoutSummaryRoutingAttempts(
       structuredAdapter: resolveModelCapability(alternateModel).structuredAdapter,
       routingVersion: decision.routingVersion,
       useCase: "workout_summary",
+      routingReasonTags: decision.routingReasonTags,
+      attemptReason: "alternate_main_tier_after_reduced_payload_failure",
+      fallbackHopCount: 2,
     },
     {
       modelRole: "sync_fallback",
@@ -488,6 +544,9 @@ export function buildWorkoutSummaryRoutingAttempts(
       structuredAdapter: resolveModelCapability(fallbackModel).structuredAdapter,
       routingVersion: decision.routingVersion,
       useCase: "workout_summary",
+      routingReasonTags: decision.routingReasonTags,
+      attemptReason: "sync_fallback_structured_after_main_tier_failures",
+      fallbackHopCount: 3,
     },
     {
       modelRole: "sync_fallback",
@@ -500,8 +559,28 @@ export function buildWorkoutSummaryRoutingAttempts(
       structuredAdapter: resolveModelCapability(fallbackModel).structuredAdapter,
       routingVersion: decision.routingVersion,
       useCase: "workout_summary",
+      routingReasonTags: decision.routingReasonTags,
+      attemptReason: "plain_text_after_structured_failures",
+      fallbackHopCount: 4,
     },
   ]);
+}
+
+export function resolvePrimaryChatExecutionProfile(
+  decision: RoutingDecision
+): {
+  contextProfile: CoachContextProfile;
+  promptProfile: string;
+} {
+  const contextProfile = decision.allowedContextProfiles[0] ?? "compact_sync_v2";
+  return {
+    contextProfile,
+    promptProfile: resolveChatPromptProfile(
+      decision.useCase,
+      contextProfile,
+      "primary"
+    ),
+  };
 }
 
 export function buildMemoryCompatibilityKey(
@@ -652,6 +731,64 @@ function resolveContextFamily(
   )
     ? "rich_async_family"
     : "compact_sync_family";
+}
+
+function buildChatRoutingReasonTags(
+  env: EnvLike,
+  request: CoachChatRequest,
+  useCase: CoachRoutingUseCase,
+  modelRole: CoachModelRole,
+  allowedContextProfiles: CoachContextProfile[],
+  timeoutProfile: "sync" | "async_job" | undefined
+): string[] {
+  const hasTrainingData = Boolean(
+    request.snapshot &&
+      (request.snapshot.recentFinishedSessions.length > 0 ||
+        request.snapshot.analytics.recentPersonalRecords.length > 0 ||
+        request.snapshot.preferredProgram?.workouts.length)
+  );
+
+  return [
+    "operation:chat",
+    `use_case:${useCase}`,
+    `model_role:${modelRole}`,
+    `timeout_profile:${timeoutProfile ?? "sync_default"}`,
+    `context_family:${resolveContextFamily(allowedContextProfiles)}`,
+    `primary_context:${allowedContextProfiles[0] ?? "compact_sync_v2"}`,
+    `recent_turns:${request.clientRecentTurns.length > 0 ? "yes" : "no"}`,
+    `training_data:${hasTrainingData ? "yes" : "no"}`,
+    `routing_enabled:${isModelRoutingEnabled(env) ? "true" : "false"}`,
+  ];
+}
+
+function buildSummaryRoutingReasonTags(
+  env: EnvLike,
+  modelRole: CoachModelRole
+): string[] {
+  return [
+    "operation:workout_summary",
+    "use_case:workout_summary",
+    `model_role:${modelRole}`,
+    "timeout_profile:async_job",
+    "context_family:rich_async_family",
+    "primary_context:rich_async_v1",
+    `routing_enabled:${isModelRoutingEnabled(env) ? "true" : "false"}`,
+  ];
+}
+
+function buildProfileInsightsRoutingReasonTags(
+  env: EnvLike,
+  modelRole: CoachModelRole
+): string[] {
+  return [
+    "operation:profile_insights",
+    "use_case:profile_insights",
+    `model_role:${modelRole}`,
+    "timeout_profile:sync",
+    "context_family:compact_sync_family",
+    "primary_context:compact_sync_v2",
+    `routing_enabled:${isModelRoutingEnabled(env) ? "true" : "false"}`,
+  ];
 }
 
 function dedupeChatAttempts(attempts: ChatRoutingAttempt[]): ChatRoutingAttempt[] {

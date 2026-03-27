@@ -106,6 +106,7 @@ export interface CoachExecutionMetadata {
   memoryCompatibilityKey?: string;
   promptFamily?: string;
   contextFamily?: string;
+  routingReasonTags?: string[];
 }
 
 interface PromptLimitProfile {

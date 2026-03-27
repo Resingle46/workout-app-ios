@@ -2389,6 +2389,15 @@ final class CoachStore {
         using appStore: AppStore,
         forceRefresh: Bool = false
     ) async {
+        if !forceRefresh, let activeChatJobID {
+            debugRecorder.log(
+                category: .coach,
+                message: "insights_refresh_skipped_active_chat_job",
+                metadata: ["jobID": activeChatJobID]
+            )
+            return
+        }
+
         isLoadingProfileInsights = true
         defer { isLoadingProfileInsights = false }
 
@@ -2769,6 +2778,9 @@ final class CoachStore {
 
         if activeChatJobID != nil {
             await resumePendingChatJobIfNeeded(using: appStore)
+            if activeChatJobID != nil {
+                return
+            }
         }
 
         if profileInsights == nil {

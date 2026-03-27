@@ -33,6 +33,10 @@ import {
   buildChatRoutingDecision,
   buildProfileInsightsRoutingDecision,
   buildWorkoutSummaryRoutingDecision,
+  isModelRoutingEnabled,
+  resolveModelForRole,
+  resolveModelRoutingVersion,
+  resolvePrimaryChatExecutionProfile,
 } from "./routing";
 import {
   ActiveCoachChatJobError,
@@ -247,6 +251,7 @@ export function createApp(
             memoryCompatibilityKey: routingDecision.memoryCompatibilityKey,
             promptFamily: routingDecision.promptFamily,
             contextFamily: routingDecision.contextFamily,
+            routingReasonTags: routingDecision.routingReasonTags,
           });
           const storageKey = storageKeyFromMetadata(
             context.contextHash,
@@ -271,6 +276,7 @@ export function createApp(
             modelRole: routingDecision.modelRole,
             selectedModel: routingDecision.selectedModel,
             routingVersion: routingDecision.routingVersion,
+            routingReasonTags: routingDecision.routingReasonTags,
             forceRefresh: body.forceRefresh,
             snapshotBytes,
             programCommentChars,
@@ -310,6 +316,7 @@ export function createApp(
               modelRole: routingDecision.modelRole,
               selectedModel: routingDecision.selectedModel,
               routingVersion: routingDecision.routingVersion,
+              routingReasonTags: routingDecision.routingReasonTags,
               snapshotBytes,
               programCommentChars,
               recentPrCount,
@@ -364,6 +371,10 @@ export function createApp(
             selectedModel: result.selectedModel ?? routingDecision.selectedModel,
             routingVersion:
               result.routingVersion ?? routingDecision.routingVersion,
+            routingReasonTags:
+              result.routingReasonTags ?? routingDecision.routingReasonTags,
+            fallbackHopCount: result.fallbackHopCount,
+            fallbackReason: result.fallbackReason,
             responseID: result.responseId,
             usage: result.usage,
             inferenceMode: result.mode,
@@ -404,9 +415,12 @@ export function createApp(
             },
             { timeoutProfile: "async_job" }
           );
+          const primaryChatExecution = resolvePrimaryChatExecutionProfile(
+            routingDecision
+          );
           const executionMetadata = buildExecutionMetadata({
-            contextProfile: "rich_async_analytics_v1",
-            promptProfile: "chat_rich_async_analytics_v1",
+            contextProfile: primaryChatExecution.contextProfile,
+            promptProfile: primaryChatExecution.promptProfile,
             contextVersion: context.contextVersion,
             analyticsVersion: context.analyticsVersion,
             memoryProfile: "rich_async_v1",
@@ -421,6 +435,7 @@ export function createApp(
             memoryCompatibilityKey: routingDecision.memoryCompatibilityKey,
             promptFamily: routingDecision.promptFamily,
             contextFamily: routingDecision.contextFamily,
+            routingReasonTags: routingDecision.routingReasonTags,
           });
           const storageKey = storageKeyFromMetadata(
             context.contextHash,
@@ -457,6 +472,7 @@ export function createApp(
             modelRole: routingDecision.modelRole,
             selectedModel: routingDecision.selectedModel,
             routingVersion: routingDecision.routingVersion,
+            routingReasonTags: routingDecision.routingReasonTags,
           };
 
           const job = await stateRepository.createChatJob({
@@ -624,6 +640,7 @@ export function createApp(
             memoryCompatibilityKey: routingDecision.memoryCompatibilityKey,
             promptFamily: routingDecision.promptFamily,
             contextFamily: routingDecision.contextFamily,
+            routingReasonTags: routingDecision.routingReasonTags,
           });
           const storageKey = storageKeyFromMetadata(
             context.contextHash,
@@ -655,6 +672,7 @@ export function createApp(
             modelRole: routingDecision.modelRole,
             selectedModel: routingDecision.selectedModel,
             routingVersion: routingDecision.routingVersion,
+            routingReasonTags: routingDecision.routingReasonTags,
           };
 
           const inferenceStartedAt = deps.now();
@@ -695,6 +713,10 @@ export function createApp(
             selectedModel: result.selectedModel ?? routingDecision.selectedModel,
             routingVersion:
               result.routingVersion ?? routingDecision.routingVersion,
+            routingReasonTags:
+              result.routingReasonTags ?? routingDecision.routingReasonTags,
+            fallbackHopCount: result.fallbackHopCount,
+            fallbackReason: result.fallbackReason,
             responseID: result.responseId,
             usage: result.usage,
             inferenceMode: result.mode,
@@ -732,6 +754,7 @@ export function createApp(
             routingVersion: routingDecision.routingVersion,
             promptFamily: routingDecision.promptFamily,
             contextFamily: routingDecision.contextFamily,
+            routingReasonTags: routingDecision.routingReasonTags,
           });
           const currentExerciseCount = body.currentWorkout.exerciseCount;
           const historyExerciseCount = body.recentExerciseHistory.length;
@@ -1022,6 +1045,12 @@ function buildHealthPayload(env: Env): {
   status: "ok" | "error";
   model: string;
   promptVersion: string;
+  modelRoutingEnabled: boolean;
+  modelRoutingVersion: string;
+  chatFastModel: string;
+  chatBalancedModel: string;
+  summaryFastModel: string;
+  insightsBalancedModel: string;
   missing?: string[];
 } {
   const missing = missingSecrets(env);
@@ -1029,6 +1058,12 @@ function buildHealthPayload(env: Env): {
     status: missing.length === 0 ? "ok" : "error",
     model: resolveModel(env),
     promptVersion: resolvePromptVersion(env),
+    modelRoutingEnabled: isModelRoutingEnabled(env),
+    modelRoutingVersion: resolveModelRoutingVersion(env),
+    chatFastModel: resolveModelForRole(env, "chat_fast"),
+    chatBalancedModel: resolveModelForRole(env, "chat_balanced"),
+    summaryFastModel: resolveModelForRole(env, "summary_fast"),
+    insightsBalancedModel: resolveModelForRole(env, "insights_balanced"),
     ...(missing.length > 0 ? { missing } : {}),
   };
 }
@@ -1800,6 +1835,7 @@ function buildExecutionMetadata(input: {
   memoryCompatibilityKey?: CoachExecutionMetadata["memoryCompatibilityKey"];
   promptFamily?: CoachExecutionMetadata["promptFamily"];
   contextFamily?: CoachExecutionMetadata["contextFamily"];
+  routingReasonTags?: CoachExecutionMetadata["routingReasonTags"];
 }): CoachExecutionMetadata {
   return {
     contextProfile: input.contextProfile,
@@ -1818,6 +1854,7 @@ function buildExecutionMetadata(input: {
     memoryCompatibilityKey: input.memoryCompatibilityKey,
     promptFamily: input.promptFamily,
     contextFamily: input.contextFamily,
+    routingReasonTags: input.routingReasonTags,
   };
 }
 
