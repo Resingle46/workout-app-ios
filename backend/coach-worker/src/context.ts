@@ -1,5 +1,6 @@
 import type {
   AppSnapshotPayload,
+  CoachAIProvider,
   CompactCoachSnapshot,
   CoachAnalysisSettingsPayload,
   CoachProfile,
@@ -90,6 +91,7 @@ export interface CoachDerivedAnalytics {
 }
 
 export interface CoachExecutionMetadata {
+  provider?: CoachAIProvider;
   contextProfile: CoachContextProfile;
   promptProfile: string;
   contextVersion: string;

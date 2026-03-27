@@ -1532,6 +1532,56 @@ describe("coach worker app", () => {
     expect(workflowCreate).toHaveBeenCalledTimes(1);
   });
 
+  it("creates a new async chat job for the same clientRequestID when provider changes after completion", async () => {
+    const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
+    const workflowCreate = vi.fn().mockResolvedValue(makeWorkflowInstanceStub());
+    const app = createApp({
+      createInferenceService: () => stubInferenceService(),
+      createStateRepository: () => repository,
+    });
+    const env = makeEnv({
+      COACH_CHAT_WORKFLOW: makeWorkflowBinding(workflowCreate),
+      GEMINI_API_KEY: "test-gemini-key",
+    });
+    const firstRequest = makeChatJobCreateRequestFixture();
+    const secondRequest = {
+      ...firstRequest,
+      provider: "gemini" as const,
+    };
+
+    const firstResponse = await app.fetch(
+      authedRequest("https://coach.example.workers.dev/v2/coach/chat-jobs", {
+        method: "POST",
+        body: JSON.stringify(firstRequest),
+      }),
+      env
+    );
+    const firstBody = await firstResponse.json();
+    await repository.completeChatJob(firstBody.jobID, {
+      completedAt: new Date().toISOString(),
+      result: {
+        answerMarkdown: "done",
+        responseID: "resp_1",
+        followUps: [],
+        generationStatus: "model",
+        inferenceMode: "structured",
+      },
+    });
+
+    const secondResponse = await app.fetch(
+      authedRequest("https://coach.example.workers.dev/v2/coach/chat-jobs", {
+        method: "POST",
+        body: JSON.stringify(secondRequest),
+      }),
+      env
+    );
+
+    expect(secondResponse.status).toBe(202);
+    const secondBody = await secondResponse.json();
+    expect(secondBody.jobID).not.toBe(firstBody.jobID);
+    expect(workflowCreate).toHaveBeenCalledTimes(2);
+  });
+
   it("rejects a second async chat job while one is already active", async () => {
     const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
     const workflowCreate = vi.fn().mockResolvedValue(makeWorkflowInstanceStub());
@@ -3494,6 +3544,7 @@ function makeProfileInsightsRequestFixture(): CoachProfileInsightsRequest {
   return {
     locale: "en",
     installID: "install_001",
+    provider: "workers_ai",
     snapshotHash: "a36c44a10cafe4ec5d406e8addcc7adc4a3cd72c3b11ee848b2b6cff2255b382",
     snapshot: makeCompactSnapshotFixture(),
     snapshotUpdatedAt: "2026-03-25T19:00:00.000Z",
@@ -3516,6 +3567,7 @@ function makeChatRequestFixture(): CoachChatRequest {
   return {
     locale,
     installID,
+    provider: "workers_ai",
     snapshotHash,
     snapshot,
     snapshotUpdatedAt,
@@ -3546,6 +3598,7 @@ function makeWorkoutSummaryJobCreateRequestFixture(): CoachWorkoutSummaryJobCrea
   return {
     locale: "en",
     installID: "install_001",
+    provider: "workers_ai",
     clientRequestID: crypto.randomUUID(),
     sessionID: "99999999-9999-4999-8999-999999999999",
     fingerprint:

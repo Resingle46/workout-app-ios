@@ -100,9 +100,12 @@ struct DeveloperMenuSettingsCard: View {
 @MainActor
 struct DeveloperMenuView: View {
     @Environment(DebugDiagnosticsController.self) private var debugController
+    @Environment(CoachStore.self) private var coachStore
+    @Environment(WorkoutSummaryStore.self) private var workoutSummaryStore
     @Environment(\.dismiss) private var dismiss
     @Environment(\.locale) private var locale
     @Environment(\.appBottomRailInset) private var bottomRailInset
+    @State private var selectedProvider: CoachAIProvider = CoachRuntimeConfigurationStore(bundle: .main).runtimeConfiguration.provider
 
     var body: some View {
         ScrollView {
@@ -147,6 +150,7 @@ struct DeveloperMenuView: View {
             )
         }
         .task {
+            selectedProvider = CoachRuntimeConfigurationStore(bundle: .main).runtimeConfiguration.provider
             debugController.refreshReport()
         }
         .appScreenBackground()
@@ -178,7 +182,31 @@ struct DeveloperMenuView: View {
                     titleKey: "developer.runtime.remote_coach_available",
                     value: boolValue(debugController.report.runtime.remoteCoachAvailable)
                 )
+                DeveloperMenuValueRow(
+                    titleKey: "developer.runtime.ai_provider",
+                    value: debugController.report.runtime.selectedAIProvider
+                        ?? localized("developer.value.none")
+                )
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("AI Provider")
+                        .font(AppTypography.body(size: 15))
+                        .foregroundStyle(AppTheme.secondaryText)
+                    Picker("AI Provider", selection: $selectedProvider) {
+                        ForEach(CoachAIProvider.allCases, id: \.self) { provider in
+                            Text(provider.debugName).tag(provider)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                }
             }
+        }
+        .onChange(of: selectedProvider) { _, provider in
+            let store = CoachRuntimeConfigurationStore(bundle: .main)
+            store.provider = provider
+            let configuration = store.save()
+            coachStore.updateConfiguration(configuration)
+            workoutSummaryStore.updateConfiguration(configuration)
+            debugController.refreshReport()
         }
     }
 
@@ -222,6 +250,16 @@ struct DeveloperMenuView: View {
                     value: debugController.report.coach.activeChatJobID
                 )
                 DeveloperMenuValueRow(
+                    titleKey: "developer.coach.active_chat_provider",
+                    value: debugController.report.coach.activeChatProvider
+                        ?? localized("developer.value.none")
+                )
+                DeveloperMenuValueRow(
+                    titleKey: "developer.coach.pending_summary_provider",
+                    value: debugController.report.coach.pendingWorkoutSummaryProvider
+                        ?? localized("developer.value.none")
+                )
+                DeveloperMenuValueRow(
                     titleKey: "developer.coach.can_resume_pending_chat_job",
                     value: boolValue(debugController.report.coach.canResumePendingChatJob)
                 )
@@ -232,10 +270,25 @@ struct DeveloperMenuView: View {
                     allowsWrap: true
                 )
                 DeveloperMenuValueRow(
+                    titleKey: "developer.coach.last_chat_provider",
+                    value: debugController.report.coach.lastChatProvider
+                        ?? localized("developer.value.none")
+                )
+                DeveloperMenuValueRow(
                     titleKey: "developer.coach.last_insights_error",
                     value: debugController.report.coach.lastInsightsError
                         ?? localized("developer.value.none"),
                     allowsWrap: true
+                )
+                DeveloperMenuValueRow(
+                    titleKey: "developer.coach.last_insights_provider",
+                    value: debugController.report.coach.lastInsightsProvider
+                        ?? localized("developer.value.none")
+                )
+                DeveloperMenuValueRow(
+                    titleKey: "developer.coach.last_summary_provider",
+                    value: debugController.report.coach.lastWorkoutSummaryProvider
+                        ?? localized("developer.value.none")
                 )
             }
         }

@@ -18,6 +18,7 @@ import {
 import { DEFAULT_MODEL_ROUTING_VERSION } from "./routing";
 import type {
   AppSnapshotPayload,
+  CoachAIProvider,
   BackupDownloadResponse,
   BackupEnvelopeV2,
   BackupHead,
@@ -137,6 +138,7 @@ export interface CreateCoachChatJobInput {
   clientRequestID: string;
   createdAt: string;
   model: string;
+  provider: CoachAIProvider;
   preparedRequest: PreparedCoachChatJobRequest;
   contextHash: string;
   contextSource: ResolvedCoachContext["source"];
@@ -178,6 +180,7 @@ export interface CreateWorkoutSummaryJobInput {
   fingerprint: string;
   createdAt: string;
   model: string;
+  provider: CoachAIProvider;
   preparedRequest: PreparedWorkoutSummaryJobRequest;
   requestMode: CoachWorkoutSummaryRequestMode;
   trigger: CoachWorkoutSummaryTrigger;
@@ -230,6 +233,7 @@ export interface CoachChatJobRecord {
   questionChars: number;
   promptVersion: string;
   model: string;
+  provider?: CoachAIProvider;
   promptBytes?: number;
   fallbackPromptBytes?: number;
   modelDurationMs?: number;
@@ -261,6 +265,7 @@ export interface CoachWorkoutSummaryJobRecord {
   historySessionCount: number;
   promptVersion: string;
   model: string;
+  provider?: CoachAIProvider;
   promptBytes?: number;
   fallbackPromptBytes?: number;
   modelDurationMs?: number;
@@ -277,6 +282,7 @@ export interface ClaimCoachChatJobExecutionResult {
 
 export interface ContextStorageKeyInput {
   contextHash: string;
+  provider?: CoachAIProvider;
   contextProfile: CoachContextProfile;
   contextVersion: string;
   analyticsVersion: string;
@@ -440,6 +446,7 @@ interface CoachChatJobRow {
   question_chars: number;
   prompt_version: string;
   model: string;
+  provider: CoachAIProvider | null;
   prompt_bytes: number | null;
   fallback_prompt_bytes: number | null;
   model_duration_ms: number | null;
@@ -472,6 +479,7 @@ interface WorkoutSummaryJobRow {
   history_session_count: number;
   prompt_version: string;
   model: string;
+  provider: CoachAIProvider | null;
   prompt_bytes: number | null;
   fallback_prompt_bytes: number | null;
   model_duration_ms: number | null;
@@ -642,6 +650,7 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
     const primary = await this.kv.get<CoachProfileInsightsResponse>(
       insightsCacheKey(
         installID,
+        key.provider ?? "workers_ai",
         key.contextHash,
         key.contextProfile,
         key.contextVersion,
@@ -655,6 +664,10 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
 
     if (primary) {
       return primary;
+    }
+
+    if ((key.provider ?? "workers_ai") !== "workers_ai") {
+      return null;
     }
 
     return this.kv.get<CoachProfileInsightsResponse>(
@@ -682,6 +695,7 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
     return this.kv.get<CoachProfileInsightsResponse>(
       degradedInsightsCacheKey(
         installID,
+        key.provider ?? "workers_ai",
         key.contextHash,
         key.contextProfile,
         key.contextVersion,
@@ -706,6 +720,7 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
     await this.kv.put(
       insightsCacheKey(
         installID,
+        key.provider ?? "workers_ai",
         key.contextHash,
         key.contextProfile,
         key.contextVersion,
@@ -731,6 +746,7 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
     await this.kv.put(
       degradedInsightsCacheKey(
         installID,
+        key.provider ?? "workers_ai",
         key.contextHash,
         key.contextProfile,
         key.contextVersion,
@@ -755,6 +771,7 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
     await this.kv.delete(
       degradedInsightsCacheKey(
         installID,
+        key.provider ?? "workers_ai",
         key.contextHash,
         key.contextProfile,
         key.contextVersion,
@@ -780,6 +797,7 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
     const primary = await this.kv.get<StoredChatMemory>(
       chatMemoryKey(
         installID,
+        key.provider ?? "workers_ai",
         key.contextHash,
         key.contextProfile,
         key.contextVersion,
@@ -794,6 +812,10 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
 
     if (primary) {
       return primary;
+    }
+
+    if ((key.provider ?? "workers_ai") !== "workers_ai") {
+      return null;
     }
 
     return this.kv.get<StoredChatMemory>(
@@ -830,6 +852,7 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
     await this.kv.put(
       chatMemoryKey(
         installID,
+        key.provider ?? "workers_ai",
         key.contextHash,
         key.contextProfile,
         key.contextVersion,
@@ -849,7 +872,8 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
   async createChatJob(input: CreateCoachChatJobInput): Promise<CoachChatJobRecord> {
     const existing = await this.getChatJobByClientRequestID(
       input.installID,
-      input.clientRequestID
+      input.clientRequestID,
+      input.provider
     );
     if (existing) {
       return existing;
@@ -874,8 +898,9 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
             recent_turn_chars,
             question_chars,
             prompt_version,
-            model
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            model,
+            provider
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `
         )
         .bind(
@@ -893,13 +918,15 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
           input.recentTurnChars,
           input.questionChars,
           this.promptVersion,
-          input.model
+          input.model,
+          input.provider
         )
         .run();
     } catch (error) {
       const duplicated = await this.getChatJobByClientRequestID(
         input.installID,
-        input.clientRequestID
+        input.clientRequestID,
+        input.provider
       );
       if (duplicated) {
         return duplicated;
@@ -1113,7 +1140,8 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
     const existingByClientRequestID =
       await this.getWorkoutSummaryJobByClientRequestID(
         input.installID,
-        input.clientRequestID
+        input.clientRequestID,
+        input.provider
       );
     if (existingByClientRequestID) {
       return existingByClientRequestID;
@@ -1124,7 +1152,8 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
       input.sessionID,
       input.fingerprint,
       this.promptVersion,
-      input.model
+      input.model,
+      input.provider
     );
     if (existingByFingerprint) {
       return existingByFingerprint;
@@ -1150,8 +1179,9 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
               history_exercise_count,
               history_session_count,
               prompt_version,
-              model
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              model,
+              provider
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `
         )
         .bind(
@@ -1170,14 +1200,16 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
           input.historyExerciseCount,
           input.historySessionCount,
           this.promptVersion,
-          input.model
+          input.model,
+          input.provider
         )
         .run();
     } catch {
       const duplicatedByClientRequestID =
         await this.getWorkoutSummaryJobByClientRequestID(
           input.installID,
-          input.clientRequestID
+          input.clientRequestID,
+          input.provider
         );
       if (duplicatedByClientRequestID) {
         return duplicatedByClientRequestID;
@@ -1188,7 +1220,8 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
         input.sessionID,
         input.fingerprint,
         this.promptVersion,
-        input.model
+        input.model,
+        input.provider
       );
       if (duplicatedByFingerprint) {
         return duplicatedByFingerprint;
@@ -1772,34 +1805,36 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
 
   private async getChatJobByClientRequestID(
     installID: string,
-    clientRequestID: string
+    clientRequestID: string,
+    provider: CoachAIProvider
   ): Promise<CoachChatJobRecord | null> {
     const row = await this.db
       .prepare(
         `
           SELECT * FROM coach_chat_jobs
-          WHERE install_id = ? AND client_request_id = ?
+          WHERE install_id = ? AND client_request_id = ? AND provider = ?
           LIMIT 1
         `
       )
-      .bind(installID, clientRequestID)
+      .bind(installID, clientRequestID, provider)
       .first<CoachChatJobRow>();
     return row ? parseCoachChatJobRow(row) : null;
   }
 
   private async getWorkoutSummaryJobByClientRequestID(
     installID: string,
-    clientRequestID: string
+    clientRequestID: string,
+    provider: CoachAIProvider
   ): Promise<CoachWorkoutSummaryJobRecord | null> {
     const row = await this.db
       .prepare(
         `
           SELECT * FROM coach_workout_summary_jobs
-          WHERE install_id = ? AND client_request_id = ?
+          WHERE install_id = ? AND client_request_id = ? AND provider = ?
           LIMIT 1
         `
       )
-      .bind(installID, clientRequestID)
+      .bind(installID, clientRequestID, provider)
       .first<WorkoutSummaryJobRow>();
     return row ? parseWorkoutSummaryJobRow(row) : null;
   }
@@ -1809,7 +1844,8 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
     sessionID: string,
     fingerprint: string,
     promptVersion: string,
-    model: string
+    model: string,
+    provider: CoachAIProvider
   ): Promise<CoachWorkoutSummaryJobRecord | null> {
     const row = await this.db
       .prepare(
@@ -1820,12 +1856,13 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
             AND fingerprint = ?
             AND prompt_version = ?
             AND model = ?
+            AND provider = ?
             AND status IN ('queued', 'running', 'completed')
           ORDER BY created_at DESC
           LIMIT 1
         `
       )
-      .bind(installID, sessionID, fingerprint, promptVersion, model)
+      .bind(installID, sessionID, fingerprint, promptVersion, model, provider)
       .first<WorkoutSummaryJobRow>();
     return row ? parseWorkoutSummaryJobRow(row) : null;
   }
@@ -1959,6 +1996,7 @@ export class InMemoryCoachStateRepository implements CoachStateStore {
       this.insightsCache.get(
         insightsCacheKey(
           installID,
+          key.provider ?? "workers_ai",
           key.contextHash,
           key.contextProfile,
           key.contextVersion,
@@ -1968,17 +2006,19 @@ export class InMemoryCoachStateRepository implements CoachStateStore {
           key.model ?? this.model
         )
       ) ??
-      this.insightsCache.get(
-        legacyInsightsCacheKey(
-          installID,
-          key.contextHash,
-          key.contextProfile,
-          key.contextVersion,
-          key.analyticsVersion,
-          key.promptVersion ?? this.promptVersion,
-          key.model ?? this.model
-        )
-      ) ??
+      ((key.provider ?? "workers_ai") === "workers_ai"
+        ? this.insightsCache.get(
+            legacyInsightsCacheKey(
+              installID,
+              key.contextHash,
+              key.contextProfile,
+              key.contextVersion,
+              key.analyticsVersion,
+              key.promptVersion ?? this.promptVersion,
+              key.model ?? this.model
+            )
+          )
+        : undefined) ??
       null
     );
   }
@@ -1989,6 +2029,7 @@ export class InMemoryCoachStateRepository implements CoachStateStore {
   ): Promise<CoachProfileInsightsResponse | null> {
     const cacheKey = degradedInsightsCacheKey(
       installID,
+      key.provider ?? "workers_ai",
       key.contextHash,
       key.contextProfile,
       key.contextVersion,
@@ -2016,6 +2057,7 @@ export class InMemoryCoachStateRepository implements CoachStateStore {
     this.insightsCache.set(
       insightsCacheKey(
         installID,
+        key.provider ?? "workers_ai",
         key.contextHash,
         key.contextProfile,
         key.contextVersion,
@@ -2036,6 +2078,7 @@ export class InMemoryCoachStateRepository implements CoachStateStore {
     this.degradedInsightsCache.set(
       degradedInsightsCacheKey(
         installID,
+        key.provider ?? "workers_ai",
         key.contextHash,
         key.contextProfile,
         key.contextVersion,
@@ -2059,6 +2102,7 @@ export class InMemoryCoachStateRepository implements CoachStateStore {
     this.degradedInsightsCache.delete(
       degradedInsightsCacheKey(
         installID,
+        key.provider ?? "workers_ai",
         key.contextHash,
         key.contextProfile,
         key.contextVersion,
@@ -2078,6 +2122,7 @@ export class InMemoryCoachStateRepository implements CoachStateStore {
       this.chatMemory.get(
         chatMemoryKey(
           installID,
+          key.provider ?? "workers_ai",
           key.contextHash,
           key.contextProfile,
           key.contextVersion,
@@ -2088,18 +2133,20 @@ export class InMemoryCoachStateRepository implements CoachStateStore {
           key.memoryProfile ?? "compact_v1"
         )
       ) ??
-      this.chatMemory.get(
-        legacyChatMemoryKey(
-          installID,
-          key.contextHash,
-          key.contextProfile,
-          key.contextVersion,
-          key.analyticsVersion,
-          key.promptVersion ?? this.promptVersion,
-          key.model ?? this.model,
-          key.memoryProfile ?? "compact_v1"
-        )
-      ) ??
+      ((key.provider ?? "workers_ai") === "workers_ai"
+        ? this.chatMemory.get(
+            legacyChatMemoryKey(
+              installID,
+              key.contextHash,
+              key.contextProfile,
+              key.contextVersion,
+              key.analyticsVersion,
+              key.promptVersion ?? this.promptVersion,
+              key.model ?? this.model,
+              key.memoryProfile ?? "compact_v1"
+            )
+          )
+        : undefined) ??
       null
     );
   }
@@ -2122,6 +2169,7 @@ export class InMemoryCoachStateRepository implements CoachStateStore {
     this.chatMemory.set(
       chatMemoryKey(
         installID,
+        key.provider ?? "workers_ai",
         key.contextHash,
         key.contextProfile,
         key.contextVersion,
@@ -2140,7 +2188,8 @@ export class InMemoryCoachStateRepository implements CoachStateStore {
     const existing = [...this.chatJobs.values()].find(
       (job) =>
         job.installID === input.installID &&
-        job.clientRequestID === input.clientRequestID
+        job.clientRequestID === input.clientRequestID &&
+        job.provider === input.provider
     );
     if (existing) {
       return existing;
@@ -2171,6 +2220,7 @@ export class InMemoryCoachStateRepository implements CoachStateStore {
       questionChars: input.questionChars,
       promptVersion: this.promptVersion,
       model: input.model,
+      provider: input.provider,
     };
     this.chatJobs.set(created.jobID, created);
     return created;
@@ -2310,7 +2360,8 @@ export class InMemoryCoachStateRepository implements CoachStateStore {
     const existingByClientRequestID = [...this.workoutSummaryJobs.values()].find(
       (job) =>
         job.installID === input.installID &&
-        job.clientRequestID === input.clientRequestID
+        job.clientRequestID === input.clientRequestID &&
+        job.provider === input.provider
     );
     if (existingByClientRequestID) {
       return existingByClientRequestID;
@@ -2324,6 +2375,7 @@ export class InMemoryCoachStateRepository implements CoachStateStore {
           job.fingerprint === input.fingerprint &&
           job.promptVersion === this.promptVersion &&
           job.model === input.model &&
+          job.provider === input.provider &&
           isReusableWorkoutSummaryJobStatus(job.status)
       )
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
@@ -2348,6 +2400,7 @@ export class InMemoryCoachStateRepository implements CoachStateStore {
       historySessionCount: input.historySessionCount,
       promptVersion: this.promptVersion,
       model: input.model,
+      provider: input.provider,
     };
     this.workoutSummaryJobs.set(created.jobID, created);
     return created;
@@ -2695,14 +2748,20 @@ export function normalizeChatTurns(
 }
 
 function parseCoachChatJobRow(row: CoachChatJobRow): CoachChatJobRecord {
+  const preparedRequest = JSON.parse(
+    row.prepared_request_json
+  ) as PreparedCoachChatJobRequest;
+  const provider =
+    row.provider ??
+    preparedRequest.metadata?.provider ??
+    preparedRequest.provider ??
+    "workers_ai";
   return {
     jobID: row.job_id,
     installID: row.install_id,
     clientRequestID: row.client_request_id,
     status: row.status,
-    preparedRequest: JSON.parse(
-      row.prepared_request_json
-    ) as PreparedCoachChatJobRequest,
+    preparedRequest,
     result: row.response_json
       ? (JSON.parse(row.response_json) as CoachChatJobResult)
       : undefined,
@@ -2726,6 +2785,7 @@ function parseCoachChatJobRow(row: CoachChatJobRow): CoachChatJobRecord {
     questionChars: row.question_chars,
     promptVersion: row.prompt_version,
     model: row.model,
+    provider,
     promptBytes: nullableNumber(row.prompt_bytes),
     fallbackPromptBytes: nullableNumber(row.fallback_prompt_bytes),
     modelDurationMs: nullableNumber(row.model_duration_ms),
@@ -2740,6 +2800,14 @@ function parseCoachChatJobRow(row: CoachChatJobRow): CoachChatJobRecord {
 function parseWorkoutSummaryJobRow(
   row: WorkoutSummaryJobRow
 ): CoachWorkoutSummaryJobRecord {
+  const preparedRequest = JSON.parse(
+    row.prepared_request_json
+  ) as PreparedWorkoutSummaryJobRequest;
+  const provider =
+    row.provider ??
+    preparedRequest.metadata?.provider ??
+    preparedRequest.provider ??
+    "workers_ai";
   return {
     jobID: row.job_id,
     installID: row.install_id,
@@ -2747,9 +2815,7 @@ function parseWorkoutSummaryJobRow(
     sessionID: row.session_id,
     fingerprint: row.fingerprint,
     status: row.status,
-    preparedRequest: JSON.parse(
-      row.prepared_request_json
-    ) as PreparedWorkoutSummaryJobRequest,
+    preparedRequest,
     result: row.response_json
       ? (JSON.parse(row.response_json) as CoachWorkoutSummaryJobResult)
       : undefined,
@@ -2772,6 +2838,7 @@ function parseWorkoutSummaryJobRow(
     historySessionCount: row.history_session_count,
     promptVersion: row.prompt_version,
     model: row.model,
+    provider,
     promptBytes: nullableNumber(row.prompt_bytes),
     fallbackPromptBytes: nullableNumber(row.fallback_prompt_bytes),
     modelDurationMs: nullableNumber(row.model_duration_ms),
@@ -2819,6 +2886,7 @@ function isReusableWorkoutSummaryJobStatus(
 
 function insightsCacheKey(
   installID: string,
+  provider: CoachAIProvider,
   contextHash: string,
   contextProfile: CoachContextProfile,
   contextVersion: string,
@@ -2827,7 +2895,7 @@ function insightsCacheKey(
   routingVersion: string,
   model: string
 ): string {
-  return `${installID}:insights:${contextHash}:${contextProfile}:${contextVersion}:${analyticsVersion}:${promptVersion}:${routingVersion}:${model}`;
+  return `${installID}:insights:${provider}:${contextHash}:${contextProfile}:${contextVersion}:${analyticsVersion}:${promptVersion}:${routingVersion}:${model}`;
 }
 
 function legacyInsightsCacheKey(
@@ -2844,6 +2912,7 @@ function legacyInsightsCacheKey(
 
 function degradedInsightsCacheKey(
   installID: string,
+  provider: CoachAIProvider,
   contextHash: string,
   contextProfile: CoachContextProfile,
   contextVersion: string,
@@ -2854,6 +2923,7 @@ function degradedInsightsCacheKey(
 ): string {
   return `${insightsCacheKey(
     installID,
+    provider,
     contextHash,
     contextProfile,
     contextVersion,
@@ -2866,6 +2936,7 @@ function degradedInsightsCacheKey(
 
 function chatMemoryKey(
   installID: string,
+  provider: CoachAIProvider,
   contextHash: string,
   contextProfile: CoachContextProfile,
   contextVersion: string,
@@ -2875,7 +2946,7 @@ function chatMemoryKey(
   memoryCompatibilityKey: string,
   memoryProfile: CoachMemoryProfile
 ): string {
-  return `${installID}:chat-memory:${contextHash}:${contextProfile}:${memoryProfile}:${contextVersion}:${analyticsVersion}:${promptVersion}:${routingVersion}:${memoryCompatibilityKey}`;
+  return `${installID}:chat-memory:${provider}:${contextHash}:${contextProfile}:${memoryProfile}:${contextVersion}:${analyticsVersion}:${promptVersion}:${routingVersion}:${memoryCompatibilityKey}`;
 }
 
 function legacyChatMemoryKey(
@@ -2899,6 +2970,7 @@ export function storageKeyFromMetadata(
 ): ContextStorageKeyInput {
   return {
     contextHash,
+    provider: metadata?.provider ?? "workers_ai",
     contextProfile: metadata?.contextProfile ?? "compact_sync_v2",
     contextVersion: metadata?.contextVersion ?? DEFAULT_CONTEXT_VERSION,
     analyticsVersion: metadata?.analyticsVersion ?? DEFAULT_ANALYTICS_VERSION,

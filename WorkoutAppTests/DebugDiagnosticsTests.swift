@@ -170,6 +170,11 @@ final class DebugDiagnosticsTests: XCTestCase {
             localStateStore: localStateStore,
             cloudSyncStore: cloudSyncStore
         )
+        let workoutSummaryStore = WorkoutSummaryStore(
+            client: client,
+            configuration: configuration,
+            localStateStore: localStateStore
+        )
         coachStore.activeChatJobID = "job-abcdef1234567890"
         coachStore.lastChatErrorDescription = "chat failed"
         coachStore.lastInsightsErrorDescription = "insights failed"
@@ -178,6 +183,7 @@ final class DebugDiagnosticsTests: XCTestCase {
             eventStore: eventStore,
             appStoreProvider: { appStore },
             coachStoreProvider: { coachStore },
+            workoutSummaryStoreProvider: { workoutSummaryStore },
             cloudSyncStoreProvider: { cloudSyncStore },
             coachLocalStateStoreProvider: { localStateStore },
             cloudSyncLocalStateStoreProvider: { cloudStateStore },

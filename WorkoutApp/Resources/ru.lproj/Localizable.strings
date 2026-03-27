@@ -182,9 +182,15 @@
 "developer.cloud.pending_restore_state" = "Состояние pending remote restore";
 "developer.cloud.last_sync_error" = "Последняя ошибка sync";
 "developer.coach.active_chat_job_id" = "Active chat job ID";
+"developer.coach.active_chat_provider" = "Провайдер активного chat job";
 "developer.coach.can_resume_pending_chat_job" = "Можно возобновить pending chat job";
 "developer.coach.last_chat_error" = "Последняя ошибка chat";
+"developer.coach.last_chat_provider" = "Провайдер последнего chat";
 "developer.coach.last_insights_error" = "Последняя ошибка insights";
+"developer.coach.last_insights_provider" = "Провайдер последних insights";
+"developer.coach.last_summary_provider" = "Провайдер последнего summary";
+"developer.coach.pending_summary_provider" = "Провайдер pending summary";
+"developer.runtime.ai_provider" = "AI provider";
 "developer.network.empty" = "Сетевых trace записей пока нет.";
 "developer.network.duration" = "Длительность";
 "developer.network.started_at" = "Начато";

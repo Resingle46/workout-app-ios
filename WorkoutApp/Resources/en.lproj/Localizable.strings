@@ -182,9 +182,15 @@
 "developer.cloud.pending_restore_state" = "Pending remote restore state";
 "developer.cloud.last_sync_error" = "Last sync error";
 "developer.coach.active_chat_job_id" = "Active chat job ID";
+"developer.coach.active_chat_provider" = "Active chat provider";
 "developer.coach.can_resume_pending_chat_job" = "Can resume pending chat job";
 "developer.coach.last_chat_error" = "Last chat error";
+"developer.coach.last_chat_provider" = "Last chat provider";
 "developer.coach.last_insights_error" = "Last insights error";
+"developer.coach.last_insights_provider" = "Last insights provider";
+"developer.coach.last_summary_provider" = "Last summary provider";
+"developer.coach.pending_summary_provider" = "Pending summary provider";
+"developer.runtime.ai_provider" = "AI provider";
 "developer.network.empty" = "No network traces yet.";
 "developer.network.duration" = "Duration";
 "developer.network.started_at" = "Started at";

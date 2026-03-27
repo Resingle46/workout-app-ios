@@ -27,6 +27,7 @@ export class CoachChatJobWorkflow extends WorkflowEntrypoint<
           phase: "workflow_run",
           jobID: event.payload.jobID,
           workflowInstanceID,
+          provider: finalJob?.provider ?? finalJob?.preparedRequest.metadata?.provider,
           finalStatus: finalJob?.status,
           installID: finalJob?.installID,
           clientRequestID: finalJob?.clientRequestID,
@@ -45,6 +46,7 @@ export class CoachChatJobWorkflow extends WorkflowEntrypoint<
           phase: "workflow_run",
           jobID: event.payload.jobID,
           workflowInstanceID,
+          provider: undefined,
           errorMessage:
             error instanceof Error ? error.message.slice(0, 300) : "Unknown error",
         })

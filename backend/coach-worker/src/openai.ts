@@ -1,6 +1,7 @@
 import {
   chatResponseModelOutputSchema,
   profileInsightsModelOutputSchema,
+  type CoachAIProvider,
   type CoachChatRequest,
   type CoachChatResponse,
   type CoachProfileInsightsRequest,
@@ -32,12 +33,14 @@ import type {
 } from "./state";
 import {
   DEFAULT_AI_MODEL,
+  DEFAULT_GEMINI_CHAT_BALANCED_MODEL,
   buildChatRoutingAttempts,
   buildChatRoutingDecision,
   buildProfileInsightsRoutingAttempts,
   buildProfileInsightsRoutingDecision,
   buildWorkoutSummaryRoutingAttempts,
   buildWorkoutSummaryRoutingDecision,
+  resolveProvider,
   type ChatRoutingAttempt,
   type CoachModelRole,
   type CoachPayloadTier,
@@ -117,10 +120,22 @@ export interface Env {
   SYNC_FALLBACK_MODEL?: string;
   QUALITY_ESCALATION_MODEL?: string;
   QUALITY_ESCALATION_ENABLED?: string;
+  GEMINI_API_KEY?: string;
+  GEMINI_API_BASE_URL?: string;
+  GEMINI_CHAT_FAST_MODEL?: string;
+  GEMINI_CHAT_BALANCED_MODEL?: string;
+  GEMINI_CHAT_REDUCED_CONTEXT_MODEL?: string;
+  GEMINI_SUMMARY_FAST_MODEL?: string;
+  GEMINI_SUMMARY_BALANCED_MODEL?: string;
+  GEMINI_INSIGHTS_BALANCED_MODEL?: string;
+  GEMINI_INSIGHTS_FAST_MODEL?: string;
+  GEMINI_SYNC_FALLBACK_MODEL?: string;
+  GEMINI_QUALITY_ESCALATION_MODEL?: string;
 }
 
 export interface InferenceResult<T> {
   data: T;
+  provider?: CoachAIProvider;
   responseId?: string;
   model: string;
   selectedModel?: string;
@@ -206,6 +221,20 @@ type ResolvedPromptExecution = {
 };
 
 export function createWorkersAICoachService(env: Env): CoachInferenceService {
+  return new WorkersAICoachService(env);
+}
+
+export function createInferenceServiceForProvider(
+  env: Env,
+  provider: CoachAIProvider = "workers_ai"
+): CoachInferenceService {
+  if (provider === "gemini") {
+    return new WorkersAICoachService({
+      ...env,
+      AI: createGeminiAIAdapter(env),
+    });
+  }
+
   return new WorkersAICoachService(env);
 }
 
@@ -387,6 +416,7 @@ export class WorkersAICoachService implements CoachInferenceService {
 
           logInferenceAttempt("coach_profile_attempt_succeeded", {
             operation,
+            provider: attempt.provider,
             selectedModel: attempt.selectedModel,
             modelRole: attempt.modelRole,
             useCase: attempt.useCase,
@@ -404,6 +434,7 @@ export class WorkersAICoachService implements CoachInferenceService {
 
           return {
             data: guardedResponse,
+            provider: attempt.provider,
             model: attempt.selectedModel,
             selectedModel: attempt.selectedModel,
             modelRole: attempt.modelRole,
@@ -462,6 +493,7 @@ export class WorkersAICoachService implements CoachInferenceService {
 
         logInferenceAttempt("coach_profile_attempt_succeeded", {
           operation,
+          provider: attempt.provider,
           selectedModel: attempt.selectedModel,
           modelRole: attempt.modelRole,
           useCase: attempt.useCase,
@@ -479,6 +511,7 @@ export class WorkersAICoachService implements CoachInferenceService {
 
         return {
           data: guardedResponse,
+          provider: attempt.provider,
           model: attempt.selectedModel,
           selectedModel: attempt.selectedModel,
           modelRole: attempt.modelRole,
@@ -622,6 +655,7 @@ export class WorkersAICoachService implements CoachInferenceService {
 
     return {
       data: localFallback,
+      provider: routingDecision.provider,
       model: selectedModel,
       selectedModel,
       modelRole,
@@ -674,9 +708,10 @@ export class WorkersAICoachService implements CoachInferenceService {
       );
 
       try {
-        logInferenceAttempt("coach_workout_summary_attempt_started", {
-          operation,
-          selectedModel: attempt.selectedModel,
+          logInferenceAttempt("coach_workout_summary_attempt_started", {
+            operation,
+            provider: attempt.provider,
+            selectedModel: attempt.selectedModel,
           modelRole: attempt.modelRole,
           useCase: attempt.useCase,
           routingVersion: attempt.routingVersion,
@@ -724,6 +759,7 @@ export class WorkersAICoachService implements CoachInferenceService {
 
           logInferenceAttempt("coach_workout_summary_attempt_succeeded", {
             operation,
+            provider: attempt.provider,
             selectedModel: attempt.selectedModel,
             modelRole: attempt.modelRole,
             useCase: attempt.useCase,
@@ -747,6 +783,7 @@ export class WorkersAICoachService implements CoachInferenceService {
               ...parsed,
               generationStatus: "model",
             },
+            provider: attempt.provider,
             model: attempt.selectedModel,
             selectedModel: attempt.selectedModel,
             modelRole: attempt.modelRole,
@@ -789,6 +826,7 @@ export class WorkersAICoachService implements CoachInferenceService {
 
         logInferenceAttempt("coach_workout_summary_attempt_succeeded", {
           operation,
+          provider: attempt.provider,
           selectedModel: attempt.selectedModel,
           modelRole: attempt.modelRole,
           useCase: attempt.useCase,
@@ -814,6 +852,7 @@ export class WorkersAICoachService implements CoachInferenceService {
             ),
             generationStatus: "model",
           },
+          provider: attempt.provider,
           model: attempt.selectedModel,
           selectedModel: attempt.selectedModel,
           modelRole: attempt.modelRole,
@@ -866,6 +905,7 @@ export class WorkersAICoachService implements CoachInferenceService {
 
     return {
       data: localFallback,
+      provider: routingDecision.provider,
       model:
         (errors.at(-1)?.details?.model as string | undefined) ??
         routingDecision.selectedModel,
@@ -946,6 +986,7 @@ export class WorkersAICoachService implements CoachInferenceService {
       try {
         logInferenceAttempt("coach_chat_attempt_started", {
           operation,
+          provider: attempt.provider,
           selectedModel: attempt.selectedModel,
           modelRole: attempt.modelRole,
           useCase: attempt.useCase,
@@ -996,6 +1037,7 @@ export class WorkersAICoachService implements CoachInferenceService {
 
           logInferenceAttempt("coach_chat_attempt_succeeded", {
             operation,
+            provider: attempt.provider,
             selectedModel: attempt.selectedModel,
             modelRole: attempt.modelRole,
             useCase: attempt.useCase,
@@ -1024,6 +1066,7 @@ export class WorkersAICoachService implements CoachInferenceService {
               ),
               responseID: turnID,
             },
+            provider: attempt.provider,
             responseId: turnID,
             model: attempt.selectedModel,
             selectedModel: attempt.selectedModel,
@@ -1069,6 +1112,7 @@ export class WorkersAICoachService implements CoachInferenceService {
 
         logInferenceAttempt("coach_chat_attempt_succeeded", {
           operation,
+          provider: attempt.provider,
           selectedModel: attempt.selectedModel,
           modelRole: attempt.modelRole,
           useCase: attempt.useCase,
@@ -1098,6 +1142,7 @@ export class WorkersAICoachService implements CoachInferenceService {
             ),
             responseID: turnID,
           },
+          provider: attempt.provider,
           responseId: turnID,
           model: attempt.selectedModel,
           selectedModel: attempt.selectedModel,
@@ -1151,6 +1196,7 @@ export class WorkersAICoachService implements CoachInferenceService {
     }
 
     return buildDegradedChatResult({
+      provider: routingDecision.provider,
       request,
       responseId: turnID,
       fallback: localFallback,
@@ -2567,6 +2613,9 @@ function normalizeWorkersAIError(
   error: unknown,
   details: Record<string, unknown>
 ): CoachInferenceServiceError {
+  if (error instanceof CoachInferenceServiceError) {
+    return error;
+  }
   const message =
     error instanceof Error ? error.message : "Unknown Workers AI error";
   const normalizedMessage = message.toLowerCase();
@@ -2596,6 +2645,205 @@ function normalizeWorkersAIError(
       providerMessage: message.slice(0, 200),
     }
   );
+}
+
+function createGeminiAIAdapter(env: Env): WorkersAI {
+  return {
+    async run(model: string, inputs: Record<string, unknown>): Promise<unknown> {
+      const apiKey = env.GEMINI_API_KEY?.trim();
+      if (!apiKey) {
+        throw new CoachInferenceServiceError(
+          503,
+          "provider_not_configured",
+          "Gemini provider is not configured",
+          { provider: "gemini", model }
+        );
+      }
+
+      const baseURL =
+        env.GEMINI_API_BASE_URL?.trim() ||
+        "https://generativelanguage.googleapis.com/v1beta";
+      const payload = buildGeminiRequestPayload(inputs);
+      const response = await fetch(
+        `${baseURL}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(payload),
+        }
+      );
+
+      const responseText = await response.text();
+      const responseJSON = responseText ? safeJSONParse(responseText) : undefined;
+      if (!response.ok) {
+        throw normalizeGeminiHTTPError(response.status, responseJSON, {
+          provider: "gemini",
+          model,
+        });
+      }
+
+      const candidateText = extractGeminiText(responseJSON);
+      if (!candidateText) {
+        throw new CoachInferenceServiceError(
+          502,
+          "upstream_empty_output",
+          "Gemini returned empty output",
+          {
+            provider: "gemini",
+            model,
+            responseShape: describeResponseShape(responseJSON),
+          }
+        );
+      }
+
+      return {
+        response: candidateText,
+        usage: isRecord(responseJSON) ? responseJSON.usageMetadata : undefined,
+        response_id:
+          isRecord(responseJSON) && typeof responseJSON.responseId === "string"
+            ? responseJSON.responseId
+            : undefined,
+        provider: "gemini",
+      };
+    },
+  };
+}
+
+function buildGeminiRequestPayload(
+  inputs: Record<string, unknown>
+): Record<string, unknown> {
+  const messages = Array.isArray(inputs.messages) ? (inputs.messages as PromptMessage[]) : [];
+  const systemMessages = messages
+    .filter((message) => message.role === "system")
+    .map((message) => message.content.trim())
+    .filter(Boolean);
+  const nonSystemMessages = messages.filter((message) => message.role !== "system");
+  const contents = nonSystemMessages.map((message) => ({
+    role: message.role === "assistant" ? "model" : "user",
+    parts: [{ text: message.content }],
+  }));
+  const generationConfig: Record<string, unknown> = {};
+  if (typeof inputs.max_tokens === "number") {
+    generationConfig.maxOutputTokens = inputs.max_tokens;
+  }
+  if (typeof inputs.temperature === "number") {
+    generationConfig.temperature = inputs.temperature;
+  }
+
+  const jsonSchema = extractGeminiResponseSchema(inputs);
+  if (jsonSchema) {
+    generationConfig.responseMimeType = "application/json";
+    generationConfig.responseSchema = jsonSchema;
+  }
+
+  return {
+    contents,
+    ...(systemMessages.length > 0
+      ? {
+          systemInstruction: {
+            parts: [{ text: systemMessages.join("\n\n") }],
+          },
+        }
+      : {}),
+    generationConfig,
+  };
+}
+
+function extractGeminiResponseSchema(
+  inputs: Record<string, unknown>
+): Record<string, unknown> | undefined {
+  if (
+    isRecord(inputs.response_format) &&
+    isRecord(inputs.response_format.json_schema) &&
+    isRecord(inputs.response_format.json_schema.schema)
+  ) {
+    return inputs.response_format.json_schema.schema as Record<string, unknown>;
+  }
+  if (isRecord(inputs.guided_json)) {
+    return inputs.guided_json as Record<string, unknown>;
+  }
+  return undefined;
+}
+
+function normalizeGeminiHTTPError(
+  status: number,
+  payload: unknown,
+  details: Record<string, unknown>
+): CoachInferenceServiceError {
+  const errorPayload = isRecord(payload) && isRecord(payload.error) ? payload.error : undefined;
+  const providerMessage =
+    errorPayload && typeof errorPayload.message === "string"
+      ? errorPayload.message.slice(0, 300)
+      : `Gemini request failed with status ${status}`;
+  const providerStatus =
+    errorPayload && typeof errorPayload.status === "string"
+      ? errorPayload.status
+      : undefined;
+
+  if (status === 401 || status === 403) {
+    return new CoachInferenceServiceError(
+      503,
+      "provider_auth_failed",
+      "Gemini authentication failed",
+      { ...details, providerMessage, providerStatus }
+    );
+  }
+  if (status === 429) {
+    return new CoachInferenceServiceError(
+      429,
+      "provider_rate_limited",
+      "Gemini quota or rate limit exceeded",
+      { ...details, providerMessage, providerStatus }
+    );
+  }
+  if (status === 400 || status === 404) {
+    return new CoachInferenceServiceError(
+      502,
+      "provider_unsupported_request",
+      "Gemini rejected the request",
+      { ...details, providerMessage, providerStatus }
+    );
+  }
+  if (status >= 500) {
+    return new CoachInferenceServiceError(
+      503,
+      "provider_unavailable",
+      "Gemini provider is unavailable",
+      { ...details, providerMessage, providerStatus }
+    );
+  }
+
+  return new CoachInferenceServiceError(
+    502,
+    "upstream_request_failed",
+    "Gemini request failed",
+    { ...details, providerMessage, providerStatus }
+  );
+}
+
+function extractGeminiText(payload: unknown): string | undefined {
+  if (!isRecord(payload) || !Array.isArray(payload.candidates)) {
+    return undefined;
+  }
+  const candidate = payload.candidates[0];
+  if (!isRecord(candidate) || !isRecord(candidate.content) || !Array.isArray(candidate.content.parts)) {
+    return undefined;
+  }
+  const text = candidate.content.parts
+    .map((part) => (isRecord(part) && typeof part.text === "string" ? part.text : ""))
+    .join("")
+    .trim();
+  return text || undefined;
+}
+
+function safeJSONParse(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return undefined;
+  }
 }
 
 function parseTimeoutMs(value: unknown): number {
@@ -2704,6 +2952,7 @@ function remainingChatBudgetMs(startedAt: number, totalBudgetMs: number): number
 }
 
 function buildDegradedChatResult(input: {
+  provider: CoachAIProvider;
   request: CoachChatRequest;
   responseId: string;
   fallback: Omit<CoachChatResponse, "responseID">;
@@ -2740,6 +2989,7 @@ function buildDegradedChatResult(input: {
       ),
       responseID: input.responseId,
     },
+    provider: input.provider,
     responseId: input.responseId,
     model: input.model,
     selectedModel: input.selectedModel ?? input.model,

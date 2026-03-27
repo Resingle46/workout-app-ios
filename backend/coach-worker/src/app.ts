@@ -18,13 +18,14 @@ import {
   workoutSummaryJobCreateRequestSchema,
   workoutSummaryJobCreateResponseSchema,
   workoutSummaryJobStatusResponseSchema,
+  type CoachAIProvider,
   type CoachConversationTurn,
   type CoachProfileInsightsResponse,
 } from "./schemas";
 import {
   CoachInferenceServiceError,
   buildOpaqueResponseID,
-  createWorkersAICoachService,
+  createInferenceServiceForProvider,
   type CoachInferenceService,
   type Env,
 } from "./openai";
@@ -53,7 +54,7 @@ import {
 } from "./state";
 
 interface AppDependencies {
-  createInferenceService: (env: Env) => CoachInferenceService;
+  createInferenceService: (env: Env, provider?: CoachAIProvider) => CoachInferenceService;
   createStateRepository: (env: Env) => CoachStateStore;
   now: () => number;
   requestId: () => string;
@@ -67,7 +68,7 @@ export function createApp(
   overrides: Partial<AppDependencies> = {}
 ): { fetch: (request: Request, env: Env) => Promise<Response> } {
   const deps: AppDependencies = {
-    createInferenceService: createWorkersAICoachService,
+    createInferenceService: createInferenceServiceForProvider,
     createStateRepository: (env) =>
       new CloudflareCoachStateRepository(
         mustGetStateKV(env),
@@ -106,7 +107,6 @@ export function createApp(
         assertRuntimeSecrets(env);
         assertAuthorization(request, env);
 
-        const inferenceService = deps.createInferenceService(env);
         const stateRepository = deps.createStateRepository(env);
 
         if (pathname === "/v1/backup/reconcile" && request.method === "POST") {
@@ -225,6 +225,8 @@ export function createApp(
 
         if (pathname === "/v1/coach/profile-insights" && request.method === "POST") {
           const body = profileInsightsRequestSchema.parse(await readJSON(request));
+          assertProviderReadiness(env, body.provider);
+          const inferenceService = deps.createInferenceService(env, body.provider);
           const contextResolveStartedAt = deps.now();
           const context = await stateRepository.resolveCoachContext(body);
           const contextResolveMs = deps.now() - contextResolveStartedAt;
@@ -236,6 +238,7 @@ export function createApp(
               context.backupHead?.uploadedAt ?? body.snapshotUpdatedAt,
           });
           const executionMetadata = buildExecutionMetadata({
+            provider: routingDecision.provider,
             contextProfile: "compact_sync_v2",
             promptProfile: "profile_compact_context_v2",
             contextVersion: context.contextVersion,
@@ -270,6 +273,7 @@ export function createApp(
             context.snapshot.preferredProgram?.workouts.length ?? 0;
           routeDiagnostics = {
             installID: body.installID,
+            provider: routingDecision.provider,
             contextSource: context.source,
             profileContextVariant: executionMetadata.promptProfile,
             useCase: routingDecision.useCase,
@@ -473,6 +477,7 @@ export function createApp(
           const rawBody = await readJSON(request);
           validationRequestPreview = buildChatRequestPreview(rawBody);
           const body = chatJobCreateRequestSchema.parse(rawBody);
+          assertProviderReadiness(env, body.provider);
           validationRequestPreview = undefined;
           const context = await stateRepository.resolveCoachContext(body);
           const routingDecision = buildChatRoutingDecision(
@@ -490,6 +495,7 @@ export function createApp(
             routingDecision
           );
           const executionMetadata = buildExecutionMetadata({
+            provider: routingDecision.provider,
             contextProfile: primaryChatExecution.contextProfile,
             promptProfile: primaryChatExecution.promptProfile,
             contextVersion: context.contextVersion,
@@ -532,6 +538,7 @@ export function createApp(
 
           routeDiagnostics = {
             installID: body.installID,
+            provider: routingDecision.provider,
             contextSource: context.source,
             chatMemoryHit,
             snapshotBytes,
@@ -552,6 +559,7 @@ export function createApp(
             clientRequestID: body.clientRequestID,
             createdAt,
             model: routingDecision.selectedModel,
+            provider: routingDecision.provider,
             preparedRequest: {
               ...body,
               snapshotHash: context.contextHash,
@@ -649,6 +657,7 @@ export function createApp(
               questionChars: job.questionChars,
               promptVersion: job.promptVersion,
               model: job.model,
+              provider: job.provider ?? job.preparedRequest.metadata?.provider ?? "workers_ai",
               useCase: job.preparedRequest.metadata?.useCase,
               modelRole: job.preparedRequest.metadata?.modelRole,
               selectedModel: job.preparedRequest.metadata?.selectedModel,
@@ -682,6 +691,8 @@ export function createApp(
           const rawBody = await readJSON(request);
           validationRequestPreview = buildChatRequestPreview(rawBody);
           const body = chatRequestSchema.parse(rawBody);
+          assertProviderReadiness(env, body.provider);
+          const inferenceService = deps.createInferenceService(env, body.provider);
           validationRequestPreview = undefined;
           const context = await stateRepository.resolveCoachContext(body);
           const routingDecision = buildChatRoutingDecision(
@@ -696,6 +707,7 @@ export function createApp(
             { timeoutProfile: "sync" }
           );
           const executionMetadata = buildExecutionMetadata({
+            provider: routingDecision.provider,
             contextProfile: "compact_sync_v2",
             promptProfile: "chat_compact_sync_v2",
             contextVersion: context.contextVersion,
@@ -733,6 +745,7 @@ export function createApp(
           const questionChars = body.question.trim().length;
           routeDiagnostics = {
             installID: body.installID,
+            provider: routingDecision.provider,
             contextSource: context.source,
             chatMemoryHit,
             snapshotBytes,
@@ -807,8 +820,10 @@ export function createApp(
           const body = workoutSummaryJobCreateRequestSchema.parse(
             await readJSON(request)
           );
+          assertProviderReadiness(env, body.provider);
           const routingDecision = buildWorkoutSummaryRoutingDecision(env, body);
           const executionMetadata = buildExecutionMetadata({
+            provider: routingDecision.provider,
             contextProfile: "rich_async_v1",
             promptProfile: "workout_summary_rich_async_v1",
             contextVersion: "2026-03-27.context.v1",
@@ -837,6 +852,7 @@ export function createApp(
 
           routeDiagnostics = {
             installID: body.installID,
+            provider: routingDecision.provider,
             sessionID: body.sessionID,
             fingerprint: body.fingerprint,
             requestMode: body.requestMode,
@@ -859,6 +875,7 @@ export function createApp(
             fingerprint: body.fingerprint,
             createdAt,
             model: routingDecision.selectedModel,
+            provider: routingDecision.provider,
             preparedRequest: {
               ...body,
               metadata: executionMetadata,
@@ -929,6 +946,7 @@ export function createApp(
               installID: job.installID,
               sessionID: job.sessionID,
               fingerprint: job.fingerprint,
+              provider: job.provider ?? job.preparedRequest.metadata?.provider ?? "workers_ai",
               requestMode: job.requestMode,
               trigger: job.trigger,
               inputMode: job.inputMode,
@@ -1122,25 +1140,67 @@ function buildHealthPayload(env: Env): {
   chatBalancedModel: string;
   summaryFastModel: string;
   insightsBalancedModel: string;
+  providers: Record<
+    CoachAIProvider,
+    {
+      ready: boolean;
+      model: string;
+      chatFastModel: string;
+      chatBalancedModel: string;
+      summaryFastModel: string;
+      insightsBalancedModel: string;
+      missing?: string[];
+    }
+  >;
   missing?: string[];
 } {
-  const missing = missingSecrets(env);
+  const missing = missingSharedSecrets(env);
+  const workersMissing = missingProviderSecrets(env, "workers_ai");
+  const geminiMissing = missingProviderSecrets(env, "gemini");
   return {
-    status: missing.length === 0 ? "ok" : "error",
+    status: missing.length === 0 && workersMissing.length === 0 ? "ok" : "error",
     model: resolveModel(env),
     promptVersion: resolvePromptVersion(env),
     modelRoutingEnabled: isModelRoutingEnabled(env),
     modelRoutingVersion: resolveModelRoutingVersion(env),
-    chatFastModel: resolveModelForRole(env, "chat_fast"),
-    chatBalancedModel: resolveModelForRole(env, "chat_balanced"),
-    summaryFastModel: resolveModelForRole(env, "summary_fast"),
-    insightsBalancedModel: resolveModelForRole(env, "insights_balanced"),
+    chatFastModel: resolveModelForRole(env, "workers_ai", "chat_fast"),
+    chatBalancedModel: resolveModelForRole(env, "workers_ai", "chat_balanced"),
+    summaryFastModel: resolveModelForRole(env, "workers_ai", "summary_fast"),
+    insightsBalancedModel: resolveModelForRole(
+      env,
+      "workers_ai",
+      "insights_balanced"
+    ),
+    providers: {
+      workers_ai: {
+        ready: workersMissing.length === 0,
+        model: resolveModelForProvider(env, "workers_ai"),
+        chatFastModel: resolveModelForRole(env, "workers_ai", "chat_fast"),
+        chatBalancedModel: resolveModelForRole(env, "workers_ai", "chat_balanced"),
+        summaryFastModel: resolveModelForRole(env, "workers_ai", "summary_fast"),
+        insightsBalancedModel: resolveModelForRole(
+          env,
+          "workers_ai",
+          "insights_balanced"
+        ),
+        ...(workersMissing.length > 0 ? { missing: workersMissing } : {}),
+      },
+      gemini: {
+        ready: geminiMissing.length === 0,
+        model: resolveModelForProvider(env, "gemini"),
+        chatFastModel: resolveModelForRole(env, "gemini", "chat_fast"),
+        chatBalancedModel: resolveModelForRole(env, "gemini", "chat_balanced"),
+        summaryFastModel: resolveModelForRole(env, "gemini", "summary_fast"),
+        insightsBalancedModel: resolveModelForRole(env, "gemini", "insights_balanced"),
+        ...(geminiMissing.length > 0 ? { missing: geminiMissing } : {}),
+      },
+    },
     ...(missing.length > 0 ? { missing } : {}),
   };
 }
 
 function assertRuntimeSecrets(env: Env): void {
-  const missing = missingSecrets(env);
+  const missing = missingSharedSecrets(env);
   if (missing.length > 0) {
     throw new RequestError(
       500,
@@ -1151,11 +1211,20 @@ function assertRuntimeSecrets(env: Env): void {
   }
 }
 
-function missingSecrets(env: Env): string[] {
-  const missing: string[] = [];
-  if (!env.AI) {
-    missing.push("AI");
+function assertProviderReadiness(env: Env, provider: CoachAIProvider): void {
+  const missing = missingProviderSecrets(env, provider);
+  if (missing.length > 0) {
+    throw new RequestError(
+      503,
+      "provider_not_configured",
+      `AI provider '${provider}' is not configured.`,
+      { provider, missing }
+    );
   }
+}
+
+function missingSharedSecrets(env: Env): string[] {
+  const missing: string[] = [];
   if (!env.COACH_STATE_KV) {
     missing.push("COACH_STATE_KV");
   }
@@ -1173,6 +1242,21 @@ function missingSecrets(env: Env): string[] {
   }
   if (!env.COACH_INTERNAL_TOKEN?.trim()) {
     missing.push("COACH_INTERNAL_TOKEN");
+  }
+  return missing;
+}
+
+function missingProviderSecrets(env: Env, provider: CoachAIProvider): string[] {
+  const missing: string[] = [];
+  if (provider === "workers_ai") {
+    if (!env.AI) {
+      missing.push("AI");
+    }
+    return missing;
+  }
+
+  if (!env.GEMINI_API_KEY?.trim()) {
+    missing.push("GEMINI_API_KEY");
   }
   return missing;
 }
@@ -1831,6 +1915,15 @@ function resolveModel(env: Env): string {
   return env.AI_MODEL?.trim() || DEFAULT_AI_MODEL;
 }
 
+function resolveModelForProvider(
+  env: Env,
+  provider: CoachAIProvider
+): string {
+  return provider === "gemini"
+    ? resolveModelForRole(env, "gemini", "chat_balanced")
+    : resolveModel(env);
+}
+
 function describeValueType(value: unknown): string {
   if (value === null) {
     return "null";
@@ -1890,6 +1983,7 @@ function sharedTurnSuffixPrefixLength(
 }
 
 function buildExecutionMetadata(input: {
+  provider?: CoachExecutionMetadata["provider"];
   contextProfile: CoachExecutionMetadata["contextProfile"];
   promptProfile: string;
   contextVersion: string;
@@ -1909,6 +2003,7 @@ function buildExecutionMetadata(input: {
   routingReasonTags?: CoachExecutionMetadata["routingReasonTags"];
 }): CoachExecutionMetadata {
   return {
+    provider: input.provider,
     contextProfile: input.contextProfile,
     promptProfile: input.promptProfile,
     contextVersion: input.contextVersion,
@@ -1934,6 +2029,7 @@ function publicJobMetadata(
 ):
   | {
       jobDeadlineAt?: string;
+      provider?: string;
       contextProfile?: string;
       promptProfile?: string;
       contextVersion?: string;
@@ -1947,6 +2043,7 @@ function publicJobMetadata(
 
   return {
     jobDeadlineAt: metadata.jobDeadlineAt,
+    provider: metadata.provider,
     contextProfile: metadata.contextProfile,
     promptProfile: metadata.promptProfile,
     contextVersion: metadata.contextVersion,

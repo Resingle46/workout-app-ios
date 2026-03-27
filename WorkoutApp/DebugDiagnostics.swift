@@ -449,6 +449,7 @@ struct DebugDiagnosticsReport: Codable, Hashable, Sendable {
         var installID: DebugMaskedValue?
         var backendBaseURL: String?
         var remoteCoachAvailable: Bool
+        var selectedAIProvider: String?
     }
 
     struct CloudSyncSection: Codable, Hashable, Sendable {
@@ -461,9 +462,14 @@ struct DebugDiagnosticsReport: Codable, Hashable, Sendable {
 
     struct CoachSection: Codable, Hashable, Sendable {
         var activeChatJobID: DebugMaskedValue?
+        var activeChatProvider: String?
+        var pendingWorkoutSummaryProvider: String?
         var canResumePendingChatJob: Bool
         var lastChatError: String?
+        var lastChatProvider: String?
         var lastInsightsError: String?
+        var lastInsightsProvider: String?
+        var lastWorkoutSummaryProvider: String?
     }
 
     var generatedAt: Date
@@ -480,7 +486,8 @@ struct DebugDiagnosticsReport: Codable, Hashable, Sendable {
             buildNumber: BackupConstants.buildNumber,
             installID: nil,
             backendBaseURL: nil,
-            remoteCoachAvailable: false
+            remoteCoachAvailable: false,
+            selectedAIProvider: nil
         ),
         cloudSync: CloudSyncSection(
             lastSyncedRemoteVersion: nil,
@@ -491,9 +498,14 @@ struct DebugDiagnosticsReport: Codable, Hashable, Sendable {
         ),
         coach: CoachSection(
             activeChatJobID: nil,
+            activeChatProvider: nil,
+            pendingWorkoutSummaryProvider: nil,
             canResumePendingChatJob: false,
             lastChatError: nil,
-            lastInsightsError: nil
+            lastChatProvider: nil,
+            lastInsightsError: nil,
+            lastInsightsProvider: nil,
+            lastWorkoutSummaryProvider: nil
         ),
         network: [],
         logs: []
@@ -507,6 +519,7 @@ struct DebugDiagnosticsExportPayload: Codable, Hashable, Sendable {
         var installID: String?
         var backendBaseURL: String?
         var remoteCoachAvailable: Bool
+        var selectedAIProvider: String?
     }
 
     struct CloudSyncSection: Codable, Hashable, Sendable {
@@ -519,9 +532,14 @@ struct DebugDiagnosticsExportPayload: Codable, Hashable, Sendable {
 
     struct CoachSection: Codable, Hashable, Sendable {
         var activeChatJobID: String?
+        var activeChatProvider: String?
+        var pendingWorkoutSummaryProvider: String?
         var canResumePendingChatJob: Bool
         var lastChatError: String?
+        var lastChatProvider: String?
         var lastInsightsError: String?
+        var lastInsightsProvider: String?
+        var lastWorkoutSummaryProvider: String?
     }
 
     var generatedAt: Date
@@ -537,6 +555,7 @@ final class DebugDiagnosticsReportBuilder {
     private let eventStore: DebugEventStore
     private let appStoreProvider: @MainActor () -> AppStore
     private let coachStoreProvider: @MainActor () -> CoachStore
+    private let workoutSummaryStoreProvider: @MainActor () -> WorkoutSummaryStore
     private let cloudSyncStoreProvider: @MainActor () -> CloudSyncStore
     private let coachLocalStateStoreProvider: () -> CoachLocalStateStore
     private let cloudSyncLocalStateStoreProvider: () -> CloudSyncLocalStateStore
@@ -546,6 +565,7 @@ final class DebugDiagnosticsReportBuilder {
         eventStore: DebugEventStore,
         appStoreProvider: @escaping @MainActor () -> AppStore,
         coachStoreProvider: @escaping @MainActor () -> CoachStore,
+        workoutSummaryStoreProvider: @escaping @MainActor () -> WorkoutSummaryStore,
         cloudSyncStoreProvider: @escaping @MainActor () -> CloudSyncStore,
         coachLocalStateStoreProvider: @escaping () -> CoachLocalStateStore,
         cloudSyncLocalStateStoreProvider: @escaping () -> CloudSyncLocalStateStore,
@@ -554,6 +574,7 @@ final class DebugDiagnosticsReportBuilder {
         self.eventStore = eventStore
         self.appStoreProvider = appStoreProvider
         self.coachStoreProvider = coachStoreProvider
+        self.workoutSummaryStoreProvider = workoutSummaryStoreProvider
         self.cloudSyncStoreProvider = cloudSyncStoreProvider
         self.coachLocalStateStoreProvider = coachLocalStateStoreProvider
         self.cloudSyncLocalStateStoreProvider = cloudSyncLocalStateStoreProvider
@@ -565,6 +586,7 @@ final class DebugDiagnosticsReportBuilder {
         _ = appStoreProvider()
         let runtimeConfiguration = runtimeConfigurationProvider()
         let coachStore = coachStoreProvider()
+        let workoutSummaryStore = workoutSummaryStoreProvider()
         let cloudSyncStore = cloudSyncStoreProvider()
         let coachLocalStateStore = coachLocalStateStoreProvider()
         let cloudSyncLocalStateStore = cloudSyncLocalStateStoreProvider()
@@ -576,7 +598,8 @@ final class DebugDiagnosticsReportBuilder {
                 buildNumber: BackupConstants.buildNumber,
                 installID: DebugDiagnosticsSanitizer.mask(coachLocalStateStore.installID),
                 backendBaseURL: runtimeConfiguration.backendBaseURL?.absoluteString,
-                remoteCoachAvailable: runtimeConfiguration.canUseRemoteCoach
+                remoteCoachAvailable: runtimeConfiguration.canUseRemoteCoach,
+                selectedAIProvider: runtimeConfiguration.provider.rawValue
             ),
             cloudSync: DebugDiagnosticsReport.CloudSyncSection(
                 lastSyncedRemoteVersion: cloudSyncLocalStateStore.lastSyncedRemoteVersion,
@@ -591,13 +614,18 @@ final class DebugDiagnosticsReportBuilder {
             ),
             coach: DebugDiagnosticsReport.CoachSection(
                 activeChatJobID: DebugDiagnosticsSanitizer.mask(coachStore.activeChatJobID),
+                activeChatProvider: coachStore.activeChatProvider?.rawValue,
+                pendingWorkoutSummaryProvider: workoutSummaryStore.pendingProviderDebugValue,
                 canResumePendingChatJob: coachStore.canResumePendingChatJob,
                 lastChatError: DebugDiagnosticsSanitizer.sanitizeMessage(
                     coachStore.lastChatErrorDescription
                 ).nilIfEmpty,
+                lastChatProvider: coachStore.lastChatProvider?.rawValue,
                 lastInsightsError: DebugDiagnosticsSanitizer.sanitizeMessage(
                     coachStore.lastInsightsErrorDescription
-                ).nilIfEmpty
+                ).nilIfEmpty,
+                lastInsightsProvider: coachStore.lastInsightsProvider?.rawValue,
+                lastWorkoutSummaryProvider: workoutSummaryStore.lastSummaryProvider?.rawValue
             ),
             network: Array(snapshot.networkTraces.reversed()),
             logs: Array(snapshot.logs.reversed())
@@ -609,6 +637,7 @@ final class DebugDiagnosticsReportBuilder {
         _ = appStoreProvider()
         let runtimeConfiguration = runtimeConfigurationProvider()
         let coachStore = coachStoreProvider()
+        let workoutSummaryStore = workoutSummaryStoreProvider()
         let cloudSyncStore = cloudSyncStoreProvider()
         let coachLocalStateStore = coachLocalStateStoreProvider()
         let cloudSyncLocalStateStore = cloudSyncLocalStateStoreProvider()
@@ -620,7 +649,8 @@ final class DebugDiagnosticsReportBuilder {
                 buildNumber: BackupConstants.buildNumber,
                 installID: coachLocalStateStore.installID,
                 backendBaseURL: runtimeConfiguration.backendBaseURL?.absoluteString,
-                remoteCoachAvailable: runtimeConfiguration.canUseRemoteCoach
+                remoteCoachAvailable: runtimeConfiguration.canUseRemoteCoach,
+                selectedAIProvider: runtimeConfiguration.provider.rawValue
             ),
             cloudSync: DebugDiagnosticsExportPayload.CloudSyncSection(
                 lastSyncedRemoteVersion: cloudSyncLocalStateStore.lastSyncedRemoteVersion,
@@ -633,13 +663,18 @@ final class DebugDiagnosticsReportBuilder {
             ),
             coach: DebugDiagnosticsExportPayload.CoachSection(
                 activeChatJobID: coachStore.activeChatJobID,
+                activeChatProvider: coachStore.activeChatProvider?.rawValue,
+                pendingWorkoutSummaryProvider: workoutSummaryStore.pendingProviderDebugValue,
                 canResumePendingChatJob: coachStore.canResumePendingChatJob,
                 lastChatError: DebugDiagnosticsSanitizer.sanitizeMessage(
                     coachStore.lastChatErrorDescription
                 ).nilIfEmpty,
+                lastChatProvider: coachStore.lastChatProvider?.rawValue,
                 lastInsightsError: DebugDiagnosticsSanitizer.sanitizeMessage(
                     coachStore.lastInsightsErrorDescription
-                ).nilIfEmpty
+                ).nilIfEmpty,
+                lastInsightsProvider: coachStore.lastInsightsProvider?.rawValue,
+                lastWorkoutSummaryProvider: workoutSummaryStore.lastSummaryProvider?.rawValue
             ),
             network: Array(snapshot.networkTraces.reversed()),
             logs: Array(snapshot.logs.reversed())

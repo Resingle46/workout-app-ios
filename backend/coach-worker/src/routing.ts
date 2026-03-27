@@ -4,6 +4,7 @@ import type {
   CoachMemoryProfile,
 } from "./context";
 import type {
+  CoachAIProvider,
   CoachChatRequest,
   CoachProfileInsightsRequest,
   CoachWorkoutSummaryJobCreateRequest,
@@ -13,6 +14,12 @@ export const DEFAULT_AI_MODEL = "@cf/mistralai/mistral-small-3.1-24b-instruct";
 export const DEFAULT_CHAT_FAST_MODEL = "@cf/zai-org/glm-4.7-flash";
 export const DEFAULT_CHAT_REDUCED_MODEL = "@cf/meta/llama-3.1-8b-instruct-fast";
 export const DEFAULT_MODEL_ROUTING_VERSION = "phase1.v1";
+export const DEFAULT_GEMINI_CHAT_FAST_MODEL = "gemini-2.5-flash-lite";
+export const DEFAULT_GEMINI_CHAT_BALANCED_MODEL = "gemini-2.5-flash";
+export const DEFAULT_GEMINI_CHAT_REDUCED_MODEL = "gemini-2.5-flash-lite";
+export const DEFAULT_GEMINI_SUMMARY_MODEL = "gemini-2.5-flash";
+export const DEFAULT_GEMINI_INSIGHTS_MODEL = "gemini-2.5-flash";
+export const DEFAULT_GEMINI_SYNC_FALLBACK_MODEL = "gemini-2.5-flash-lite";
 
 export type CoachRoutingUseCase =
   | "simple_qna"
@@ -47,6 +54,7 @@ export interface ModelCapability {
 }
 
 export interface RoutingDecision {
+  provider: CoachAIProvider;
   operation: "chat" | "workout_summary" | "profile_insights";
   useCase: CoachRoutingUseCase;
   modelRole: CoachModelRole;
@@ -64,6 +72,7 @@ export interface RoutingDecision {
 }
 
 export interface ChatRoutingAttempt {
+  provider: CoachAIProvider;
   modelRole: CoachModelRole;
   selectedModel: string;
   contextProfile: CoachContextProfile;
@@ -86,6 +95,7 @@ export interface ChatRoutingAttempt {
 }
 
 export interface WorkoutSummaryRoutingAttempt {
+  provider: CoachAIProvider;
   modelRole: CoachModelRole;
   selectedModel: string;
   contextProfile: "rich_async_v1";
@@ -107,6 +117,7 @@ export interface WorkoutSummaryRoutingAttempt {
 }
 
 export interface ProfileInsightsRoutingAttempt {
+  provider: CoachAIProvider;
   modelRole: CoachModelRole;
   selectedModel: string;
   contextProfile: "compact_sync_v2";
@@ -141,7 +152,23 @@ type EnvLike = {
   INSIGHTS_FAST_MODEL?: string;
   QUALITY_ESCALATION_MODEL?: string;
   QUALITY_ESCALATION_ENABLED?: string;
+  GEMINI_CHAT_FAST_MODEL?: string;
+  GEMINI_CHAT_BALANCED_MODEL?: string;
+  GEMINI_CHAT_REDUCED_CONTEXT_MODEL?: string;
+  GEMINI_SUMMARY_FAST_MODEL?: string;
+  GEMINI_SUMMARY_BALANCED_MODEL?: string;
+  GEMINI_INSIGHTS_BALANCED_MODEL?: string;
+  GEMINI_INSIGHTS_FAST_MODEL?: string;
+  GEMINI_SYNC_FALLBACK_MODEL?: string;
+  GEMINI_QUALITY_ESCALATION_MODEL?: string;
 };
+
+export function resolveProvider(
+  requestProvider: CoachAIProvider | undefined,
+  metadataProvider: CoachAIProvider | undefined
+): CoachAIProvider {
+  return metadataProvider ?? requestProvider ?? "workers_ai";
+}
 
 export function isModelRoutingEnabled(env: EnvLike): boolean {
   return parseBooleanFlag(env.MODEL_ROUTING_ENABLED);
@@ -159,9 +186,26 @@ export function resolveModelRoutingVersion(env: EnvLike): string {
 
 export function resolveModelForRole(
   env: EnvLike,
-  role: CoachModelRole,
-  options: { allowAlternateRouting?: boolean } = {}
+  providerOrRole: CoachAIProvider | CoachModelRole,
+  roleOrOptions?: CoachModelRole | { allowAlternateRouting?: boolean },
+  maybeOptions: { allowAlternateRouting?: boolean } = {}
 ): string {
+  const provider: CoachAIProvider =
+    providerOrRole === "workers_ai" || providerOrRole === "gemini"
+      ? providerOrRole
+      : "workers_ai";
+  const role: CoachModelRole =
+    typeof roleOrOptions === "string"
+      ? roleOrOptions
+      : (providerOrRole as CoachModelRole);
+  const options =
+    typeof roleOrOptions === "string"
+      ? maybeOptions
+      : (roleOrOptions ?? {});
+
+  if (provider === "gemini") {
+    return resolveGeminiModelForRole(env, role, options);
+  }
   const seedModel = env.AI_MODEL?.trim() || DEFAULT_AI_MODEL;
   const allowAlternateRouting =
     options.allowAlternateRouting ?? isModelRoutingEnabled(env);
@@ -210,7 +254,15 @@ export function resolveModelForRole(
   }
 }
 
-export function resolveModelCapability(model: string): ModelCapability {
+export function resolveModelCapability(
+  provider: CoachAIProvider,
+  model: string
+): ModelCapability {
+  if (provider === "gemini") {
+    return {
+      structuredAdapter: "response_format_json_schema",
+    };
+  }
   if (
     model === "@cf/zai-org/glm-4.7-flash" ||
     model === "@cf/meta/llama-3.1-8b-instruct-fast"
@@ -231,6 +283,7 @@ export function buildChatRoutingDecision(
   options: { timeoutProfile?: "sync" | "async_job" } = {}
 ): RoutingDecision {
   const metadata = request.metadata;
+  const provider = resolveProvider(request.provider, metadata?.provider);
   const useCase = coerceUseCase(
     metadata?.useCase,
     classifyChatUseCase(request, options.timeoutProfile)
@@ -241,7 +294,7 @@ export function buildChatRoutingDecision(
   );
   const selectedModel =
     metadata?.selectedModel ??
-    resolveModelForRole(env, modelRole, {
+    resolveModelForRole(env, provider, modelRole, {
       allowAlternateRouting: isModelRoutingEnabled(env),
     });
   const allowedContextProfiles =
@@ -263,6 +316,7 @@ export function buildChatRoutingDecision(
     );
 
   return {
+    provider,
     operation: "chat",
     useCase,
     modelRole,
@@ -274,13 +328,17 @@ export function buildChatRoutingDecision(
     memoryCompatibilityKey:
       metadata?.memoryCompatibilityKey ??
       buildMemoryCompatibilityKey(
+        provider,
         "chat_markdown_v1",
         promptFamily,
         contextFamily,
         memoryProfile,
         routingVersion
       ),
-    structuredAdapter: resolveModelCapability(selectedModel).structuredAdapter,
+    structuredAdapter: resolveModelCapability(
+      provider,
+      selectedModel
+    ).structuredAdapter,
     outputContract: "chat_markdown_v1",
     promptFamily,
     contextFamily,
@@ -296,9 +354,10 @@ export function buildWorkoutSummaryRoutingDecision(
   }
 ): RoutingDecision {
   const metadata = request.metadata;
+  const provider = resolveProvider(request.provider, metadata?.provider);
   const selectedModel =
     metadata?.selectedModel ??
-    resolveModelForRole(env, "summary_fast", {
+    resolveModelForRole(env, provider, "summary_fast", {
       allowAlternateRouting: isModelRoutingEnabled(env),
     });
   const routingVersion =
@@ -307,10 +366,12 @@ export function buildWorkoutSummaryRoutingDecision(
     metadata?.routingReasonTags ??
     buildSummaryRoutingReasonTags(
       env,
+      provider,
       coerceModelRole(metadata?.modelRole, "summary_fast")
     );
 
   return {
+    provider,
     operation: "workout_summary",
     useCase: "workout_summary",
     modelRole: coerceModelRole(metadata?.modelRole, "summary_fast"),
@@ -318,7 +379,10 @@ export function buildWorkoutSummaryRoutingDecision(
     allowedContextProfiles: ["rich_async_v1"],
     payloadTier: "full",
     routingVersion,
-    structuredAdapter: resolveModelCapability(selectedModel).structuredAdapter,
+    structuredAdapter: resolveModelCapability(
+      provider,
+      selectedModel
+    ).structuredAdapter,
     outputContract: "summary_json_v1",
     promptFamily: metadata?.promptFamily ?? "summary_async_v1",
     contextFamily: metadata?.contextFamily ?? "rich_async_family",
@@ -334,10 +398,11 @@ export function buildProfileInsightsRoutingDecision(
   }
 ): RoutingDecision {
   const metadata = request.metadata;
+  const provider = resolveProvider(request.provider, metadata?.provider);
   const modelRole = coerceModelRole(metadata?.modelRole, "insights_fast");
   const selectedModel =
     metadata?.selectedModel ??
-    resolveModelForRole(env, modelRole, {
+    resolveModelForRole(env, provider, modelRole, {
       allowAlternateRouting: isModelRoutingEnabled(env),
     });
   const routingVersion =
@@ -347,10 +412,12 @@ export function buildProfileInsightsRoutingDecision(
     metadata?.routingReasonTags ??
     buildProfileInsightsRoutingReasonTags(
       env,
+      provider,
       modelRole
     );
 
   return {
+    provider,
     operation: "profile_insights",
     useCase: coerceUseCase(metadata?.useCase, "profile_insights"),
     modelRole,
@@ -361,13 +428,17 @@ export function buildProfileInsightsRoutingDecision(
     memoryCompatibilityKey:
       metadata?.memoryCompatibilityKey ??
       buildMemoryCompatibilityKey(
+        provider,
         "insights_json_v1",
         "profile_sync_v1",
         "compact_sync_family",
         memoryProfile,
         routingVersion
       ),
-    structuredAdapter: resolveModelCapability(selectedModel).structuredAdapter,
+    structuredAdapter: resolveModelCapability(
+      provider,
+      selectedModel
+    ).structuredAdapter,
     outputContract: "insights_json_v1",
     promptFamily: metadata?.promptFamily ?? "profile_sync_v1",
     contextFamily: metadata?.contextFamily ?? "compact_sync_family",
@@ -392,6 +463,7 @@ export function buildChatRoutingAttempts(
 
   const attempts: ChatRoutingAttempt[] = [
     {
+      provider: decision.provider,
       modelRole: decision.modelRole,
       selectedModel: decision.selectedModel,
       contextProfile: decision.allowedContextProfiles[0] ?? "compact_sync_v2",
@@ -415,6 +487,7 @@ export function buildChatRoutingAttempts(
 
   if (reducedContextProfile !== attempts[0].contextProfile) {
     attempts.push({
+      provider: decision.provider,
       modelRole: decision.modelRole,
       selectedModel: decision.selectedModel,
       contextProfile: reducedContextProfile,
@@ -437,8 +510,9 @@ export function buildChatRoutingAttempts(
     });
   }
 
-  const alternateModel = resolveModelForRole(env, alternateRole);
+  const alternateModel = resolveModelForRole(env, decision.provider, alternateRole);
   attempts.push({
+    provider: decision.provider,
     modelRole: alternateRole,
     selectedModel: alternateModel,
     contextProfile: reducedContextProfile,
@@ -451,7 +525,10 @@ export function buildChatRoutingAttempts(
       reducedContextProfile === "compact_sync_v2" ? "compact" : "reduced",
     mode: "structured",
     fallbackStage: "alternate_model_reduced_context",
-    structuredAdapter: resolveModelCapability(alternateModel).structuredAdapter,
+    structuredAdapter: resolveModelCapability(
+      decision.provider,
+      alternateModel
+    ).structuredAdapter,
     memoryCompatibilityKey: decision.memoryCompatibilityKey ?? "chat-memory",
     routingVersion: decision.routingVersion,
     useCase: decision.useCase,
@@ -460,8 +537,13 @@ export function buildChatRoutingAttempts(
     fallbackHopCount: attempts.length,
   });
 
-  const reducedModel = resolveModelForRole(env, "chat_reduced_context");
+  const reducedModel = resolveModelForRole(
+    env,
+    decision.provider,
+    "chat_reduced_context"
+  );
   attempts.push({
+    provider: decision.provider,
     modelRole: "chat_reduced_context",
     selectedModel: reducedModel,
     contextProfile: smallestContextProfile,
@@ -474,7 +556,10 @@ export function buildChatRoutingAttempts(
       smallestContextProfile === "compact_sync_v2" ? "compact" : "reduced",
     mode: "structured",
     fallbackStage: "reduced_model_structured",
-    structuredAdapter: resolveModelCapability(reducedModel).structuredAdapter,
+    structuredAdapter: resolveModelCapability(
+      decision.provider,
+      reducedModel
+    ).structuredAdapter,
     memoryCompatibilityKey: decision.memoryCompatibilityKey ?? "chat-memory",
     routingVersion: decision.routingVersion,
     useCase: decision.useCase,
@@ -483,6 +568,7 @@ export function buildChatRoutingAttempts(
     fallbackHopCount: attempts.length,
   });
   attempts.push({
+    provider: decision.provider,
     modelRole: "chat_reduced_context",
     selectedModel: reducedModel,
     contextProfile: smallestContextProfile,
@@ -495,7 +581,10 @@ export function buildChatRoutingAttempts(
       smallestContextProfile === "compact_sync_v2" ? "compact" : "reduced",
     mode: "plain_text_fallback",
     fallbackStage: "reduced_model_plain_text",
-    structuredAdapter: resolveModelCapability(reducedModel).structuredAdapter,
+    structuredAdapter: resolveModelCapability(
+      decision.provider,
+      reducedModel
+    ).structuredAdapter,
     memoryCompatibilityKey: decision.memoryCompatibilityKey ?? "chat-memory",
     routingVersion: decision.routingVersion,
     useCase: decision.useCase,
@@ -513,11 +602,20 @@ export function buildWorkoutSummaryRoutingAttempts(
 ): WorkoutSummaryRoutingAttempt[] {
   const alternateRole =
     decision.modelRole === "summary_balanced" ? "summary_fast" : "summary_balanced";
-  const alternateModel = resolveModelForRole(env, alternateRole);
-  const fallbackModel = resolveModelForRole(env, "sync_fallback");
+  const alternateModel = resolveModelForRole(
+    env,
+    decision.provider,
+    alternateRole
+  );
+  const fallbackModel = resolveModelForRole(
+    env,
+    decision.provider,
+    "sync_fallback"
+  );
 
   return dedupeWorkoutSummaryAttempts([
     {
+      provider: decision.provider,
       modelRole: decision.modelRole,
       selectedModel: decision.selectedModel,
       contextProfile: "rich_async_v1",
@@ -533,6 +631,7 @@ export function buildWorkoutSummaryRoutingAttempts(
       fallbackHopCount: 0,
     },
     {
+      provider: decision.provider,
       modelRole: decision.modelRole,
       selectedModel: decision.selectedModel,
       contextProfile: "rich_async_v1",
@@ -548,6 +647,7 @@ export function buildWorkoutSummaryRoutingAttempts(
       fallbackHopCount: 1,
     },
     {
+      provider: decision.provider,
       modelRole: alternateRole,
       selectedModel: alternateModel,
       contextProfile: "rich_async_v1",
@@ -555,7 +655,10 @@ export function buildWorkoutSummaryRoutingAttempts(
       payloadTier: "reduced",
       mode: "structured",
       fallbackStage: "alternate_model_reduced_payload",
-      structuredAdapter: resolveModelCapability(alternateModel).structuredAdapter,
+      structuredAdapter: resolveModelCapability(
+        decision.provider,
+        alternateModel
+      ).structuredAdapter,
       routingVersion: decision.routingVersion,
       useCase: "workout_summary",
       routingReasonTags: decision.routingReasonTags,
@@ -563,6 +666,7 @@ export function buildWorkoutSummaryRoutingAttempts(
       fallbackHopCount: 2,
     },
     {
+      provider: decision.provider,
       modelRole: "sync_fallback",
       selectedModel: fallbackModel,
       contextProfile: "rich_async_v1",
@@ -570,7 +674,10 @@ export function buildWorkoutSummaryRoutingAttempts(
       payloadTier: "reduced",
       mode: "structured",
       fallbackStage: "sync_fallback_structured",
-      structuredAdapter: resolveModelCapability(fallbackModel).structuredAdapter,
+      structuredAdapter: resolveModelCapability(
+        decision.provider,
+        fallbackModel
+      ).structuredAdapter,
       routingVersion: decision.routingVersion,
       useCase: "workout_summary",
       routingReasonTags: decision.routingReasonTags,
@@ -578,6 +685,7 @@ export function buildWorkoutSummaryRoutingAttempts(
       fallbackHopCount: 3,
     },
     {
+      provider: decision.provider,
       modelRole: "sync_fallback",
       selectedModel: fallbackModel,
       contextProfile: "rich_async_v1",
@@ -585,7 +693,10 @@ export function buildWorkoutSummaryRoutingAttempts(
       payloadTier: "reduced",
       mode: "plain_text_fallback",
       fallbackStage: "sync_fallback_plain_text",
-      structuredAdapter: resolveModelCapability(fallbackModel).structuredAdapter,
+      structuredAdapter: resolveModelCapability(
+        decision.provider,
+        fallbackModel
+      ).structuredAdapter,
       routingVersion: decision.routingVersion,
       useCase: "workout_summary",
       routingReasonTags: decision.routingReasonTags,
@@ -601,10 +712,19 @@ export function buildProfileInsightsRoutingAttempts(
 ): ProfileInsightsRoutingAttempt[] {
   const memoryCompatibilityKey =
     decision.memoryCompatibilityKey ?? "profile-insights-memory";
-  const balancedModel = resolveModelForRole(env, "insights_balanced");
-  const syncFallbackModel = resolveModelForRole(env, "sync_fallback");
+  const balancedModel = resolveModelForRole(
+    env,
+    decision.provider,
+    "insights_balanced"
+  );
+  const syncFallbackModel = resolveModelForRole(
+    env,
+    decision.provider,
+    "sync_fallback"
+  );
   const attempts: ProfileInsightsRoutingAttempt[] = [
     {
+      provider: decision.provider,
       modelRole: decision.modelRole,
       selectedModel: decision.selectedModel,
       contextProfile: "compact_sync_v2",
@@ -621,6 +741,7 @@ export function buildProfileInsightsRoutingAttempts(
       fallbackHopCount: 0,
     },
     {
+      provider: decision.provider,
       modelRole: "insights_balanced",
       selectedModel: balancedModel,
       contextProfile: "compact_sync_v2",
@@ -628,7 +749,10 @@ export function buildProfileInsightsRoutingAttempts(
       payloadTier: "compact",
       mode: "structured",
       fallbackStage: "insights_balanced_structured",
-      structuredAdapter: resolveModelCapability(balancedModel).structuredAdapter,
+      structuredAdapter: resolveModelCapability(
+        decision.provider,
+        balancedModel
+      ).structuredAdapter,
       memoryCompatibilityKey,
       routingVersion: decision.routingVersion,
       useCase: "profile_insights",
@@ -639,10 +763,15 @@ export function buildProfileInsightsRoutingAttempts(
   ];
 
   if (decision.escalationEligible) {
-    const escalationModel = resolveModelForRole(env, "quality_escalation");
+    const escalationModel = resolveModelForRole(
+      env,
+      decision.provider,
+      "quality_escalation"
+    );
     if (escalationModel !== balancedModel) {
       attempts.push({
         modelRole: "quality_escalation",
+        provider: decision.provider,
         selectedModel: escalationModel,
         contextProfile: "compact_sync_v2",
         promptProfile: "profile_compact_context_v2",
@@ -650,7 +779,10 @@ export function buildProfileInsightsRoutingAttempts(
         mode: "structured",
         fallbackStage: "quality_escalation_structured",
         structuredAdapter:
-          resolveModelCapability(escalationModel).structuredAdapter,
+          resolveModelCapability(
+            decision.provider,
+            escalationModel
+          ).structuredAdapter,
         memoryCompatibilityKey,
         routingVersion: decision.routingVersion,
         useCase: "profile_insights",
@@ -662,6 +794,7 @@ export function buildProfileInsightsRoutingAttempts(
   }
 
   attempts.push({
+    provider: decision.provider,
     modelRole: "sync_fallback",
     selectedModel: syncFallbackModel,
     contextProfile: "compact_sync_v2",
@@ -669,7 +802,10 @@ export function buildProfileInsightsRoutingAttempts(
     payloadTier: "compact",
     mode: "plain_text_fallback",
     fallbackStage: "sync_fallback_plain_text",
-    structuredAdapter: resolveModelCapability(syncFallbackModel).structuredAdapter,
+    structuredAdapter: resolveModelCapability(
+      decision.provider,
+      syncFallbackModel
+    ).structuredAdapter,
     memoryCompatibilityKey,
     routingVersion: decision.routingVersion,
     useCase: "profile_insights",
@@ -699,6 +835,7 @@ export function resolvePrimaryChatExecutionProfile(
 }
 
 export function buildMemoryCompatibilityKey(
+  provider: CoachAIProvider,
   outputContract: CoachOutputContract,
   promptFamily: string,
   contextFamily: string,
@@ -706,6 +843,7 @@ export function buildMemoryCompatibilityKey(
   routingVersion: string
 ): string {
   return [
+    provider,
     outputContract,
     promptFamily,
     contextFamily,
@@ -865,6 +1003,7 @@ function buildChatRoutingReasonTags(
 
   return [
     "operation:chat",
+    `provider:${resolveProvider(request.provider, undefined)}`,
     `use_case:${useCase}`,
     `model_role:${modelRole}`,
     `timeout_profile:${timeoutProfile ?? "sync_default"}`,
@@ -878,10 +1017,12 @@ function buildChatRoutingReasonTags(
 
 function buildSummaryRoutingReasonTags(
   env: EnvLike,
+  provider: CoachAIProvider,
   modelRole: CoachModelRole
 ): string[] {
   return [
     "operation:workout_summary",
+    `provider:${provider}`,
     "use_case:workout_summary",
     `model_role:${modelRole}`,
     "timeout_profile:async_job",
@@ -893,10 +1034,12 @@ function buildSummaryRoutingReasonTags(
 
 function buildProfileInsightsRoutingReasonTags(
   env: EnvLike,
+  provider: CoachAIProvider,
   modelRole: CoachModelRole
 ): string[] {
   return [
     "operation:profile_insights",
+    `provider:${provider}`,
     "use_case:profile_insights",
     `model_role:${modelRole}`,
     "timeout_profile:sync",
@@ -1006,4 +1149,61 @@ function isModelRole(value: string | undefined): value is CoachModelRole {
     value === "sync_fallback" ||
     value === "quality_escalation"
   );
+}
+
+function resolveGeminiModelForRole(
+  env: EnvLike,
+  role: CoachModelRole,
+  options: { allowAlternateRouting?: boolean } = {}
+): string {
+  const seedModel = env.GEMINI_CHAT_BALANCED_MODEL?.trim() || DEFAULT_GEMINI_CHAT_BALANCED_MODEL;
+  const allowAlternateRouting =
+    options.allowAlternateRouting ?? isModelRoutingEnabled(env);
+
+  if (!allowAlternateRouting) {
+    if (role === "quality_escalation") {
+      return seedModel;
+    }
+    return seedModel;
+  }
+
+  switch (role) {
+    case "chat_fast":
+      return env.GEMINI_CHAT_FAST_MODEL?.trim() || DEFAULT_GEMINI_CHAT_FAST_MODEL;
+    case "chat_balanced":
+      return env.GEMINI_CHAT_BALANCED_MODEL?.trim() || seedModel;
+    case "chat_reduced_context":
+      return (
+        env.GEMINI_CHAT_REDUCED_CONTEXT_MODEL?.trim() ||
+        DEFAULT_GEMINI_CHAT_REDUCED_MODEL
+      );
+    case "summary_fast":
+      return env.GEMINI_SUMMARY_FAST_MODEL?.trim() || DEFAULT_GEMINI_SUMMARY_MODEL;
+    case "summary_balanced":
+      return (
+        env.GEMINI_SUMMARY_BALANCED_MODEL?.trim() ||
+        env.GEMINI_SUMMARY_FAST_MODEL?.trim() ||
+        DEFAULT_GEMINI_SUMMARY_MODEL
+      );
+    case "insights_fast":
+      return (
+        env.GEMINI_INSIGHTS_FAST_MODEL?.trim() ||
+        DEFAULT_GEMINI_INSIGHTS_MODEL
+      );
+    case "insights_balanced":
+      return (
+        env.GEMINI_INSIGHTS_BALANCED_MODEL?.trim() ||
+        env.GEMINI_INSIGHTS_FAST_MODEL?.trim() ||
+        DEFAULT_GEMINI_INSIGHTS_MODEL
+      );
+    case "sync_fallback":
+      return (
+        env.GEMINI_SYNC_FALLBACK_MODEL?.trim() ||
+        DEFAULT_GEMINI_SYNC_FALLBACK_MODEL
+      );
+    case "quality_escalation":
+      return env.GEMINI_QUALITY_ESCALATION_MODEL?.trim() || seedModel;
+    default:
+      return seedModel;
+  }
 }

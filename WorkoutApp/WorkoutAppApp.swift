@@ -60,6 +60,7 @@ struct WorkoutAppApp: App {
             eventStore: debugEventStore,
             appStoreProvider: { store },
             coachStoreProvider: { coachStore },
+            workoutSummaryStoreProvider: { workoutSummaryStore },
             cloudSyncStoreProvider: { cloudSyncStore },
             coachLocalStateStoreProvider: { localStateStore },
             cloudSyncLocalStateStoreProvider: { cloudSyncLocalStateStore },

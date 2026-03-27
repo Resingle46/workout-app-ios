@@ -2,7 +2,7 @@ import type { WorkflowStep } from "cloudflare:workers";
 import {
   CoachInferenceServiceError,
   DEFAULT_AI_MODEL,
-  createWorkersAICoachService,
+  createInferenceServiceForProvider,
   type CoachInferenceService,
   type Env,
 } from "./openai";
@@ -27,7 +27,10 @@ export interface WorkoutSummaryWorkflowPayload {
 }
 
 interface WorkoutSummaryExecutionDependencies {
-  createInferenceService?: (env: Env) => CoachInferenceService;
+  createInferenceService?: (
+    env: Env,
+    provider: "workers_ai" | "gemini"
+  ) => CoachInferenceService;
   createStateRepository?: (env: Env) => CoachStateStore;
   now?: () => number;
 }
@@ -39,13 +42,12 @@ export async function executeWorkoutSummaryJob(
   step?: WorkflowStep
 ): Promise<CoachWorkoutSummaryJobRecord | null> {
   const createInferenceService =
-    deps.createInferenceService ?? createWorkersAICoachService;
+    deps.createInferenceService ?? createInferenceServiceForProvider;
   const createStateRepository =
     deps.createStateRepository ?? createDefaultStateRepository;
   const now = deps.now ?? Date.now;
 
   const stateRepository = createStateRepository(env);
-  const inferenceService = createInferenceService(env);
   const initialJob = await stateRepository.getWorkoutSummaryJobByID(jobID);
 
   if (!initialJob) {
@@ -53,11 +55,17 @@ export async function executeWorkoutSummaryJob(
       JSON.stringify({
         event: "workout_summary_job_failed",
         jobID,
+        provider: "unknown",
         errorCode: "job_not_found",
       })
     );
     return null;
   }
+
+  const inferenceService = createInferenceService(
+    env,
+    initialJob.provider ?? "workers_ai"
+  );
 
   if (isTerminalJobStatus(initialJob.status)) {
     return initialJob;
@@ -303,6 +311,7 @@ function logWorkoutSummaryJobEvent(
     historySessionCount: job.historySessionCount,
     promptVersion: job.promptVersion,
     model: job.model,
+    provider: job.provider ?? job.preparedRequest.metadata?.provider ?? "workers_ai",
     useCase: job.preparedRequest.metadata?.useCase,
     modelRole: job.preparedRequest.metadata?.modelRole,
     selectedModel: job.preparedRequest.metadata?.selectedModel,
@@ -332,7 +341,7 @@ function normalizeWorkoutSummaryJobExecutionError(
     return {
       code: error.code,
       message: "Coach upstream request failed.",
-      retryable: error.code.startsWith("upstream_"),
+      retryable: isRetryableInferenceErrorCode(error.code),
     };
   }
 
@@ -341,6 +350,14 @@ function normalizeWorkoutSummaryJobExecutionError(
     message: "Internal server error.",
     retryable: true,
   };
+}
+
+function isRetryableInferenceErrorCode(code: string): boolean {
+  return (
+    code.startsWith("upstream_") ||
+    code === "provider_rate_limited" ||
+    code === "provider_unavailable"
+  );
 }
 
 function extractNumericErrorDetail(

@@ -66,6 +66,14 @@
     "SYNC_FALLBACK_MODEL": "@cf/meta/llama-3.1-8b-instruct-fast",
     "INSIGHTS_FAST_MODEL": "@cf/zai-org/glm-4.7-flash",
     "INSIGHTS_BALANCED_MODEL": "@cf/mistralai/mistral-small-3.1-24b-instruct",
-    "QUALITY_ESCALATION_ENABLED": "true"
+    "QUALITY_ESCALATION_ENABLED": "true",
+    "GEMINI_CHAT_FAST_MODEL": "gemini-2.5-flash-lite",
+    "GEMINI_CHAT_BALANCED_MODEL": "gemini-2.5-flash",
+    "GEMINI_CHAT_REDUCED_CONTEXT_MODEL": "gemini-2.5-flash-lite",
+    "GEMINI_SUMMARY_FAST_MODEL": "gemini-2.5-flash",
+    "GEMINI_SUMMARY_BALANCED_MODEL": "gemini-2.5-flash",
+    "GEMINI_INSIGHTS_FAST_MODEL": "gemini-2.5-flash",
+    "GEMINI_INSIGHTS_BALANCED_MODEL": "gemini-2.5-flash",
+    "GEMINI_SYNC_FALLBACK_MODEL": "gemini-2.5-flash-lite"
   }
 }

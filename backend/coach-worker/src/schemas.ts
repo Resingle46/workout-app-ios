@@ -10,6 +10,7 @@ const optionalTrimmedStringSchema = z.string().trim().min(1).optional();
 const installIDSchema = z.string().trim().min(1).max(200);
 const snapshotHashSchema = z.string().trim().min(1).max(200);
 const workoutSummaryGroupKindSchema = z.enum(["regular", "superset"]);
+export const aiProviderSchema = z.enum(["workers_ai", "gemini"]);
 const COACH_CHAT_MARKDOWN_MAX_LENGTH = 6_000;
 
 const userProfileSchema = z
@@ -305,6 +306,7 @@ export const profileInsightsRequestSchema = z
   .object({
     locale: nonEmptyStringSchema,
     installID: installIDSchema,
+    provider: aiProviderSchema.optional().default("workers_ai"),
     snapshotHash: snapshotHashSchema.optional(),
     snapshot: coachContextPayloadSchema.optional(),
     snapshotUpdatedAt: isoDateTimeSchema.optional(),
@@ -319,6 +321,7 @@ export const chatRequestSchema = z
     locale: nonEmptyStringSchema,
     question: nonEmptyStringSchema,
     installID: installIDSchema,
+    provider: aiProviderSchema.optional().default("workers_ai"),
     snapshotHash: snapshotHashSchema.optional(),
     snapshot: coachContextPayloadSchema.optional(),
     snapshotUpdatedAt: isoDateTimeSchema.optional(),
@@ -399,6 +402,7 @@ const workoutSummaryExerciseHistorySchema = z
 
 const jobMetadataSchema = z
   .object({
+    provider: aiProviderSchema.optional(),
     jobDeadlineAt: isoDateTimeSchema.optional(),
     contextProfile: nonEmptyStringSchema.max(80).optional(),
     promptProfile: nonEmptyStringSchema.max(80).optional(),
@@ -423,6 +427,7 @@ export const workoutSummaryJobCreateRequestSchema = z
   .object({
     locale: nonEmptyStringSchema,
     installID: installIDSchema,
+    provider: aiProviderSchema.optional().default("workers_ai"),
     clientRequestID: z.uuid(),
     sessionID: uuidSchema,
     fingerprint: snapshotHashSchema,
@@ -800,6 +805,7 @@ export type CoachProfileInsightsRequest = z.infer<
 >;
 export type CoachChatRequest = z.infer<typeof chatRequestSchema>;
 export type CoachChatJobCreateRequest = z.infer<typeof chatJobCreateRequestSchema>;
+export type CoachAIProvider = z.infer<typeof aiProviderSchema>;
 export type CoachSnapshotSyncRequest = z.infer<typeof snapshotSyncRequestSchema>;
 export type CoachSnapshotSyncResponse = z.infer<
   typeof snapshotSyncResponseSchema

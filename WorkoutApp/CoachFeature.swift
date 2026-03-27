@@ -6,17 +6,38 @@ import UIKit
 
 private let coachStoreDefaultMaxChatPollingDuration: TimeInterval = 180
 
+enum CoachAIProvider: String, Codable, CaseIterable, Hashable, Sendable {
+    case workersAI = "workers_ai"
+    case gemini
+
+    var debugName: String {
+        switch self {
+        case .workersAI:
+            return "Cloudflare Workers AI"
+        case .gemini:
+            return "Gemini"
+        }
+    }
+}
+
 struct CoachRuntimeConfiguration: Hashable, Sendable {
     var isFeatureEnabled: Bool
     var backendBaseURL: URL?
     var internalBearerToken: String?
+    var provider: CoachAIProvider
 
-    init(isFeatureEnabled: Bool, backendBaseURL: URL?, internalBearerToken: String? = nil) {
+    init(
+        isFeatureEnabled: Bool,
+        backendBaseURL: URL?,
+        internalBearerToken: String? = nil,
+        provider: CoachAIProvider = .workersAI
+    ) {
         self.isFeatureEnabled = isFeatureEnabled
         self.backendBaseURL = backendBaseURL
         self.internalBearerToken = internalBearerToken?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .nilIfEmpty
+        self.provider = provider
     }
 
     init(bundle: Bundle) {
@@ -29,7 +50,8 @@ struct CoachRuntimeConfiguration: Hashable, Sendable {
         self.init(
             isFeatureEnabled: isFeatureEnabled,
             backendBaseURL: Self.parseBackendBaseURL(baseURLString),
-            internalBearerToken: internalBearerToken
+            internalBearerToken: internalBearerToken,
+            provider: .workersAI
         )
     }
 
@@ -76,6 +98,7 @@ final class CoachRuntimeConfigurationStore {
     var isFeatureEnabled: Bool
     var backendBaseURLText: String
     var internalBearerToken: String
+    var provider: CoachAIProvider
 
     private let defaultConfiguration: CoachRuntimeConfiguration
     private let defaults: UserDefaults
@@ -112,20 +135,26 @@ final class CoachRuntimeConfigurationStore {
             ?? ""
         )
         .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        self.provider = Self.parseProvider(
+            defaults.string(forKey: PreferenceKey.provider)
+        ) ?? defaultConfiguration.provider
     }
 
     var runtimeConfiguration: CoachRuntimeConfiguration {
         CoachRuntimeConfiguration(
             isFeatureEnabled: isFeatureEnabled,
             backendBaseURL: CoachRuntimeConfiguration.parseBackendBaseURL(backendBaseURLText),
-            internalBearerToken: internalBearerToken
+            internalBearerToken: internalBearerToken,
+            provider: provider
         )
     }
 
     var hasLocalOverrides: Bool {
         defaults.object(forKey: PreferenceKey.featureEnabled) != nil ||
         defaults.object(forKey: PreferenceKey.backendBaseURL) != nil ||
-        defaults.object(forKey: PreferenceKey.internalBearerToken) != nil
+        defaults.object(forKey: PreferenceKey.internalBearerToken) != nil ||
+        defaults.object(forKey: PreferenceKey.provider) != nil
     }
 
     @discardableResult
@@ -147,6 +176,8 @@ final class CoachRuntimeConfigurationStore {
             defaults.set(internalBearerToken, forKey: PreferenceKey.internalBearerToken)
         }
 
+        defaults.set(provider.rawValue, forKey: PreferenceKey.provider)
+
         return runtimeConfiguration
     }
 
@@ -155,18 +186,28 @@ final class CoachRuntimeConfigurationStore {
         defaults.removeObject(forKey: PreferenceKey.featureEnabled)
         defaults.removeObject(forKey: PreferenceKey.backendBaseURL)
         defaults.removeObject(forKey: PreferenceKey.internalBearerToken)
+        defaults.removeObject(forKey: PreferenceKey.provider)
 
         isFeatureEnabled = defaultConfiguration.isFeatureEnabled
         backendBaseURLText = defaultConfiguration.backendBaseURLString
         internalBearerToken = defaultConfiguration.internalBearerToken ?? ""
+        provider = defaultConfiguration.provider
 
         return runtimeConfiguration
+    }
+
+    private static func parseProvider(_ value: String?) -> CoachAIProvider? {
+        guard let value else {
+            return nil
+        }
+        return CoachAIProvider(rawValue: value.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
     private enum PreferenceKey {
         static let featureEnabled = "coach.runtime.feature_enabled"
         static let backendBaseURL = "coach.runtime.backend_base_url"
         static let internalBearerToken = "coach.runtime.internal_bearer_token"
+        static let provider = "coach.runtime.provider"
     }
 }
 
@@ -202,6 +243,21 @@ final class CoachLocalStateStore {
         defaults.object(forKey: PreferenceKey.lastAcceptedSnapshotAt) as? Date
     }
 
+    var pendingChatState: PendingChatState? {
+        guard let data = defaults.data(forKey: PreferenceKey.pendingChatState) else {
+            return nil
+        }
+        return try? JSONDecoder().decode(PendingChatState.self, from: data)
+    }
+
+    var pendingWorkoutSummaryStates: [UUID: PendingWorkoutSummaryState] {
+        guard let data = defaults.data(forKey: PreferenceKey.pendingWorkoutSummaryStates),
+              let decoded = try? JSONDecoder().decode([UUID: PendingWorkoutSummaryState].self, from: data) else {
+            return [:]
+        }
+        return decoded
+    }
+
     func markSnapshotAccepted(hash: String, at date: Date = .now) {
         defaults.set(hash, forKey: PreferenceKey.lastAcceptedSnapshotHash)
         defaults.set(date, forKey: PreferenceKey.lastAcceptedSnapshotAt)
@@ -212,6 +268,39 @@ final class CoachLocalStateStore {
         defaults.removeObject(forKey: PreferenceKey.lastAcceptedSnapshotAt)
     }
 
+    func storePendingChatState(_ state: PendingChatState) {
+        guard let data = try? JSONEncoder().encode(state) else {
+            return
+        }
+        defaults.set(data, forKey: PreferenceKey.pendingChatState)
+    }
+
+    func clearPendingChatState() {
+        defaults.removeObject(forKey: PreferenceKey.pendingChatState)
+    }
+
+    func storePendingWorkoutSummaryState(_ state: PendingWorkoutSummaryState) {
+        var states = pendingWorkoutSummaryStates
+        states[state.sessionID] = state
+        guard let data = try? JSONEncoder().encode(states) else {
+            return
+        }
+        defaults.set(data, forKey: PreferenceKey.pendingWorkoutSummaryStates)
+    }
+
+    func removePendingWorkoutSummaryState(sessionID: UUID) {
+        var states = pendingWorkoutSummaryStates
+        states.removeValue(forKey: sessionID)
+        if states.isEmpty {
+            defaults.removeObject(forKey: PreferenceKey.pendingWorkoutSummaryStates)
+            return
+        }
+        guard let data = try? JSONEncoder().encode(states) else {
+            return
+        }
+        defaults.set(data, forKey: PreferenceKey.pendingWorkoutSummaryStates)
+    }
+
     var userDefaults: UserDefaults {
         defaults
     }
@@ -220,6 +309,72 @@ final class CoachLocalStateStore {
         static let installID = "coach.runtime.install_id"
         static let lastAcceptedSnapshotHash = "coach.runtime.last_accepted_snapshot_hash"
         static let lastAcceptedSnapshotAt = "coach.runtime.last_accepted_snapshot_at"
+        static let pendingChatState = "coach.runtime.pending_chat_state"
+        static let pendingWorkoutSummaryStates = "coach.runtime.pending_workout_summary_states"
+    }
+}
+
+extension CoachLocalStateStore {
+    struct PendingChatState: Codable, Hashable, Sendable {
+        var jobID: String
+        var installID: String
+        var provider: CoachAIProvider
+        var awaitingResume: Bool
+
+        init(
+            jobID: String,
+            installID: String,
+            provider: CoachAIProvider,
+            awaitingResume: Bool
+        ) {
+            self.jobID = jobID
+            self.installID = installID
+            self.provider = provider
+            self.awaitingResume = awaitingResume
+        }
+
+        init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            self.jobID = try container.decode(String.self, forKey: .jobID)
+            self.installID = try container.decode(String.self, forKey: .installID)
+            self.provider = try container.decodeIfPresent(CoachAIProvider.self, forKey: .provider) ?? .workersAI
+            self.awaitingResume = try container.decodeIfPresent(Bool.self, forKey: .awaitingResume) ?? false
+        }
+    }
+
+    struct PendingWorkoutSummaryState: Codable, Hashable, Sendable {
+        var sessionID: UUID
+        var jobID: String
+        var fingerprint: String
+        var provider: CoachAIProvider
+        var requestMode: WorkoutSummaryRequestMode
+        var awaitingResume: Bool
+
+        init(
+            sessionID: UUID,
+            jobID: String,
+            fingerprint: String,
+            provider: CoachAIProvider,
+            requestMode: WorkoutSummaryRequestMode,
+            awaitingResume: Bool
+        ) {
+            self.sessionID = sessionID
+            self.jobID = jobID
+            self.fingerprint = fingerprint
+            self.provider = provider
+            self.requestMode = requestMode
+            self.awaitingResume = awaitingResume
+        }
+
+        init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            self.sessionID = try container.decode(UUID.self, forKey: .sessionID)
+            self.jobID = try container.decode(String.self, forKey: .jobID)
+            self.fingerprint = try container.decode(String.self, forKey: .fingerprint)
+            self.provider = try container.decodeIfPresent(CoachAIProvider.self, forKey: .provider) ?? .workersAI
+            self.requestMode = try container.decodeIfPresent(WorkoutSummaryRequestMode.self, forKey: .requestMode) ?? .final
+            self.awaitingResume = try container.decodeIfPresent(Bool.self, forKey: .awaitingResume) ?? false
+        }
     }
 }
 
@@ -556,6 +711,7 @@ struct CoachSnapshotSyncResponse: Codable, Hashable, Sendable {
 struct CoachProfileInsightsRequest: Codable, Sendable {
     var locale: String
     var installID: String
+    var provider: CoachAIProvider
     var snapshotHash: String?
     var snapshot: CompactCoachSnapshot?
     var snapshotUpdatedAt: Date?
@@ -568,6 +724,7 @@ struct CoachChatRequest: Codable, Sendable {
     var locale: String
     var question: String
     var installID: String
+    var provider: CoachAIProvider
     var snapshotHash: String?
     var snapshot: CompactCoachSnapshot?
     var snapshotUpdatedAt: Date?
@@ -580,6 +737,7 @@ struct CoachChatJobCreateRequest: Codable, Sendable {
     var locale: String
     var question: String
     var installID: String
+    var provider: CoachAIProvider
     var snapshotHash: String?
     var snapshot: CompactCoachSnapshot?
     var snapshotUpdatedAt: Date?
@@ -689,6 +847,7 @@ struct CoachProfileInsights: Codable, Hashable, Sendable {
     var recommendations: [String]
     var generationStatus: CoachResponseGenerationStatus? = nil
     var insightSource: CoachInsightsOrigin? = nil
+    var provider: CoachAIProvider? = nil
 
     var resolvedInsightSource: CoachInsightsOrigin {
         if let insightSource {
@@ -708,6 +867,7 @@ struct CoachChatResponse: Codable, Hashable, Sendable {
     var responseID: String?
     var followUps: [String]
     var generationStatus: CoachResponseGenerationStatus? = nil
+    var provider: CoachAIProvider? = nil
 
     var isModelGenerated: Bool {
         generationStatus == .model
@@ -715,6 +875,7 @@ struct CoachChatResponse: Codable, Hashable, Sendable {
 }
 
 struct CoachJobMetadata: Codable, Hashable, Sendable {
+    var provider: CoachAIProvider?
     var jobDeadlineAt: Date?
     var contextProfile: String?
     var promptProfile: String?
@@ -736,6 +897,7 @@ struct CoachChatJobResult: Codable, Hashable, Sendable {
     var responseID: String
     var followUps: [String]
     var generationStatus: CoachResponseGenerationStatus? = nil
+    var provider: CoachAIProvider? = nil
     var inferenceMode: CoachChatInferenceMode
     var modelDurationMs: Int?
     var totalJobDurationMs: Int?
@@ -785,6 +947,7 @@ struct CoachChatMessage: Identifiable, Hashable, Sendable {
     var content: String
     var followUps: [String]
     var generationStatus: CoachResponseGenerationStatus? = nil
+    var provider: CoachAIProvider? = nil
     var isLoading: Bool
     var isStatus: Bool
 
@@ -794,6 +957,7 @@ struct CoachChatMessage: Identifiable, Hashable, Sendable {
         content: String,
         followUps: [String] = [],
         generationStatus: CoachResponseGenerationStatus? = nil,
+        provider: CoachAIProvider? = nil,
         isLoading: Bool = false,
         isStatus: Bool = false
     ) {
@@ -802,6 +966,7 @@ struct CoachChatMessage: Identifiable, Hashable, Sendable {
         self.content = content
         self.followUps = followUps
         self.generationStatus = generationStatus
+        self.provider = provider
         self.isLoading = isLoading
         self.isStatus = isStatus
     }
@@ -1155,6 +1320,7 @@ struct CoachAPIHTTPClient: CoachAPIClient {
             body: CoachProfileInsightsRequest(
                 locale: locale,
                 installID: snapshotEnvelope.installID,
+                provider: configuration.provider,
                 snapshotHash: snapshotEnvelope.snapshotHash,
                 snapshot: snapshotEnvelope.snapshot,
                 snapshotUpdatedAt: snapshotEnvelope.snapshotUpdatedAt,
@@ -1185,6 +1351,7 @@ struct CoachAPIHTTPClient: CoachAPIClient {
                 locale: locale,
                 question: question,
                 installID: snapshotEnvelope.installID,
+                provider: configuration.provider,
                 snapshotHash: snapshotEnvelope.snapshotHash,
                 snapshot: snapshotEnvelope.snapshot,
                 snapshotUpdatedAt: snapshotEnvelope.snapshotUpdatedAt,
@@ -1419,6 +1586,7 @@ struct CoachAPIHTTPClient: CoachAPIClient {
                 locale: locale,
                 question: question,
                 installID: snapshotEnvelope.installID,
+                provider: configuration.provider,
                 snapshotHash: snapshotEnvelope.snapshotHash,
                 snapshot: snapshotEnvelope.snapshot,
                 snapshotUpdatedAt: snapshotEnvelope.snapshotUpdatedAt,
@@ -2254,10 +2422,13 @@ final class CoachStore {
     var isSendingMessage = false
     var activeChatJobID: String?
     var activeChatInstallID: String?
+    var activeChatProvider: CoachAIProvider?
     var activeChatAwaitingResume = false
     var analysisSettingsSaveState: CoachAnalysisSettingsSaveState = .idle
     var lastInsightsErrorDescription: String?
     var lastChatErrorDescription: String?
+    var lastInsightsProvider: CoachAIProvider?
+    var lastChatProvider: CoachAIProvider?
     var selectedProgramIDDraft: UUID?
     var programCommentDraft: String = ""
     var draftQuestion: String = ""
@@ -2303,6 +2474,12 @@ final class CoachStore {
         self.capabilityScope = capabilityScope
         self.maxChatPollingDuration = maxChatPollingDuration
         self.allQuickPromptKeys = CoachStore.makeQuickPromptKeys()
+        if let pendingChatState = localStateStore.pendingChatState {
+            self.activeChatJobID = pendingChatState.jobID
+            self.activeChatInstallID = pendingChatState.installID
+            self.activeChatProvider = pendingChatState.provider
+            self.activeChatAwaitingResume = pendingChatState.awaitingResume
+        }
         configureQuickPromptsIfNeeded()
     }
 
@@ -2319,6 +2496,7 @@ final class CoachStore {
     }
 
     func updateConfiguration(_ configuration: CoachRuntimeConfiguration) {
+        let providerChanged = self.configuration.provider != configuration.provider
         self.configuration = configuration
         client = CoachAPIHTTPClient(
             configuration: configuration,
@@ -2330,7 +2508,10 @@ final class CoachStore {
         profileInsights = nil
         profileInsightsOrigin = .fallback
         lastInsightsErrorDescription = nil
-        resetConversation()
+        lastInsightsProvider = nil
+        if providerChanged {
+            lastChatErrorDescription = nil
+        }
     }
 
     func syncAnalysisSettingsDrafts(using appStore: AppStore) {
@@ -2405,7 +2586,10 @@ final class CoachStore {
         debugRecorder.log(
             category: .coach,
             message: "insights_refresh_started",
-            metadata: ["forceRefresh": forceRefresh ? "true" : "false"]
+            metadata: [
+                "forceRefresh": forceRefresh ? "true" : "false",
+                "provider": configuration.provider.rawValue
+            ]
         )
 
         guard configuration.canUseRemoteCoach else {
@@ -2438,15 +2622,21 @@ final class CoachStore {
                     : nil,
                 forceRefresh: forceRefresh
             )
-            profileInsights = remoteInsights
+            profileInsights = {
+                var value = remoteInsights
+                value.provider = configuration.provider
+                return value
+            }()
             profileInsightsOrigin = remoteInsights.resolvedInsightSource
             lastInsightsErrorDescription = nil
+            lastInsightsProvider = configuration.provider
             markSnapshotAsAcceptedIfNeeded(snapshotPackage)
             debugRecorder.log(
                 category: .coach,
                 message: "insights_refresh_succeeded",
                 metadata: [
                     "source": remoteInsights.resolvedInsightSource.rawValue,
+                    "provider": configuration.provider.rawValue,
                     "usedServerSideContext": canUseServerSideContext ? "true" : "false",
                     "includedInlineSnapshot": snapshotPackage.includedInlineSnapshot ? "true" : "false"
                 ]
@@ -2455,11 +2645,13 @@ final class CoachStore {
             profileInsights = fallbackInsights
             profileInsightsOrigin = .fallback
             lastInsightsErrorDescription = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            lastInsightsProvider = configuration.provider
             debugRecorder.log(
                 category: .coach,
                 level: .error,
                 message: "insights_refresh_failed",
                 metadata: [
+                    "provider": configuration.provider.rawValue,
                     "error": (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
                 ]
             )
@@ -2625,6 +2817,7 @@ final class CoachStore {
                 setActiveChatJob(
                     jobID: createResponse.jobID,
                     installID: snapshotPackage.envelope.installID,
+                    provider: createResponse.metadata?.provider ?? configuration.provider,
                     placeholderID: placeholderID,
                     initialPollAfterMs: createResponse.pollAfterMs,
                     resetPollingStart: true
@@ -2633,6 +2826,7 @@ final class CoachStore {
                     category: .coach,
                     message: "chat_job_created",
                     metadata: [
+                        "provider": createResponse.metadata?.provider?.rawValue ?? configuration.provider.rawValue,
                         "hasQuestion": "true",
                         "recentTurnsCount": String(priorConversation.count),
                         "usedServerSideContext": canUseServerSideContext ? "true" : "false",
@@ -2647,6 +2841,7 @@ final class CoachStore {
                     setActiveChatJob(
                         jobID: existingJobID,
                         installID: snapshotPackage.envelope.installID,
+                        provider: configuration.provider,
                         placeholderID: recoveredPlaceholderID,
                         initialPollAfterMs: CoachStore.initialChatPollAfterMs,
                         resetPollingStart: activeChatPollingStartedAt == nil
@@ -2656,6 +2851,7 @@ final class CoachStore {
                         message: "chat_job_resumed",
                         metadata: [
                             "reason": "existing_job_in_progress",
+                            "provider": configuration.provider.rawValue,
                             "recentTurnsCount": String(priorConversation.count)
                         ]
                     )
@@ -2686,6 +2882,7 @@ final class CoachStore {
             clearActiveChatJob()
             let description = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             lastChatErrorDescription = description
+            lastChatProvider = activeChatProvider ?? configuration.provider
             debugRecorder.log(
                 category: .coach,
                 level: .error,
@@ -2736,6 +2933,7 @@ final class CoachStore {
         activeChatPollingStartedAt = Date()
         activeChatNextPollAfterMs = 0
         lastChatErrorDescription = nil
+        lastChatProvider = activeChatProvider ?? configuration.provider
         ensureActiveChatPlaceholder(
             id: activeChatContext.placeholderID,
             content: coachLocalizedString("coach.loading.response"),
@@ -2746,7 +2944,8 @@ final class CoachStore {
             message: "chat_job_resumed",
             metadata: [
                 "awaitingResume": wasAwaitingResume ? "true" : "false",
-                "jobID": activeChatContext.jobID
+                "jobID": activeChatContext.jobID,
+                "provider": (activeChatProvider ?? configuration.provider).rawValue
             ]
         )
         startActiveChatPolling(
@@ -2765,6 +2964,7 @@ final class CoachStore {
         isSendingMessage = false
         activeChatJobID = nil
         activeChatInstallID = nil
+        activeChatProvider = nil
         activeChatAwaitingResume = false
         activeChatPlaceholderID = nil
         activeChatPollingStartedAt = nil
@@ -2824,7 +3024,8 @@ final class CoachStore {
             message: "chat_job_poll_started",
             metadata: [
                 "jobID": jobID,
-                "initialPollAfterMs": String(nextDelayMs)
+                "initialPollAfterMs": String(nextDelayMs),
+                "provider": (activeChatProvider ?? configuration.provider).rawValue
             ]
         )
 
@@ -2845,7 +3046,8 @@ final class CoachStore {
                     metadata: [
                         "jobID": jobID,
                         "attempt": String(pollAttempt),
-                        "nextDelayMs": String(nextDelayMs)
+                        "nextDelayMs": String(nextDelayMs),
+                        "provider": (activeChatProvider ?? configuration.provider).rawValue
                     ]
                 )
                 let response = try await client.getChatJob(
@@ -2858,7 +3060,10 @@ final class CoachStore {
                     metadata: [
                         "jobID": jobID,
                         "attempt": String(pollAttempt),
-                        "status": response.status.rawValue
+                        "status": response.status.rawValue,
+                        "provider": response.metadata?.provider?.rawValue
+                            ?? activeChatProvider?.rawValue
+                            ?? configuration.provider.rawValue
                     ]
                 )
 
@@ -2926,7 +3131,8 @@ final class CoachStore {
             answerMarkdown: result.answerMarkdown,
             responseID: result.responseID,
             followUps: result.followUps,
-            generationStatus: result.generationStatus
+            generationStatus: result.generationStatus,
+            provider: result.provider ?? jobResponse.metadata?.provider
         )
     }
 
@@ -2966,28 +3172,40 @@ final class CoachStore {
     private func setActiveChatJob(
         jobID: String,
         installID: String,
+        provider: CoachAIProvider,
         placeholderID: String,
         initialPollAfterMs: Int,
         resetPollingStart: Bool
     ) {
         activeChatJobID = jobID
         activeChatInstallID = installID
+        activeChatProvider = provider
         activeChatPlaceholderID = placeholderID
         activeChatNextPollAfterMs = max(initialPollAfterMs, 0)
         activeChatAwaitingResume = false
         if resetPollingStart || activeChatPollingStartedAt == nil {
             activeChatPollingStartedAt = Date()
         }
+        localStateStore.storePendingChatState(
+            .init(
+                jobID: jobID,
+                installID: installID,
+                provider: provider,
+                awaitingResume: false
+            )
+        )
     }
 
     private func clearActiveChatJob() {
         activeChatJobID = nil
         activeChatInstallID = nil
+        activeChatProvider = nil
         activeChatAwaitingResume = false
         activeChatPlaceholderID = nil
         activeChatPollingStartedAt = nil
         activeChatNextPollAfterMs = CoachStore.initialChatPollAfterMs
         cancelActiveChatPollTask()
+        localStateStore.clearPendingChatState()
     }
 
     private func finishActiveChatJob(
@@ -3007,7 +3225,10 @@ final class CoachStore {
                 message: "chat_job_failed",
                 metadata: [
                     "status": jobResponse.status.rawValue,
-                    "errorCode": jobResponse.error?.code ?? "none"
+                    "errorCode": jobResponse.error?.code ?? "none",
+                    "provider": jobResponse.metadata?.provider?.rawValue
+                        ?? activeChatProvider?.rawValue
+                        ?? configuration.provider.rawValue
                 ]
             )
             replaceMessage(
@@ -3016,6 +3237,7 @@ final class CoachStore {
                     id: placeholderID,
                     role: .assistant,
                     content: description,
+                    provider: jobResponse.metadata?.provider ?? activeChatProvider,
                     isStatus: true
                 )
             )
@@ -3023,12 +3245,17 @@ final class CoachStore {
         }
 
         lastChatErrorDescription = nil
+        lastChatProvider = response.provider ?? jobResponse.metadata?.provider ?? activeChatProvider
         debugRecorder.log(
             category: .coach,
             message: "chat_job_completed",
             metadata: [
                 "followUpsCount": String(response.followUps.count),
-                "generationStatus": response.generationStatus?.rawValue ?? "none"
+                "generationStatus": response.generationStatus?.rawValue ?? "none",
+                "provider": response.provider?.rawValue
+                    ?? jobResponse.metadata?.provider?.rawValue
+                    ?? activeChatProvider?.rawValue
+                    ?? configuration.provider.rawValue
             ]
         )
         replaceMessage(
@@ -3038,6 +3265,7 @@ final class CoachStore {
                 role: .assistant,
                 content: response.answerMarkdown,
                 followUps: response.followUps,
+                provider: response.provider ?? jobResponse.metadata?.provider ?? activeChatProvider,
                 generationStatus: response.generationStatus
             )
         )
@@ -3101,10 +3329,25 @@ final class CoachStore {
         activeChatPlaceholderID = placeholderID
         activeChatAwaitingResume = true
         activeChatNextPollAfterMs = max(nextPollAfterMs, CoachStore.initialChatPollAfterMs)
+        if let jobID = activeChatJobID,
+           let installID = activeChatInstallID,
+           let provider = activeChatProvider {
+            localStateStore.storePendingChatState(
+                .init(
+                    jobID: jobID,
+                    installID: installID,
+                    provider: provider,
+                    awaitingResume: true
+                )
+            )
+        }
         debugRecorder.log(
             category: .coach,
             message: "chat_job_suspended",
-            metadata: ["nextPollAfterMs": String(activeChatNextPollAfterMs)]
+            metadata: [
+                "nextPollAfterMs": String(activeChatNextPollAfterMs),
+                "provider": (activeChatProvider ?? configuration.provider).rawValue
+            ]
         )
         ensureActiveChatPlaceholder(
             id: placeholderID,

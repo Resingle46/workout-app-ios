@@ -2,7 +2,7 @@ import type { WorkflowStep } from "cloudflare:workers";
 import {
   CoachInferenceServiceError,
   DEFAULT_AI_MODEL,
-  createWorkersAICoachService,
+  createInferenceServiceForProvider,
   type CoachInferenceService,
   type Env,
 } from "./openai";
@@ -28,7 +28,10 @@ export interface CoachChatWorkflowPayload {
 }
 
 interface ChatJobExecutionDependencies {
-  createInferenceService?: (env: Env) => CoachInferenceService;
+  createInferenceService?: (
+    env: Env,
+    provider: "workers_ai" | "gemini"
+  ) => CoachInferenceService;
   createStateRepository?: (env: Env) => CoachStateStore;
   now?: () => number;
 }
@@ -40,13 +43,12 @@ export async function executeChatJob(
   step?: WorkflowStep
 ): Promise<CoachChatJobRecord | null> {
   const createInferenceService =
-    deps.createInferenceService ?? createWorkersAICoachService;
+    deps.createInferenceService ?? createInferenceServiceForProvider;
   const createStateRepository =
     deps.createStateRepository ?? createDefaultStateRepository;
   const now = deps.now ?? Date.now;
 
   const stateRepository = createStateRepository(env);
-  const inferenceService = createInferenceService(env);
   const initialJob = await stateRepository.getChatJobByID(jobID);
 
   if (!initialJob) {
@@ -54,11 +56,17 @@ export async function executeChatJob(
       JSON.stringify({
         event: "coach_chat_job_failed",
         jobID,
+        provider: "unknown",
         errorCode: "job_not_found",
       })
     );
     return null;
   }
+
+  const inferenceService = createInferenceService(
+    env,
+    initialJob.provider ?? "workers_ai"
+  );
 
   if (isTerminalJobStatus(initialJob.status)) {
     return initialJob;
@@ -226,6 +234,7 @@ export async function executeChatJob(
             jobID: finalJob.jobID,
             installID: finalJob.installID,
             clientRequestID: finalJob.clientRequestID,
+            provider: finalJob.provider ?? finalJob.preparedRequest.metadata?.provider ?? "workers_ai",
             status: finalJob.status,
             errorMessage:
               error instanceof Error ? error.message.slice(0, 300) : "Unknown error",
@@ -406,6 +415,7 @@ function logChatJobEvent(
     questionChars: job.questionChars,
     promptVersion: job.promptVersion,
     model: job.model,
+    provider: job.provider ?? job.preparedRequest.metadata?.provider ?? "workers_ai",
     useCase: job.preparedRequest.metadata?.useCase,
     modelRole: job.preparedRequest.metadata?.modelRole,
     selectedModel: job.preparedRequest.metadata?.selectedModel,
@@ -442,7 +452,7 @@ function normalizeChatJobExecutionError(error: unknown): CoachChatJobError {
     return {
       code: error.code,
       message: "Coach upstream request failed.",
-      retryable: error.code.startsWith("upstream_"),
+      retryable: isRetryableInferenceErrorCode(error.code),
     };
   }
 
@@ -459,6 +469,14 @@ function normalizeChatJobExecutionError(error: unknown): CoachChatJobError {
     message: "Internal server error.",
     retryable: true,
   };
+}
+
+function isRetryableInferenceErrorCode(code: string): boolean {
+  return (
+    code.startsWith("upstream_") ||
+    code === "provider_rate_limited" ||
+    code === "provider_unavailable"
+  );
 }
 
 function resolveEventPhase(event: string): string {
