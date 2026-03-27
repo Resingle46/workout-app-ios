@@ -4,6 +4,7 @@ import { executeChatJob } from "../src/chat-job-executor";
 import * as chatJobExecutorModule from "../src/chat-job-executor";
 import { CoachChatJobWorkflow } from "../src/chat-job-workflow";
 import { executeWorkoutSummaryJob } from "../src/workout-summary-job-executor";
+import { buildProfileInsightsMessages } from "../src/prompts";
 import {
   buildCoachContextFromSnapshot,
   hashCoachContext,
@@ -3054,7 +3055,13 @@ describe("WorkersAICoachService", () => {
     expect(promptText).toContain("Goal summary JSON:");
     expect(promptText).toContain("Consistency summary JSON:");
     expect(promptText).toContain("30-day progress JSON:");
-    expect(promptText).toContain("Preferred program summary JSON:");
+    expect(promptText).toContain(
+      "Do not spend the response on workout-template count, split mismatch, or weekly-target mismatch."
+    );
+    expect(promptText).toContain(
+      "Focus guidance: treat rolling rotation and template count versus weekly target as already-resolved context"
+    );
+    expect(promptText).not.toContain("Preferred program summary JSON:");
     expect(promptText).not.toContain("Sanitized coach context JSON:");
     expect(promptText).not.toContain("Coach analysis settings JSON:");
     expect(promptText).not.toContain("Selected program for analysis JSON:");
@@ -3213,6 +3220,38 @@ describe("WorkersAICoachService", () => {
 
     expect(result.data.summary).not.toContain("saved program has 4 workouts");
     expect(result.data.recommendations).toEqual(["Keep bench progression steady."]);
+  });
+
+  it("keeps the full rolling-rotation note in compact profile insights prompts and de-emphasizes structure", () => {
+    const request = makeProfileInsightsRequestFixture();
+    const snapshot = request.snapshot!;
+    request.snapshot = {
+      ...snapshot,
+      coachAnalysisSettings: {
+        ...snapshot.coachAnalysisSettings,
+        programComment: [
+          "I train on a rolling rotation instead of matching everything to a calendar week.",
+          "I keep rotating through more templates than I perform each week.",
+          "Do not treat that as a mismatch between my saved program and weekly frequency.",
+          "Keep the coaching focused on progression, recovery, and next-step decisions.",
+        ].join(" "),
+      },
+    };
+
+    const messages = buildProfileInsightsMessages(request);
+    const systemPrompt = messages[0]?.content ?? "";
+    const userPrompt = messages[1]?.content ?? "";
+
+    expect(systemPrompt).toContain(
+      "Do not spend the response on workout-template count, split mismatch, or weekly-target mismatch."
+    );
+    expect(userPrompt).toContain(
+      "Do not treat that as a mismatch between my saved program and weekly frequency."
+    );
+    expect(userPrompt).toContain(
+      "Focus guidance: treat rolling rotation and template count versus weekly target as already-resolved context"
+    );
+    expect(userPrompt).not.toContain("Preferred program summary JSON:");
   });
 
   it("filters conflicting frequency and structure guidance from chat", async () => {

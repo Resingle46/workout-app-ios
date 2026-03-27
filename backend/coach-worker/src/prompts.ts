@@ -197,21 +197,27 @@ function profileInsightsContextLines(
     contextProfile,
     derivedAnalytics,
   });
+  const avoidStructureFocus =
+    promptContext.userConstraints.rollingSplitExecution ||
+    promptContext.userConstraints.preserveWeeklyFrequency ||
+    promptContext.userConstraints.preserveProgramWorkoutCount ||
+    promptContext.derived?.splitExecution.mode === "rolling_rotation";
   const comment = snapshot.coachAnalysisSettings.programComment.trim();
   const lines: string[] = [];
 
   if (comment) {
-    lines.push(
-      `Saved user note: ${
-        isRichContextProfile(contextProfile) ? comment : comment.slice(0, 220)
-      }`
-    );
+    lines.push(`Saved user note: ${comment}`);
   }
 
   const constraintLines = highPriorityConstraintLines(snapshot);
   if (constraintLines.length > 0) {
     lines.push("High-priority user constraints:");
     lines.push(...constraintLines);
+  }
+  if (avoidStructureFocus) {
+    lines.push(
+      "Focus guidance: treat rolling rotation and template count versus weekly target as already-resolved context, not as the main coaching problem."
+    );
   }
 
   lines.push("Goal summary JSON:");
@@ -246,7 +252,7 @@ function profileInsightsContextLines(
     lines.push(JSON.stringify(promptContext.recentFinishedSessions));
   }
 
-  if (promptContext.preferredProgram) {
+  if (promptContext.preferredProgram && !avoidStructureFocus) {
     lines.push("Preferred program summary JSON:");
     lines.push(JSON.stringify(promptContext.preferredProgram));
   }
@@ -278,6 +284,17 @@ export function buildProfileInsightsMessages(
   options: PromptBuildOptions = {}
 ): PromptMessage[] {
   const contextProfile = options.contextProfile ?? "compact_sync_v2";
+  const promptContext = request.snapshot
+    ? buildProfileInsightsPromptContext(request.snapshot, {
+        contextProfile,
+        derivedAnalytics: resolveDerivedAnalytics(request.snapshot, options),
+      })
+    : undefined;
+  const avoidStructureFocus =
+    promptContext?.userConstraints.rollingSplitExecution ||
+    promptContext?.userConstraints.preserveWeeklyFrequency ||
+    promptContext?.userConstraints.preserveProgramWorkoutCount ||
+    promptContext?.derived?.splitExecution.mode === "rolling_rotation";
   return [
     {
       role: "system",
@@ -288,7 +305,12 @@ export function buildProfileInsightsMessages(
           : "Task: analyze the user's current training state and return a compact coach summary with concrete recommendations.",
         "Prefer high-signal observations over generic motivation.",
         "Do not mention missing data unless it materially limits the advice.",
-      ].join("\n\n"),
+        avoidStructureFocus
+          ? "Do not spend the response on workout-template count, split mismatch, or weekly-target mismatch. Treat rolling rotation as intentional and focus on progression, adherence, recovery, and concrete next-step coaching."
+          : undefined,
+      ]
+        .filter((value): value is string => Boolean(value))
+        .join("\n\n"),
     },
     {
       role: "user",
