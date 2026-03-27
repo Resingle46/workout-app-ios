@@ -3871,7 +3871,7 @@ private struct CoachConversationThread: View {
     @State private var contentHeight: CGFloat = 0
 
     private let minConversationHeight: CGFloat = 270
-    private let maxConversationHeight: CGFloat = 1200
+    private let maxConversationHeight: CGFloat = 1800
 
     private var resolvedConversationHeight: CGFloat {
         let measuredHeight = contentHeight + 12
@@ -3879,50 +3879,56 @@ private struct CoachConversationThread: View {
     }
 
     var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    ForEach(messages) { message in
-                        CoachChatMessageCard(message: message) { followUp in
-                            onFollowUpTap(followUp)
-                        }
-                        .id(message.id)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(
-                    GeometryReader { proxy in
-                        Color.clear
-                            .preference(
-                                key: CoachConversationContentHeightPreferenceKey.self,
-                                value: proxy.size.height
-                            )
-                    }
-                )
-            }
-            .frame(maxWidth: .infinity)
-            .frame(height: resolvedConversationHeight)
-            .animation(.spring(response: 0.28, dampingFraction: 0.84), value: resolvedConversationHeight)
-            .onPreferenceChange(CoachConversationContentHeightPreferenceKey.self) { newHeight in
-                contentHeight = newHeight
-            }
-            .onChange(of: messages.last?.id) { _, lastMessageID in
-                guard let lastMessageID else {
-                    return
-                }
+        GeometryReader { geometry in
+            let availableWidth = max(geometry.size.width, 1)
 
-                withAnimation(.easeOut(duration: 0.2)) {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 14) {
+                        ForEach(messages) { message in
+                            CoachChatMessageCard(message: message) { followUp in
+                                onFollowUpTap(followUp)
+                            }
+                            .id(message.id)
+                        }
+                    }
+                    .frame(width: availableWidth, alignment: .leading)
+                    .clipped()
+                    .contentShape(Rectangle())
+                    .background(
+                        GeometryReader { proxy in
+                            Color.clear
+                                .preference(
+                                    key: CoachConversationContentHeightPreferenceKey.self,
+                                    value: proxy.size.height
+                                )
+                        }
+                    )
+                }
+                .frame(width: availableWidth, height: resolvedConversationHeight, alignment: .topLeading)
+                .animation(.spring(response: 0.28, dampingFraction: 0.84), value: resolvedConversationHeight)
+                .onPreferenceChange(CoachConversationContentHeightPreferenceKey.self) { newHeight in
+                    contentHeight = newHeight
+                }
+                .onChange(of: messages.last?.id) { _, lastMessageID in
+                    guard let lastMessageID else {
+                        return
+                    }
+
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        proxy.scrollTo(lastMessageID, anchor: .bottom)
+                    }
+                }
+                .task(id: messages.last?.id) {
+                    guard let lastMessageID = messages.last?.id else {
+                        return
+                    }
+
                     proxy.scrollTo(lastMessageID, anchor: .bottom)
                 }
             }
-            .task(id: messages.last?.id) {
-                guard let lastMessageID = messages.last?.id else {
-                    return
-                }
-
-                proxy.scrollTo(lastMessageID, anchor: .bottom)
-            }
         }
+        .frame(height: resolvedConversationHeight)
     }
 }
 
@@ -4004,8 +4010,12 @@ private struct CoachChatMessageCard: View {
             if !message.followUps.isEmpty {
                 FlowLayout(spacing: 8) {
                     ForEach(message.followUps, id: \.self) { followUp in
-                        Button(followUp) {
+                        Button {
                             onFollowUpTap(followUp)
+                        } label: {
+                            Text(followUp)
+                                .multilineTextAlignment(.leading)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
                         .buttonStyle(CoachPromptButtonStyle())
                     }
@@ -4076,6 +4086,7 @@ private struct CoachMarkdownText: View {
             .foregroundStyle(foregroundColor)
             .lineSpacing(4)
             .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var normalizedContent: String {
@@ -4270,13 +4281,17 @@ private struct FlowLayout: Layout {
         cache: inout ()
     ) -> CGSize {
         let maxWidth = proposal.width ?? .infinity
+        let subviewProposal = ProposedViewSize(
+            width: proposal.width.map { max($0, 1) },
+            height: nil
+        )
         var currentLineWidth: CGFloat = 0
         var currentLineHeight: CGFloat = 0
         var totalWidth: CGFloat = 0
         var totalHeight: CGFloat = 0
 
         for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
+            let size = subview.sizeThatFits(subviewProposal)
             if currentLineWidth + size.width > maxWidth, currentLineWidth > 0 {
                 totalWidth = max(totalWidth, currentLineWidth - spacing)
                 totalHeight += currentLineHeight + spacing
@@ -4302,9 +4317,13 @@ private struct FlowLayout: Layout {
     ) {
         var point = bounds.origin
         var lineHeight: CGFloat = 0
+        let subviewProposal = ProposedViewSize(
+            width: max(bounds.width, 1),
+            height: nil
+        )
 
         for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
+            let size = subview.sizeThatFits(subviewProposal)
             if point.x + size.width > bounds.maxX, point.x > bounds.minX {
                 point.x = bounds.minX
                 point.y += lineHeight + spacing
