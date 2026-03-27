@@ -6,6 +6,7 @@ import OSLog
 private let workoutSummaryDefaultPrewarmDebounceDuration: Duration = .milliseconds(300)
 private let workoutSummaryDefaultMaxPollingDuration: TimeInterval = 180
 private let workoutSummaryDeferredResumeDelay: Duration = .seconds(20)
+private let coachDefaultProviderID = "gemini"
 private let workoutSummaryDefaultPollIntervalMs: @Sendable (Int) -> Int = { attempt in
     switch attempt {
     case 0:

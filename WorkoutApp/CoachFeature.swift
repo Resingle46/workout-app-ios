@@ -1246,6 +1246,8 @@ struct CoachAPIHTTPClient: CoachAPIClient {
     private static let standardResourceTimeoutInterval: TimeInterval = 25
     private static let profileInsightsRequestTimeoutInterval: TimeInterval = 32
     private static let profileInsightsResourceTimeoutInterval: TimeInterval = 36
+    private static let chatRequestTimeoutInterval: TimeInterval = 30
+    private static let chatResourceTimeoutInterval: TimeInterval = 35
     private static let requestRateLimiter = CoachAIRequestRateLimiter()
 
     private let configuration: CoachRuntimeConfiguration
@@ -2503,7 +2505,12 @@ final class CloudSyncStore {
 
         do {
             let snapshot = appStore.currentSnapshot()
-            let localBackupHash = appStore.localBackupHash ?? (try CloudBackupHashing.hash(for: snapshot))
+            let localBackupHash: String
+            if let hash = appStore.localBackupHash {
+                localBackupHash = hash
+            } else {
+                localBackupHash = try CloudBackupHashing.hash(for: snapshot)
+            }
             let statusRequest = CloudBackupStatusRequest(
                 installID: installID,
                 localBackupHash: localBackupHash,
