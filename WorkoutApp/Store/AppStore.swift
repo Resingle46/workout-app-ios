@@ -909,12 +909,13 @@ final class AppStore {
         let isGenericFallback = profile.primaryGoal == .notSet || profile.experienceLevel == .notSet
         let preferredProgram = preferredProgramForProfileInsights()
         let splitExecution = splitExecutionInterpretation(for: preferredProgram)
-        let splitWorkoutDays = preferredProgram.flatMap { program in
-            guard !program.workouts.isEmpty,
-                  splitExecution.mode == .calendarMatched else {
-                return nil
-            }
-            return program.workouts.count
+        let splitWorkoutDays: Int?
+        if let preferredProgram,
+           !preferredProgram.workouts.isEmpty,
+           splitExecution.mode == .calendarMatched {
+            splitWorkoutDays = preferredProgram.workouts.count
+        } else {
+            splitWorkoutDays = nil
         }
         let split = splitWorkoutDays.map { splitRecommendation(for: $0) }
             ?? (isGenericFallback

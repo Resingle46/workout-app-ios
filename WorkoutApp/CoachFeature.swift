@@ -4,6 +4,8 @@ import Observation
 import SwiftUI
 import UIKit
 
+private let coachStoreDefaultMaxChatPollingDuration: TimeInterval = 180
+
 struct CoachRuntimeConfiguration: Hashable, Sendable {
     var isFeatureEnabled: Bool
     var backendBaseURL: URL?
@@ -2243,7 +2245,6 @@ final class CloudSyncStore {
 @Observable
 final class CoachStore {
     private static let initialChatPollAfterMs = 1_500
-    private static let defaultMaxChatPollingDuration: TimeInterval = 180
 
     var profileInsights: CoachProfileInsights?
     var profileInsightsOrigin: CoachInsightsOrigin = .fallback
@@ -2282,7 +2283,7 @@ final class CoachStore {
         cloudSyncStore: CloudSyncStore? = nil,
         contextBuilder: CoachContextBuilder = CoachContextBuilder(),
         capabilityScope: CoachCapabilityScope = .draftChanges,
-        maxChatPollingDuration: TimeInterval = CoachStore.defaultMaxChatPollingDuration,
+        maxChatPollingDuration: TimeInterval = coachStoreDefaultMaxChatPollingDuration,
         debugRecorder: any DebugEventRecording = NoopDebugEventRecorder()
     ) {
         self.client = client
