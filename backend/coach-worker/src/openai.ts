@@ -63,6 +63,9 @@ const WORKOUT_SUMMARY_STRUCTURED_MAX_TOKENS = 420;
 const WORKOUT_SUMMARY_ASYNC_STRUCTURED_MAX_TOKENS = 700;
 const WORKOUT_SUMMARY_PLAIN_TEXT_MAX_TOKENS = 320;
 const WORKOUT_SUMMARY_ASYNC_PLAIN_TEXT_MAX_TOKENS = 520;
+const GEMINI_MAX_RATE_LIMIT_RETRIES = 2;
+const GEMINI_BASE_RETRY_DELAY_MS = 1_250;
+const GEMINI_MAX_RETRY_DELAY_MS = 6_000;
 const PROFILE_INSIGHTS_TIMEOUTS = {
   totalBudgetMs: 25_000,
   structuredTimeoutMs: 18_000,
@@ -2664,49 +2667,80 @@ function createGeminiAIAdapter(env: Env): WorkersAI {
         env.GEMINI_API_BASE_URL?.trim() ||
         "https://generativelanguage.googleapis.com/v1beta";
       const payload = buildGeminiRequestPayload(inputs);
-      const response = await fetch(
-        `${baseURL}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`,
-        {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-          },
-          body: JSON.stringify(payload),
-        }
-      );
-
-      const responseText = await response.text();
-      const responseJSON = responseText ? safeJSONParse(responseText) : undefined;
-      if (!response.ok) {
-        throw normalizeGeminiHTTPError(response.status, responseJSON, {
-          provider: "gemini",
-          model,
-        });
-      }
-
-      const candidateText = extractGeminiText(responseJSON);
-      if (!candidateText) {
-        throw new CoachInferenceServiceError(
-          502,
-          "upstream_empty_output",
-          "Gemini returned empty output",
+      for (let attempt = 0; attempt <= GEMINI_MAX_RATE_LIMIT_RETRIES; attempt += 1) {
+        const response = await fetch(
+          `${baseURL}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`,
           {
-            provider: "gemini",
-            model,
-            responseShape: describeResponseShape(responseJSON),
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+            },
+            body: JSON.stringify(payload),
           }
         );
+
+        const responseText = await response.text();
+        const responseJSON = responseText ? safeJSONParse(responseText) : undefined;
+        if (!response.ok) {
+          const retryDelayMs = resolveGeminiRetryDelayMs(responseJSON);
+          if (response.status === 429 && attempt < GEMINI_MAX_RATE_LIMIT_RETRIES) {
+            const backoffMs = Math.min(
+              retryDelayMs ?? GEMINI_BASE_RETRY_DELAY_MS * (attempt + 1),
+              GEMINI_MAX_RETRY_DELAY_MS
+            );
+            console.warn(
+              JSON.stringify({
+                event: "coach_gemini_retry_scheduled",
+                provider: "gemini",
+                model,
+                status: response.status,
+                retryAttempt: attempt + 1,
+                retryDelayMs: backoffMs,
+              })
+            );
+            await sleep(backoffMs);
+            continue;
+          }
+
+          throw normalizeGeminiHTTPError(response.status, responseJSON, {
+            provider: "gemini",
+            model,
+            retryAttemptCount: attempt,
+            retryDelayMs,
+          });
+        }
+
+        const candidateText = extractGeminiText(responseJSON);
+        if (!candidateText) {
+          throw new CoachInferenceServiceError(
+            502,
+            "upstream_empty_output",
+            "Gemini returned empty output",
+            {
+              provider: "gemini",
+              model,
+              responseShape: describeResponseShape(responseJSON),
+            }
+          );
+        }
+
+        return {
+          response: candidateText,
+          usage: isRecord(responseJSON) ? responseJSON.usageMetadata : undefined,
+          response_id:
+            isRecord(responseJSON) && typeof responseJSON.responseId === "string"
+              ? responseJSON.responseId
+              : undefined,
+          provider: "gemini",
+        };
       }
 
-      return {
-        response: candidateText,
-        usage: isRecord(responseJSON) ? responseJSON.usageMetadata : undefined,
-        response_id:
-          isRecord(responseJSON) && typeof responseJSON.responseId === "string"
-            ? responseJSON.responseId
-            : undefined,
-        provider: "gemini",
-      };
+      throw new CoachInferenceServiceError(
+        503,
+        "provider_unavailable",
+        "Gemini provider is unavailable",
+        { provider: "gemini", model }
+      );
     },
   };
 }
@@ -2823,6 +2857,42 @@ function normalizeGeminiHTTPError(
   );
 }
 
+function resolveGeminiRetryDelayMs(payload: unknown): number | undefined {
+  if (!isRecord(payload) || !isRecord(payload.error) || !Array.isArray(payload.error.details)) {
+    return undefined;
+  }
+
+  for (const detail of payload.error.details) {
+    if (!isRecord(detail)) {
+      continue;
+    }
+
+    const retryDelayValue =
+      typeof detail.retryDelay === "string"
+        ? detail.retryDelay
+        : isRecord(detail.retryInfo) && typeof detail.retryInfo.retryDelay === "string"
+          ? detail.retryInfo.retryDelay
+          : undefined;
+    const parsed = retryDelayValue ? parseGoogleDurationMs(retryDelayValue) : undefined;
+    if (parsed !== undefined) {
+      return parsed;
+    }
+  }
+
+  return undefined;
+}
+
+function parseGoogleDurationMs(value: string): number | undefined {
+  const match = value.match(/^(\d+)(?:\.(\d{1,9}))?s$/);
+  if (!match) {
+    return undefined;
+  }
+
+  const seconds = Number.parseInt(match[1] ?? "0", 10);
+  const nanos = Number.parseInt((match[2] ?? "").padEnd(9, "0"), 10);
+  return seconds * 1_000 + Math.floor(nanos / 1_000_000);
+}
+
 function extractGeminiText(payload: unknown): string | undefined {
   if (!isRecord(payload) || !Array.isArray(payload.candidates)) {
     return undefined;
@@ -2873,6 +2943,16 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T
       clearTimeout(timeoutHandle);
     }
   }
+}
+
+async function sleep(delayMs: number): Promise<void> {
+  if (!Number.isFinite(delayMs) || delayMs <= 0) {
+    return;
+  }
+
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, delayMs);
+  });
 }
 
 function normalizePotentialJSON(payload: string): string {

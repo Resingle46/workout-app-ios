@@ -1296,6 +1296,36 @@ final class BackupCoordinatorTests: XCTestCase {
     }
 
     @MainActor
+    func testCoachStoreCoalescesConcurrentInsightsRefreshRequests() async {
+        let store = AppStore()
+        store.apply(snapshot: makeSnapshot())
+        let insightsRecorder = InsightsRequestRecorder()
+
+        let coachStore = CoachStore(
+            client: StubCoachAPIClient(
+                shouldFailInsights: false,
+                shouldFailChat: false,
+                insightsRequestRecorder: insightsRecorder,
+                insightsDelayNanoseconds: 80_000_000
+            ),
+            configuration: CoachRuntimeConfiguration(
+                isFeatureEnabled: true,
+                backendBaseURL: URL(string: "https://example.com"),
+                internalBearerToken: "internal-token",
+                provider: .gemini
+            )
+        )
+
+        async let first: Void = coachStore.refreshProfileInsights(using: store, forceRefresh: true)
+        async let second: Void = coachStore.refreshProfileInsights(using: store, forceRefresh: true)
+        _ = await (first, second)
+
+        let requestCount = await insightsRecorder.requestCount
+        XCTAssertEqual(requestCount, 1)
+        XCTAssertEqual(coachStore.profileInsightsOrigin, .freshModel)
+    }
+
+    @MainActor
     func testApplyCoachSuggestedChangeUpdatesWeeklyWorkoutTarget() {
         let store = AppStore()
         store.apply(snapshot: makeSnapshot())
@@ -2529,6 +2559,8 @@ private struct StubCoachAPIClient: CoachAPIClient {
     let profileInsights: CoachProfileInsights
     let snapshotRequestRecorder: SnapshotRequestRecorder?
     let chatJobStatusRequestRecorder: ChatJobRequestRecorder?
+    let insightsRequestRecorder: InsightsRequestRecorder?
+    let insightsDelayNanoseconds: UInt64
 
     init(
         shouldFailInsights: Bool,
@@ -2545,7 +2577,9 @@ private struct StubCoachAPIClient: CoachAPIClient {
             insightSource: .freshModel
         ),
         snapshotRequestRecorder: SnapshotRequestRecorder? = nil,
-        chatJobStatusRequestRecorder: ChatJobRequestRecorder? = nil
+        chatJobStatusRequestRecorder: ChatJobRequestRecorder? = nil,
+        insightsRequestRecorder: InsightsRequestRecorder? = nil,
+        insightsDelayNanoseconds: UInt64 = 0
     ) {
         self.shouldFailInsights = shouldFailInsights
         self.shouldFailChat = shouldFailChat
@@ -2557,6 +2591,8 @@ private struct StubCoachAPIClient: CoachAPIClient {
         self.profileInsights = profileInsights
         self.snapshotRequestRecorder = snapshotRequestRecorder
         self.chatJobStatusRequestRecorder = chatJobStatusRequestRecorder
+        self.insightsRequestRecorder = insightsRequestRecorder
+        self.insightsDelayNanoseconds = insightsDelayNanoseconds
     }
 
     func syncSnapshot(_ request: CoachSnapshotSyncRequest) async throws -> CoachSnapshotSyncResponse {
@@ -2643,6 +2679,11 @@ private struct StubCoachAPIClient: CoachAPIClient {
         runtimeContextDelta: CoachRuntimeContextDelta?,
         forceRefresh: Bool
     ) async throws -> CoachProfileInsights {
+        await insightsRequestRecorder?.record()
+        if insightsDelayNanoseconds > 0 {
+            try? await Task.sleep(nanoseconds: insightsDelayNanoseconds)
+        }
+
         if shouldFailInsights {
             throw StubCoachError.failedInsights
         }
@@ -2771,6 +2812,14 @@ private actor SnapshotRequestRecorder {
 
     func record(_ request: RecordedCoachSnapshotRequest) {
         requests.append(request)
+    }
+}
+
+private actor InsightsRequestRecorder {
+    private(set) var requestCount = 0
+
+    func record() {
+        requestCount += 1
     }
 }
 

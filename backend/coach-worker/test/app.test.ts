@@ -3331,6 +3331,79 @@ describe("WorkersAICoachService", () => {
     }
   });
 
+  it("retries Gemini profile insights after a rate limit response", async () => {
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 429,
+        text: async () =>
+          JSON.stringify({
+            error: {
+              message: "Rate limit exceeded.",
+              status: "RESOURCE_EXHAUSTED",
+              details: [
+                {
+                  retryDelay: "0.001s",
+                },
+              ],
+            },
+          }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            candidates: [
+              {
+                content: {
+                  parts: [
+                    {
+                      text: JSON.stringify({
+                        summary: "Retried Gemini summary.",
+                        recommendations: ["Retry succeeded after a short pause."],
+                      }),
+                    },
+                  ],
+                },
+              },
+            ],
+          }),
+      });
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.stubGlobal("fetch", fetchSpy);
+
+    try {
+      const service = createInferenceServiceForProvider(
+        makeEnv({
+          GEMINI_API_KEY: "test-gemini-key",
+        }),
+        "gemini"
+      );
+      const result = await service.generateProfileInsights({
+        ...makeProfileInsightsRequestFixture(),
+        provider: "gemini",
+      });
+
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+      expect(result.mode).toBe("structured");
+      expect(result.data.summary).toBe("Retried Gemini summary.");
+      expect(parseLoggedPayloads(warnSpy)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            event: "coach_gemini_retry_scheduled",
+            status: 429,
+            retryAttempt: 1,
+          }),
+        ])
+      );
+    } finally {
+      warnSpy.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("retries profile insights on balanced structured routing after a fast structured failure", async () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);

@@ -1157,6 +1157,7 @@ struct CoachAPIHTTPClient: CoachAPIClient {
     private static let standardResourceTimeoutInterval: TimeInterval = 25
     private static let profileInsightsRequestTimeoutInterval: TimeInterval = 32
     private static let profileInsightsResourceTimeoutInterval: TimeInterval = 36
+    private static let requestRateLimiter = CoachAIRequestRateLimiter()
 
     private let configuration: CoachRuntimeConfiguration
     private let standardSession: URLSession
@@ -1622,6 +1623,14 @@ struct CoachAPIHTTPClient: CoachAPIClient {
             throw CoachClientError.missingAuthToken
         }
 
+        let throttleContext = Self.makeThrottleContext(path: path, body: body)
+        if let throttleContext {
+            await Self.requestRateLimiter.awaitPermit(
+                for: throttleContext,
+                recorder: debugRecorder
+            )
+        }
+
         var request = URLRequest(url: baseURL.appending(path: path))
         request.httpMethod = method
         request.timeoutInterval = timeoutInterval
@@ -1655,6 +1664,14 @@ struct CoachAPIHTTPClient: CoachAPIClient {
                 data: data,
                 statusCode: httpResponse.statusCode
             )
+            if let throttleContext,
+               case .api(let statusCode, _, _, _, _, _) = clientError,
+               statusCode == 429 {
+                await Self.requestRateLimiter.registerRateLimitHit(
+                    for: throttleContext,
+                    recorder: debugRecorder
+                )
+            }
             recordNetworkTrace(
                 method: request.httpMethod,
                 path: path,
@@ -1771,6 +1788,37 @@ struct CoachAPIHTTPClient: CoachAPIClient {
         return .httpStatus(statusCode)
     }
 
+    private static func makeThrottleContext<RequestBody: Encodable>(
+        path: String,
+        body: RequestBody
+    ) -> CoachAIRequestThrottleContext? {
+        if let request = body as? CoachProfileInsightsRequest,
+           request.provider == .gemini {
+            return CoachAIRequestThrottleContext(
+                provider: request.provider,
+                operation: .profileInsights
+            )
+        }
+
+        if let request = body as? CoachChatJobCreateRequest,
+           request.provider == .gemini {
+            return CoachAIRequestThrottleContext(
+                provider: request.provider,
+                operation: .chatJobCreate
+            )
+        }
+
+        if let request = body as? WorkoutSummaryJobCreateRequest,
+           request.provider == .gemini {
+            return CoachAIRequestThrottleContext(
+                provider: request.provider,
+                operation: .workoutSummaryJobCreate
+            )
+        }
+
+        return nil
+    }
+
     private static func makeSession(
         requestTimeoutInterval: TimeInterval,
         resourceTimeoutInterval: TimeInterval
@@ -1783,6 +1831,91 @@ struct CoachAPIHTTPClient: CoachAPIClient {
 }
 
 private struct EmptyCoachResponse: Decodable, Sendable {}
+
+private struct CoachAIRequestThrottleContext: Sendable {
+    enum Operation: String, Sendable {
+        case profileInsights = "profile_insights"
+        case chatJobCreate = "chat_job_create"
+        case workoutSummaryJobCreate = "workout_summary_job_create"
+
+        var minimumSpacing: Duration {
+            switch self {
+            case .profileInsights:
+                return .seconds(2)
+            case .chatJobCreate, .workoutSummaryJobCreate:
+                return .seconds(1)
+            }
+        }
+
+        var cooldownAfterRateLimit: Duration {
+            switch self {
+            case .profileInsights:
+                return .seconds(5)
+            case .chatJobCreate, .workoutSummaryJobCreate:
+                return .seconds(3)
+            }
+        }
+    }
+
+    let provider: CoachAIProvider
+    let operation: Operation
+
+    var key: String {
+        "\(provider.rawValue):\(operation.rawValue)"
+    }
+}
+
+private actor CoachAIRequestRateLimiter {
+    private let clock = ContinuousClock()
+    private var nextPermittedTime: [String: ContinuousClock.Instant] = [:]
+
+    func awaitPermit(
+        for context: CoachAIRequestThrottleContext,
+        recorder: any DebugEventRecording
+    ) async {
+        let now = clock.now
+        let permittedAt = nextPermittedTime[context.key] ?? now
+        if permittedAt > now {
+            let delay = now.duration(to: permittedAt)
+            let delayMs = max(0, Int(delay.components.seconds * 1_000) + Int(delay.components.attoseconds / 1_000_000_000_000_000))
+            recorder.log(
+                category: .coach,
+                message: "ai_request_throttled",
+                metadata: [
+                    "provider": context.provider.rawValue,
+                    "operation": context.operation.rawValue,
+                    "delayMs": String(delayMs)
+                ]
+            )
+            try? await Task.sleep(for: delay)
+        }
+
+        nextPermittedTime[context.key] = clock.now.advanced(by: context.operation.minimumSpacing)
+    }
+
+    func registerRateLimitHit(
+        for context: CoachAIRequestThrottleContext,
+        recorder: any DebugEventRecording
+    ) {
+        let cooldownUntil = clock.now.advanced(by: context.operation.cooldownAfterRateLimit)
+        let existing = nextPermittedTime[context.key] ?? clock.now
+        if cooldownUntil > existing {
+            nextPermittedTime[context.key] = cooldownUntil
+        }
+        recorder.log(
+            category: .coach,
+            level: .error,
+            message: "ai_request_rate_limited",
+            metadata: [
+                "provider": context.provider.rawValue,
+                "operation": context.operation.rawValue,
+                "cooldownMs": String(
+                    Int(context.operation.cooldownAfterRateLimit.components.seconds * 1_000)
+                )
+            ]
+        )
+    }
+}
 
 struct CoachContextBuilder {
     private static let recentFinishedSessionsLimit = 12
@@ -2556,6 +2689,18 @@ final class CoachStore {
         using appStore: AppStore,
         forceRefresh: Bool = false
     ) async {
+        if isLoadingProfileInsights {
+            debugRecorder.log(
+                category: .coach,
+                message: "insights_refresh_skipped_loading",
+                metadata: [
+                    "forceRefresh": forceRefresh ? "true" : "false",
+                    "provider": configuration.provider.rawValue
+                ]
+            )
+            return
+        }
+
         if !forceRefresh, let activeChatJobID {
             debugRecorder.log(
                 category: .coach,
