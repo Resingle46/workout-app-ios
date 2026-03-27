@@ -3359,6 +3359,35 @@ struct CoachView: View {
         coachStore.messages.isEmpty
     }
 
+    private var hasInsightsStatusError: Bool {
+        !(coachStore.lastInsightsErrorDescription?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .isEmpty ?? true)
+    }
+
+    private var hasSavedCoachContext: Bool {
+        store.coachAnalysisSettings.selectedProgramID != nil ||
+        !store.coachAnalysisSettings.programComment
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .isEmpty
+    }
+
+    private var shouldShowCombinedCoachStatusCard: Bool {
+        coachStore.canUseRemoteCoach &&
+        hasSavedCoachContext &&
+        !isEditingAnalysisContext &&
+        !hasInsightsStatusError
+    }
+
+    private var shouldShowStandaloneCoachStatusCard: Bool {
+        !shouldShowCombinedCoachStatusCard &&
+        (
+            !coachStore.canUseRemoteCoach ||
+            !hasSavedCoachContext ||
+            hasInsightsStatusError
+        )
+    }
+
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 20) {
@@ -3401,41 +3430,53 @@ struct CoachView: View {
                     .disabled(coachStore.isLoadingProfileInsights || coachStore.isSendingMessage)
                 }
 
-                CoachStatusCard(
-                    isRemoteAvailable: coachStore.canUseRemoteCoach,
-                    lastErrorDescription: coachStore.lastInsightsErrorDescription
-                )
-
-                CoachContextPreferencesCard(
-                    selectedProgramID: Binding(
-                        get: { coachStore.selectedProgramIDDraft },
-                        set: { coachStore.selectedProgramIDDraft = $0 }
-                    ),
-                    programComment: Binding(
-                        get: { coachStore.programCommentDraft },
-                        set: { coachStore.programCommentDraft = String($0.prefix(500)) }
-                    ),
-                    programs: availablePrograms,
-                    saveState: coachStore.analysisSettingsSaveState,
-                    isExpanded: isEditingAnalysisContext,
-                    savedProgramComment: store.coachAnalysisSettings.programComment,
-                    commentFieldFocus: $focusedField,
-                    onEdit: {
+                if shouldShowCombinedCoachStatusCard {
+                    CoachStatusContextSummaryCard {
                         focusedField = nil
                         withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) {
                             isEditingAnalysisContext = true
                         }
-                    },
-                    onSave: {
-                        focusedField = nil
-                        Task {
-                            await coachStore.saveAnalysisSettings(using: store)
-                            withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
-                                isEditingAnalysisContext = false
+                    }
+                } else {
+                    if shouldShowStandaloneCoachStatusCard {
+                        CoachStatusCard(
+                            isRemoteAvailable: coachStore.canUseRemoteCoach,
+                            lastErrorDescription: coachStore.lastInsightsErrorDescription
+                        )
+                    }
+
+                    CoachContextPreferencesCard(
+                        selectedProgramID: Binding(
+                            get: { coachStore.selectedProgramIDDraft },
+                            set: { coachStore.selectedProgramIDDraft = $0 }
+                        ),
+                        programComment: Binding(
+                            get: { coachStore.programCommentDraft },
+                            set: { coachStore.programCommentDraft = String($0.prefix(500)) }
+                        ),
+                        programs: availablePrograms,
+                        saveState: coachStore.analysisSettingsSaveState,
+                        isExpanded: isEditingAnalysisContext,
+                        savedSelectedProgramID: store.coachAnalysisSettings.selectedProgramID,
+                        savedProgramComment: store.coachAnalysisSettings.programComment,
+                        commentFieldFocus: $focusedField,
+                        onEdit: {
+                            focusedField = nil
+                            withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) {
+                                isEditingAnalysisContext = true
+                            }
+                        },
+                        onSave: {
+                            focusedField = nil
+                            Task {
+                                await coachStore.saveAnalysisSettings(using: store)
+                                withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
+                                    isEditingAnalysisContext = false
+                                }
                             }
                         }
-                    }
-                )
+                    )
+                }
 
                 if let profileInsights = coachStore.profileInsights {
                     CoachInsightsOverviewCard(
@@ -3659,6 +3700,45 @@ private struct CoachStatusCard: View {
     }
 }
 
+private struct CoachStatusContextSummaryCard: View {
+    let onEdit: () -> Void
+
+    var body: some View {
+        AppCard(padding: 14) {
+            HStack(alignment: .top, spacing: 16) {
+                VStack(alignment: .leading, spacing: 10) {
+                    statusRow(
+                        titleKey: "coach.status.remote",
+                        color: AppTheme.success
+                    )
+                    statusRow(
+                        titleKey: "coach.context.status.ready",
+                        color: AppTheme.success
+                    )
+                }
+
+                Spacer(minLength: 12)
+
+                Button("coach.context.edit") {
+                    onEdit()
+                }
+                .buttonStyle(CoachCompactPromptButtonStyle())
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func statusRow(titleKey: LocalizedStringKey, color: Color) -> some View {
+        HStack(spacing: 8) {
+            CoachStatusDot(color: color, size: 8)
+
+            Text(titleKey)
+                .font(AppTypography.body(size: 14, weight: .semibold, relativeTo: .subheadline))
+                .foregroundStyle(AppTheme.primaryText)
+        }
+    }
+}
+
 private struct CoachInsightsOverviewCard: View {
     let insights: CoachProfileInsights
     let origin: CoachInsightsOrigin
@@ -3724,6 +3804,7 @@ private struct CoachContextPreferencesCard: View {
     let programs: [WorkoutProgram]
     let saveState: CoachAnalysisSettingsSaveState
     let isExpanded: Bool
+    let savedSelectedProgramID: UUID?
     let savedProgramComment: String
     let commentFieldFocus: FocusState<CoachFocusField?>.Binding
     let onEdit: () -> Void
@@ -3737,16 +3818,17 @@ private struct CoachContextPreferencesCard: View {
         saveState == .saved
     }
 
-    private var hasSavedComment: Bool {
+    private var hasSavedContext: Bool {
+        savedSelectedProgramID != nil ||
         !savedProgramComment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private var collapsedStatusKey: LocalizedStringKey {
-        hasSavedComment ? "coach.context.status.ready" : "coach.context.status.missing"
+        hasSavedContext ? "coach.context.status.ready" : "coach.context.status.missing"
     }
 
     private var collapsedStatusColor: Color {
-        hasSavedComment ? AppTheme.success : AppTheme.destructive
+        hasSavedContext ? AppTheme.success : AppTheme.destructive
     }
 
     var body: some View {
