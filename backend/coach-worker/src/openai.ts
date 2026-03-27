@@ -407,21 +407,17 @@ export class WorkersAICoachService implements CoachInferenceService {
           });
           stats.structuredPromptBytes += invocation.promptBytes;
           stats.structuredModelDurationMs += invocation.modelDurationMs;
-          const parsed = normalizeProfileInsightsResponse(
-            parseStructuredOutput(
-              invocation.rawResponse,
-              profileInsightsModelOutputSchema,
-              "profile insights",
-              {
-                operation,
-                model: attempt.selectedModel,
-              }
-            )
+          const parsed = parseProfileInsightsStructuredResponse(
+            invocation.rawResponse,
+            {
+              operation,
+              model: attempt.selectedModel,
+            }
           );
           const guardedResponse = applyProfileInsightsGuardrails(
             request,
             {
-              ...parsed,
+              ...parsed.response,
               generationStatus: "model",
               insightSource: "fresh_model",
             },
@@ -449,6 +445,7 @@ export class WorkersAICoachService implements CoachInferenceService {
             attemptReason: attempt.attemptReason,
             fallbackStage: attempt.fallbackStage,
             mode: attempt.mode,
+            structuredParseMode: parsed.parseMode,
             modelDurationMs: invocation.modelDurationMs,
             promptBytes: invocation.promptBytes,
           });
@@ -1372,6 +1369,11 @@ interface AttemptAccumulator {
   fallbackModelDurationMs?: number;
 }
 
+type ProfileInsightsStructuredParseResult = {
+  response: CoachProfileInsightsContent;
+  parseMode: "strict_json_schema" | "lenient_json_coercion";
+};
+
 function createAttemptAccumulator(): AttemptAccumulator {
   return {
     structuredPromptBytes: 0,
@@ -1828,6 +1830,174 @@ function normalizeProfileInsightsResponse(
     summary: response.summary.trim(),
     recommendations: dedupeText(response.recommendations).slice(0, 8),
   };
+}
+
+function parseProfileInsightsStructuredResponse(
+  rawResponse: unknown,
+  details: Record<string, unknown>
+): ProfileInsightsStructuredParseResult {
+  try {
+    return {
+      response: normalizeProfileInsightsResponse(
+        parseStructuredOutput(
+          rawResponse,
+          profileInsightsModelOutputSchema,
+          "profile insights",
+          details
+        )
+      ),
+      parseMode: "strict_json_schema",
+    };
+  } catch (error) {
+    if (
+      !(error instanceof CoachInferenceServiceError) ||
+      (error.code !== "upstream_invalid_output" &&
+        error.code !== "upstream_invalid_json")
+    ) {
+      throw error;
+    }
+
+    const coerced = tryCoerceProfileInsightsStructuredResponse(rawResponse);
+    if (!coerced) {
+      throw error;
+    }
+
+    return {
+      response: normalizeProfileInsightsResponse(coerced),
+      parseMode: "lenient_json_coercion",
+    };
+  }
+}
+
+function tryCoerceProfileInsightsStructuredResponse(
+  rawResponse: unknown
+): CoachProfileInsightsContent | undefined {
+  let rawPayload: unknown;
+  try {
+    rawPayload = extractResponsePayload(rawResponse, "profile insights");
+  } catch {
+    return undefined;
+  }
+
+  const candidate =
+    typeof rawPayload === "string"
+      ? safeJSONParse(normalizePotentialJSON(rawPayload))
+      : rawPayload;
+
+  if (!isRecord(candidate)) {
+    return undefined;
+  }
+
+  const summary = firstNonEmptyText([
+    candidate.summary,
+    candidate.coachSummary,
+    candidate.overview,
+    candidate.headline,
+    candidate.analysis,
+  ])?.slice(0, 1200);
+  if (!summary) {
+    return undefined;
+  }
+
+  return {
+    summary,
+    recommendations: coerceProfileInsightRecommendations(
+      candidate.recommendations ??
+        candidate.recommendation ??
+        candidate.recommendationList ??
+        candidate.actionItems ??
+        candidate.nextSteps ??
+        candidate.suggestions ??
+        candidate.highlights
+    ),
+  };
+}
+
+function coerceProfileInsightRecommendations(value: unknown): string[] {
+  if (typeof value === "string") {
+    return splitRecommendationText(value);
+  }
+
+  if (Array.isArray(value)) {
+    return dedupeText(
+      value.flatMap((item) => {
+        if (typeof item === "string") {
+          const cleaned = cleanPlainParagraph(item);
+          return cleaned ? [cleaned] : [];
+        }
+        if (!isRecord(item)) {
+          return [];
+        }
+        const text = firstNonEmptyText([
+          item.text,
+          item.value,
+          item.recommendation,
+          item.suggestion,
+          item.action,
+          item.title,
+          item.summary,
+        ]);
+        return text ? [text] : [];
+      })
+    )
+      .map((item) => item.slice(0, 280))
+      .filter(Boolean)
+      .slice(0, 8);
+  }
+
+  if (isRecord(value)) {
+    return coerceProfileInsightRecommendations(
+      value.items ??
+        value.values ??
+        value.lines ??
+        value.bullets ??
+        value.recommendations
+    );
+  }
+
+  return [];
+}
+
+function splitRecommendationText(text: string): string[] {
+  const normalized = text.replace(/\r\n/g, "\n").trim();
+  if (!normalized) {
+    return [];
+  }
+
+  const bulletRecommendations = normalized
+    .split("\n")
+    .map((line) => parseBulletRecommendation(line))
+    .filter((value): value is string => Boolean(value));
+  if (bulletRecommendations.length > 0) {
+    return dedupeText(bulletRecommendations)
+      .map((item) => item.slice(0, 280))
+      .filter(Boolean)
+      .slice(0, 8);
+  }
+
+  return dedupeText(
+    normalized
+      .split(/\n\s*\n+/)
+      .map((paragraph) => cleanPlainParagraph(paragraph))
+      .filter(Boolean)
+  )
+    .map((item) => item.slice(0, 280))
+    .filter(Boolean)
+    .slice(0, 8);
+}
+
+function firstNonEmptyText(values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value !== "string") {
+      continue;
+    }
+    const cleaned = cleanPlainParagraph(value);
+    if (cleaned) {
+      return cleaned;
+    }
+  }
+
+  return undefined;
 }
 
 function normalizeWorkoutSummaryResponse(
