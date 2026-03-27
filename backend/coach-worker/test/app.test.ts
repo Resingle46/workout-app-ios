@@ -12,6 +12,7 @@ import {
   CoachInferenceServiceError,
   DEFAULT_AI_MODEL,
   WorkersAICoachService,
+  createInferenceServiceForProvider,
   type CoachInferenceService,
   type Env,
 } from "../src/openai";
@@ -3262,6 +3263,72 @@ describe("WorkersAICoachService", () => {
     ]);
     expect(result.data.generationStatus).toBe("fallback");
     expect(result.data.insightSource).toBe("fallback");
+  });
+
+  it("uses responseJsonSchema for Gemini structured profile insights requests", async () => {
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () =>
+        JSON.stringify({
+          candidates: [
+            {
+              content: {
+                parts: [
+                  {
+                    text: JSON.stringify({
+                      summary: "Gemini structured summary.",
+                      recommendations: ["Keep the weekly load steady."],
+                    }),
+                  },
+                ],
+              },
+            },
+          ],
+          usageMetadata: {
+            promptTokenCount: 42,
+            candidatesTokenCount: 27,
+          },
+          responseId: "gemini-response-1",
+        }),
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    try {
+      const service = createInferenceServiceForProvider(
+        makeEnv({
+          GEMINI_API_KEY: "test-gemini-key",
+        }),
+        "gemini"
+      );
+      const result = await service.generateProfileInsights({
+        ...makeProfileInsightsRequestFixture(),
+        provider: "gemini",
+      });
+
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      const [, requestInit] = fetchSpy.mock.calls[0] as [
+        string,
+        { body?: string }
+      ];
+      const payload = JSON.parse(requestInit.body ?? "{}");
+      expect(payload.generationConfig?.responseMimeType).toBe("application/json");
+      expect(payload.generationConfig?.responseJsonSchema).toMatchObject({
+        type: "object",
+        required: ["summary", "recommendations"],
+      });
+      expect(payload.generationConfig?.responseSchema).toBeUndefined();
+      expect(result.provider).toBe("gemini");
+      expect(result.mode).toBe("structured");
+      expect(result.data).toMatchObject({
+        summary: "Gemini structured summary.",
+        recommendations: ["Keep the weekly load steady."],
+        generationStatus: "model",
+        insightSource: "fresh_model",
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("retries profile insights on balanced structured routing after a fast structured failure", async () => {

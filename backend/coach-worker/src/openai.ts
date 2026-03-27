@@ -2735,7 +2735,7 @@ function buildGeminiRequestPayload(
   const jsonSchema = extractGeminiResponseSchema(inputs);
   if (jsonSchema) {
     generationConfig.responseMimeType = "application/json";
-    generationConfig.responseSchema = jsonSchema;
+    generationConfig.responseJsonSchema = jsonSchema;
   }
 
   return {
