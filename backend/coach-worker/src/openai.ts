@@ -3487,6 +3487,7 @@ const profileInsightsResponseJsonSchema = {
     },
   },
   required: ["summary", "recommendations"],
+  additionalProperties: false,
 } as const;
 
 const chatResponseJsonSchema = {
@@ -3503,6 +3504,7 @@ const chatResponseJsonSchema = {
     },
   },
   required: ["answerMarkdown", "followUps"],
+  additionalProperties: false,
 } as const;
 
 const workoutSummaryResponseJsonSchema = {
@@ -3528,4 +3530,5 @@ const workoutSummaryResponseJsonSchema = {
     },
   },
   required: ["headline", "summary", "highlights", "nextWorkoutFocus"],
+  additionalProperties: false,
 } as const;

@@ -3279,6 +3279,7 @@ describe("WorkersAICoachService", () => {
                     text: JSON.stringify({
                       summary: "Gemini structured summary.",
                       recommendations: ["Keep the weekly load steady."],
+                      unexpectedField: "ignore me",
                     }),
                   },
                 ],
@@ -3316,6 +3317,7 @@ describe("WorkersAICoachService", () => {
       expect(payload.generationConfig?.responseJsonSchema).toMatchObject({
         type: "object",
         required: ["summary", "recommendations"],
+        additionalProperties: false,
       });
       expect(payload.generationConfig?.responseSchema).toBeUndefined();
       expect(result.provider).toBe("gemini");

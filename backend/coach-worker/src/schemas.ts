@@ -662,8 +662,7 @@ export const profileInsightsModelOutputSchema = z
     summary: nonEmptyStringSchema.max(1200),
     recommendations: z.array(nonEmptyStringSchema.max(280)).max(8),
     suggestedChanges: z.array(z.unknown()).max(5).optional(),
-  })
-  .strict();
+  });
 
 export const chatResponseSchema = z
   .object({
@@ -748,8 +747,7 @@ export const workoutSummaryModelOutputSchema = z
     highlights: z.array(nonEmptyStringSchema.max(240)).min(1).max(4),
     nextWorkoutFocus: z.array(nonEmptyStringSchema.max(220)).max(3),
     suggestedChanges: z.array(z.unknown()).max(5).optional(),
-  })
-  .strict();
+  });
 
 export const workoutSummaryJobResultSchema = z
   .object({
@@ -798,8 +796,7 @@ export const chatResponseModelOutputSchema = z
     responseID: nonEmptyStringSchema.max(200).optional(),
     followUps: z.array(nonEmptyStringSchema.max(160)).max(3),
     suggestedChanges: z.array(z.unknown()).max(5).optional(),
-  })
-  .strict();
+  });
 
 export type CoachProfileInsightsRequest = z.infer<
   typeof profileInsightsRequestSchema
