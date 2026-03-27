@@ -317,6 +317,7 @@ export class WorkersAICoachService implements CoachInferenceService {
           JSON.stringify({
             event: "coach_profile_structured_fallback",
             operation,
+            provider: attempt.provider,
             selectedModel: attempt.selectedModel,
             modelRole: attempt.modelRole,
             useCase: attempt.useCase,
@@ -557,6 +558,7 @@ export class WorkersAICoachService implements CoachInferenceService {
           JSON.stringify({
             event: "coach_profile_attempt_failed",
             operation,
+            provider: attempt.provider,
             selectedModel: attempt.selectedModel,
             modelRole: attempt.modelRole,
             useCase: attempt.useCase,
@@ -592,6 +594,7 @@ export class WorkersAICoachService implements CoachInferenceService {
             JSON.stringify({
               event: "coach_profile_structured_fallback",
               operation,
+              provider: attempt.provider,
               selectedModel: attempt.selectedModel,
               modelRole: attempt.modelRole,
               useCase: attempt.useCase,
@@ -635,6 +638,7 @@ export class WorkersAICoachService implements CoachInferenceService {
       JSON.stringify({
         event: "coach_profile_local_fallback",
         operation,
+        provider: routingDecision.provider,
         selectedModel,
         modelRole,
         useCase: finalAttempt?.useCase ?? routingDecision.useCase,
@@ -1540,12 +1544,19 @@ function resolveProfileInsightsAttemptTimeoutMs(
           quality_escalation_structured: 60_000,
           sync_fallback_plain_text: timeouts.fallbackTimeoutMs,
         }
-      : {
-          primary: 8_000,
-          insights_balanced_structured: 7_000,
-          quality_escalation_structured: 4_000,
-          sync_fallback_plain_text: timeouts.fallbackTimeoutMs,
-        };
+      : attempt.provider === "gemini"
+        ? {
+            primary: 16_000,
+            insights_balanced_structured: 14_000,
+            quality_escalation_structured: 10_000,
+            sync_fallback_plain_text: timeouts.fallbackTimeoutMs,
+          }
+        : {
+            primary: 8_000,
+            insights_balanced_structured: 7_000,
+            quality_escalation_structured: 4_000,
+            sync_fallback_plain_text: timeouts.fallbackTimeoutMs,
+          };
 
   if (attempt.mode === "plain_text_fallback") {
     return Math.max(

@@ -3406,6 +3406,68 @@ describe("WorkersAICoachService", () => {
     }
   });
 
+  it("allows longer sync structured Gemini profile insights before falling back", async () => {
+    vi.useFakeTimers();
+    const fetchSpy = vi.fn().mockImplementation(() =>
+      new Promise((resolve) => {
+        setTimeout(() => {
+          resolve({
+            ok: true,
+            status: 200,
+            text: async () =>
+              JSON.stringify({
+                candidates: [
+                  {
+                    content: {
+                      parts: [
+                        {
+                          text: JSON.stringify({
+                            summary: "Gemini structured summary after a slower response.",
+                            recommendations: [
+                              "Keep the current weekly load stable for one more week.",
+                            ],
+                          }),
+                        },
+                      ],
+                    },
+                  },
+                ],
+              }),
+          });
+        }, 9_000);
+      })
+    );
+    vi.stubGlobal("fetch", fetchSpy);
+
+    try {
+      const service = createInferenceServiceForProvider(
+        makeEnv({
+          GEMINI_API_KEY: "test-gemini-key",
+        }),
+        "gemini"
+      );
+
+      const requestPromise = service.generateProfileInsights({
+        ...makeProfileInsightsRequestFixture(),
+        provider: "gemini",
+      });
+      await vi.advanceTimersByTimeAsync(9_100);
+      const result = await requestPromise;
+
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(result.provider).toBe("gemini");
+      expect(result.mode).toBe("structured");
+      expect(result.data).toMatchObject({
+        summary: "Gemini structured summary after a slower response.",
+        generationStatus: "model",
+        insightSource: "fresh_model",
+      });
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("retries profile insights on balanced structured routing after a fast structured failure", async () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
@@ -3609,6 +3671,7 @@ describe("WorkersAICoachService", () => {
       );
       expect(failedLog).toBeDefined();
       expect(failedLog).toMatchObject({
+        provider: "workers_ai",
         selectedModel: "@cf/zai-org/glm-4.7-flash",
         modelRole: "insights_fast",
         fallbackStage: "primary",
