@@ -3376,23 +3376,26 @@ struct CoachView: View {
                             )
                         }
                     } label: {
-                        Image(systemName: "arrow.clockwise")
-                            .font(AppTypography.icon(size: 18, weight: .semibold))
-                            .foregroundStyle(AppTheme.primaryText)
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .fill(AppTheme.surfaceElevated)
+
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .stroke(AppTheme.border, lineWidth: 1)
+
+                            Image(systemName: "arrow.clockwise")
+                                .font(AppTypography.icon(size: 18, weight: .semibold))
+                                .foregroundStyle(AppTheme.primaryText)
+                                .rotationEffect(.degrees(coachStore.isLoadingProfileInsights ? 360 : 0))
+                                .animation(
+                                    coachStore.isLoadingProfileInsights
+                                    ? .linear(duration: 0.9).repeatForever(autoreverses: false)
+                                    : .easeOut(duration: 0.2),
+                                    value: coachStore.isLoadingProfileInsights
+                                )
+                        }
                             .frame(width: 44, height: 44)
-                            .background(AppTheme.surfaceElevated, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                    .stroke(AppTheme.border, lineWidth: 1)
-                            )
                             .scaleEffect(refreshButtonScale)
-                            .rotationEffect(.degrees(coachStore.isLoadingProfileInsights ? 360 : 0))
-                            .animation(
-                                coachStore.isLoadingProfileInsights
-                                ? .linear(duration: 0.9).repeatForever(autoreverses: false)
-                                : .easeOut(duration: 0.2),
-                                value: coachStore.isLoadingProfileInsights
-                            )
                     }
                     .buttonStyle(.plain)
                     .disabled(coachStore.isLoadingProfileInsights || coachStore.isSendingMessage)
