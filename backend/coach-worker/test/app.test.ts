@@ -1985,7 +1985,7 @@ describe("WorkersAICoachService", () => {
     const aiRun = vi.fn().mockResolvedValue({
       response: {
         answerMarkdown: "Use +2.5kg if RPE stayed below 8.",
-        followUps: ["Want a double progression version?"],
+        followUps: ["Give me a double progression version."],
       },
       usage: { total_tokens: 321 },
     });
@@ -2029,7 +2029,7 @@ describe("WorkersAICoachService", () => {
           message: {
             content: JSON.stringify({
               answerMarkdown: "Stay at the same load this week.",
-              followUps: ["Want a rep-target version?"],
+              followUps: ["Give me a rep-target version."],
             }),
           },
         },
@@ -2064,7 +2064,29 @@ describe("WorkersAICoachService", () => {
     expect(result.model).toBe("@cf/zai-org/glm-4.7-flash");
     expect(result.modelRole).toBe("chat_fast");
     expect(result.data.answerMarkdown).toBe("Stay at the same load this week.");
-    expect(result.data.followUps).toEqual(["Want a rep-target version?"]);
+    expect(result.data.followUps).toEqual(["Give me a rep-target version."]);
+  });
+
+  it("normalizes follow-ups into user-side prompts and caps them at three", async () => {
+    const aiRun = vi.fn().mockResolvedValue({
+      response: {
+        answerMarkdown: "You can either keep the split or simplify it.",
+        followUps: [
+          "Do you want to change your program?",
+          "Want a 3-day version?",
+          "Compare this with upper/lower.",
+        ],
+      },
+    });
+
+    const service = new WorkersAICoachService(makeEnv({ AI: { run: aiRun } }));
+    const result = await service.generateChat(makeChatRequestFixture());
+
+    expect(result.data.followUps).toEqual([
+      "Help me change my program.",
+      "Give me a 3-day version.",
+      "Compare this with upper/lower.",
+    ]);
   });
 
   it("builds a sanitized raw-first prompt and surfaces high-priority comment constraints", async () => {

@@ -322,7 +322,11 @@ export function buildChatMessages(
         "If you want to propose changes, write them directly in answerMarkdown as normal prose or bullets.",
         "Do not include raw field names, internal IDs, or schema-like dumps inside answerMarkdown.",
         "Avoid code fences unless the user explicitly asks for code.",
-        "Include up to 4 follow-up questions that naturally continue the conversation.",
+        "Include up to 3 short follow-up prompts that the user could tap and send back to the coach as their next message.",
+        "Write followUps from the user's perspective as direct requests or questions to the coach.",
+        "Do not write questions that the coach should ask the user.",
+        "Bad followUp: 'Do you want to change your program?'",
+        "Good followUps: 'Help me change my program.', 'Compare this with upper/lower.', 'Give me a 3-day version.'",
       ].join("\n\n"),
     },
     ...request.clientRecentTurns.map((message) => ({

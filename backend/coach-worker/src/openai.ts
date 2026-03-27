@@ -1479,8 +1479,116 @@ function normalizeChatResponse(
 ): CoachChatContent {
   return {
     answerMarkdown: response.answerMarkdown.trim(),
-    followUps: dedupeText(response.followUps).slice(0, 4),
+    followUps: normalizeChatFollowUps(response.followUps),
   };
+}
+
+function normalizeChatFollowUps(followUps: string[]): string[] {
+  return dedupeText(
+    followUps
+      .map((followUp) => normalizeChatFollowUp(followUp))
+      .filter((followUp): followUp is string => Boolean(followUp))
+  ).slice(0, 3);
+}
+
+function normalizeChatFollowUp(followUp: string): string | null {
+  const trimmed = followUp.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const collapsedWhitespace = trimmed.replace(/\s+/g, " ");
+  const normalizedQuotes = collapsedWhitespace.replace(/[“”]/g, "\"").replace(/[‘’]/g, "'");
+  const withoutTrailingPunctuation = normalizedQuotes.replace(/[.?!]+$/g, "").trim();
+  if (!withoutTrailingPunctuation) {
+    return null;
+  }
+
+  const normalized = withoutTrailingPunctuation.toLowerCase();
+  if (isAssistantSideFollowUp(normalized)) {
+    const transformed = transformAssistantSideFollowUp(withoutTrailingPunctuation);
+    return transformed ? ensureTrailingPeriod(transformed) : null;
+  }
+
+  return ensureTrailingPeriod(withoutTrailingPunctuation);
+}
+
+function isAssistantSideFollowUp(normalized: string): boolean {
+  return (
+    /^(?:do|would|will|can|could|should)\s+you\b/.test(normalized) ||
+    /^(?:do|would|will|can|could|should)\s+we\b/.test(normalized) ||
+    /^want\b/.test(normalized) ||
+    /^need\b/.test(normalized) ||
+    /^interested in\b/.test(normalized) ||
+    /^(?:хочешь|хотите|хотели бы|нужно ли|нужен ли|нужна ли|нужны ли)\b/u.test(normalized)
+  );
+}
+
+function transformAssistantSideFollowUp(followUp: string): string | null {
+  const wantMatch = followUp.match(/^want\s+(.+)$/i);
+  if (wantMatch?.[1]) {
+    return `Give me ${stripSecondPersonReferences(wantMatch[1])}`;
+  }
+
+  const needMatch = followUp.match(/^need\s+(.+)$/i);
+  if (needMatch?.[1]) {
+    return `Give me ${stripSecondPersonReferences(needMatch[1])}`;
+  }
+
+  const interestedMatch = followUp.match(/^interested in\s+(.+)$/i);
+  if (interestedMatch?.[1]) {
+    return `Tell me more about ${stripSecondPersonReferences(interestedMatch[1])}`;
+  }
+
+  const doYouWantMatch = followUp.match(
+    /^(?:do|would|will|can|could|should)\s+you\s+(?:want|like|need)\s+(.+)$/i
+  );
+  if (doYouWantMatch?.[1]) {
+    const normalizedTail = normalizeFollowUpActionTail(doYouWantMatch[1]);
+    if (!normalizedTail) {
+      return null;
+    }
+
+    if (/^(?:change|adjust|rewrite|redo|rebuild|compare|adapt|make|turn)\b/i.test(normalizedTail)) {
+      return `Help me ${normalizedTail}`;
+    }
+
+    return `Give me ${normalizedTail}`;
+  }
+
+  const doWeMatch = followUp.match(
+    /^(?:do|would|will|can|could|should)\s+we\s+(.+)$/i
+  );
+  if (doWeMatch?.[1]) {
+    const normalizedTail = normalizeFollowUpActionTail(doWeMatch[1]);
+    return normalizedTail ? `Help me ${normalizedTail}` : null;
+  }
+
+  return null;
+}
+
+function stripSecondPersonReferences(value: string): string {
+  return value
+    .replace(/\byour\b/gi, "my")
+    .replace(/\byou\b/gi, "me")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeFollowUpActionTail(value: string): string {
+  return stripSecondPersonReferences(value)
+    .replace(/^to\s+/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function ensureTrailingPeriod(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+
+  return /[.?!]$/.test(trimmed) ? trimmed : `${trimmed}.`;
 }
 
 function normalizeProfileInsightsResponse(

@@ -663,7 +663,7 @@ export const chatResponseSchema = z
   .object({
     answerMarkdown: nonEmptyStringSchema.max(COACH_CHAT_MARKDOWN_MAX_LENGTH),
     responseID: nonEmptyStringSchema.max(200),
-    followUps: z.array(nonEmptyStringSchema.max(160)).max(4),
+    followUps: z.array(nonEmptyStringSchema.max(160)).max(3),
     generationStatus: coachResponseGenerationStatusSchema.default("fallback"),
   })
   .strict();
@@ -686,7 +686,7 @@ export const chatJobResultSchema = z
   .object({
     answerMarkdown: nonEmptyStringSchema.max(COACH_CHAT_MARKDOWN_MAX_LENGTH),
     responseID: nonEmptyStringSchema.max(200),
-    followUps: z.array(nonEmptyStringSchema.max(160)).max(4),
+    followUps: z.array(nonEmptyStringSchema.max(160)).max(3),
     generationStatus: coachResponseGenerationStatusSchema.default("fallback"),
     inferenceMode: chatInferenceModeSchema,
     modelDurationMs: z.int().min(0).optional(),
@@ -790,7 +790,7 @@ export const chatResponseModelOutputSchema = z
   .object({
     answerMarkdown: nonEmptyStringSchema.max(COACH_CHAT_MARKDOWN_MAX_LENGTH),
     responseID: nonEmptyStringSchema.max(200).optional(),
-    followUps: z.array(nonEmptyStringSchema.max(160)).max(4),
+    followUps: z.array(nonEmptyStringSchema.max(160)).max(3),
     suggestedChanges: z.array(z.unknown()).max(5).optional(),
   })
   .strict();
