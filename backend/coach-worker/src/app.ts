@@ -10,6 +10,7 @@ import {
   chatJobCreateRequestSchema,
   chatJobCreateResponseSchema,
   chatJobStatusResponseSchema,
+  chatRequestSchema,
   coachPreferencesUpdateRequestSchema,
   coachPreferencesUpdateResponseSchema,
   coachMemoryClearRequestSchema,

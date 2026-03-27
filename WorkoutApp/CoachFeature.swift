@@ -646,6 +646,15 @@ protocol CoachAPIClient: Sendable {
         installID: String
     ) async throws -> CoachChatJobStatusResponse
 
+    func sendChat(
+        locale: String,
+        question: String,
+        clientRecentTurns: [CoachConversationMessage],
+        snapshotEnvelope: CoachSnapshotEnvelope,
+        capabilityScope: CoachCapabilityScope,
+        runtimeContextDelta: CoachRuntimeContextDelta?
+    ) async throws -> CoachChatResponse
+
     func createWorkoutSummaryJob(
         _ request: WorkoutSummaryJobCreateRequest
     ) async throws -> WorkoutSummaryJobCreateResponse
