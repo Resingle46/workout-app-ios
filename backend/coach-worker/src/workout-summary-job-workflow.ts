@@ -8,7 +8,6 @@ import {
   type WorkoutSummaryWorkflowPayload,
 } from "./workout-summary-job-executor";
 import type { Env } from "./openai";
-import type { CoachWorkoutSummaryJobRecord } from "./state";
 
 export class WorkoutSummaryJobWorkflow extends WorkflowEntrypoint<
   Env,
@@ -17,7 +16,16 @@ export class WorkoutSummaryJobWorkflow extends WorkflowEntrypoint<
   async run(
     event: WorkflowEvent<WorkoutSummaryWorkflowPayload>,
     step: WorkflowStep
-  ): Promise<CoachWorkoutSummaryJobRecord | null> {
-    return executeWorkoutSummaryJob(event.payload.jobID, this.env, {}, step);
+  ): Promise<{ jobID: string; finalStatus?: string } | null> {
+    const finalJob = await executeWorkoutSummaryJob(
+      event.payload.jobID,
+      this.env,
+      {},
+      step
+    );
+    return {
+      jobID: event.payload.jobID,
+      finalStatus: finalJob?.status,
+    };
   }
 }

@@ -712,11 +712,21 @@ struct CoachChatResponse: Codable, Hashable, Sendable {
     }
 }
 
+struct CoachJobMetadata: Codable, Hashable, Sendable {
+    var jobDeadlineAt: Date?
+    var contextProfile: String?
+    var promptProfile: String?
+    var contextVersion: String?
+    var analyticsVersion: String?
+    var memoryProfile: String?
+}
+
 struct CoachChatJobCreateResponse: Codable, Hashable, Sendable {
     var jobID: String
     var status: CoachChatJobStatus
     var createdAt: Date
     var pollAfterMs: Int
+    var metadata: CoachJobMetadata?
 }
 
 struct CoachChatJobResult: Codable, Hashable, Sendable {
@@ -743,6 +753,7 @@ struct CoachChatJobStatusResponse: Codable, Hashable, Sendable {
     var completedAt: Date?
     var result: CoachChatJobResult?
     var error: CoachChatJobError?
+    var metadata: CoachJobMetadata?
 }
 
 private struct CoachAPIErrorPayload: Codable, Hashable, Sendable {
@@ -1618,7 +1629,7 @@ struct CoachAPIHTTPClient: CoachAPIClient {
 private struct EmptyCoachResponse: Decodable, Sendable {}
 
 struct CoachContextBuilder {
-    private static let recentFinishedSessionsLimit = 8
+    private static let recentFinishedSessionsLimit = 12
 
     @MainActor
     func runtimeContextDelta(from store: AppStore) -> CoachRuntimeContextDelta? {
@@ -2232,7 +2243,7 @@ final class CloudSyncStore {
 @Observable
 final class CoachStore {
     private static let initialChatPollAfterMs = 1_500
-    private static let defaultMaxChatPollingDuration: TimeInterval = 90
+    private static let defaultMaxChatPollingDuration: TimeInterval = 180
 
     var profileInsights: CoachProfileInsights?
     var profileInsightsOrigin: CoachInsightsOrigin = .fallback
@@ -2784,7 +2795,7 @@ final class CoachStore {
         visibleQuickPromptKeys = Array(allQuickPromptKeys.shuffled().prefix(3))
     }
 
-    private func recentConversationMessages(limit: Int = 6) -> [CoachConversationMessage] {
+    private func recentConversationMessages(limit: Int = 12) -> [CoachConversationMessage] {
         Array(
             messages
                 .filter { !$0.isLoading && !$0.isStatus }

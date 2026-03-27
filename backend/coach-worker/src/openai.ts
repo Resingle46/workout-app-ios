@@ -17,7 +17,14 @@ import {
   buildWorkoutSummaryMessages,
   buildFallbackWorkoutSummaryMessages,
 } from "./prompts";
-import { extractProgramCommentConstraints, type ProgramCommentConstraints } from "./context";
+import {
+  buildDerivedCoachAnalyticsFromCompactSnapshot,
+  extractProgramCommentConstraints,
+  type CoachContextProfile,
+  type CoachDerivedAnalytics,
+  type CoachExecutionMetadata,
+  type ProgramCommentConstraints,
+} from "./context";
 import type {
   CoachD1Database,
   CoachKVNamespace,
@@ -26,30 +33,34 @@ import type {
 
 export const DEFAULT_AI_MODEL = "@cf/mistralai/mistral-small-3.1-24b-instruct";
 const PROFILE_INSIGHTS_STRUCTURED_MAX_TOKENS = 550;
+const PROFILE_INSIGHTS_ASYNC_STRUCTURED_MAX_TOKENS = 1_000;
 const PROFILE_INSIGHTS_PLAIN_TEXT_MAX_TOKENS = 260;
+const PROFILE_INSIGHTS_ASYNC_PLAIN_TEXT_MAX_TOKENS = 500;
 const CHAT_STRUCTURED_MAX_TOKENS = 700;
+const CHAT_ASYNC_STRUCTURED_MAX_TOKENS = 1_400;
 const CHAT_FALLBACK_MAX_TOKENS = 450;
-const PROFILE_INSIGHTS_TOTAL_BUDGET_MS = 28_000;
-const PROFILE_INSIGHTS_STRUCTURED_TIMEOUT_MS = 16_000;
-const PROFILE_INSIGHTS_PLAIN_TEXT_TIMEOUT_MS = 10_000;
-const PROFILE_INSIGHTS_FALLBACK_MIN_TIMEOUT_MS = 4_000;
+const CHAT_ASYNC_FALLBACK_MAX_TOKENS = 900;
 const WORKOUT_SUMMARY_STRUCTURED_MAX_TOKENS = 420;
+const WORKOUT_SUMMARY_ASYNC_STRUCTURED_MAX_TOKENS = 700;
 const WORKOUT_SUMMARY_PLAIN_TEXT_MAX_TOKENS = 320;
-const WORKOUT_SUMMARY_TOTAL_BUDGET_MS = 45_000;
-const WORKOUT_SUMMARY_STRUCTURED_TIMEOUT_MS = 22_000;
-const WORKOUT_SUMMARY_PLAIN_TEXT_TIMEOUT_MS = 14_000;
-const WORKOUT_SUMMARY_FALLBACK_MIN_TIMEOUT_MS = 4_000;
-const SYNC_CHAT_TIMEOUTS = {
-  totalBudgetMs: 28_000,
-  structuredTimeoutMs: 12_000,
-  fallbackTimeoutMs: 12_000,
-  fallbackMinTimeoutMs: 4_000,
+const WORKOUT_SUMMARY_ASYNC_PLAIN_TEXT_MAX_TOKENS = 520;
+const PROFILE_INSIGHTS_TIMEOUTS = {
+  totalBudgetMs: 25_000,
+  structuredTimeoutMs: 18_000,
+  fallbackTimeoutMs: 5_000,
+  fallbackMinTimeoutMs: 3_000,
 } as const;
-const ASYNC_CHAT_TIMEOUTS = {
-  totalBudgetMs: 120_000,
-  structuredTimeoutMs: 75_000,
-  fallbackTimeoutMs: 40_000,
-  fallbackMinTimeoutMs: 4_000,
+const ASYNC_LONG_TIMEOUTS = {
+  totalBudgetMs: 570_000,
+  structuredTimeoutMs: 510_000,
+  fallbackTimeoutMs: 45_000,
+  fallbackMinTimeoutMs: 15_000,
+} as const;
+const SYNC_CHAT_TIMEOUTS = {
+  totalBudgetMs: 25_000,
+  structuredTimeoutMs: 18_000,
+  fallbackTimeoutMs: 5_000,
+  fallbackMinTimeoutMs: 3_000,
 } as const;
 
 interface WorkersAI {
@@ -105,7 +116,8 @@ type CoachChatContent = Omit<
 
 export interface CoachInferenceService {
   generateProfileInsights(
-    request: CoachProfileInsightsRequest
+    request: CoachProfileInsightsRequest,
+    options?: GenerateProfileInsightsOptions
   ): Promise<InferenceResult<CoachProfileInsightsResponse>>;
   generateWorkoutSummary(
     request: CoachWorkoutSummaryJobCreateRequest
@@ -119,6 +131,16 @@ export interface CoachInferenceService {
 export interface GenerateChatOptions {
   responseId?: string;
   timeoutProfile?: "sync" | "async_job";
+  contextProfile?: CoachContextProfile;
+  promptProfile?: string;
+  derivedAnalytics?: CoachDerivedAnalytics;
+}
+
+export interface GenerateProfileInsightsOptions {
+  timeoutProfile?: "sync" | "async_job";
+  contextProfile?: CoachContextProfile;
+  promptProfile?: string;
+  derivedAnalytics?: CoachDerivedAnalytics;
 }
 
 export class CoachInferenceServiceError extends Error {
@@ -133,6 +155,16 @@ export class CoachInferenceServiceError extends Error {
   }
 }
 
+type CoachMetadataCarrier = {
+  metadata?: Partial<CoachExecutionMetadata>;
+};
+
+type ResolvedPromptExecution = {
+  contextProfile: CoachContextProfile;
+  promptProfile: string;
+  derivedAnalytics?: CoachDerivedAnalytics;
+};
+
 export function createWorkersAICoachService(env: Env): CoachInferenceService {
   return new WorkersAICoachService(env);
 }
@@ -140,13 +172,31 @@ export function createWorkersAICoachService(env: Env): CoachInferenceService {
 export class WorkersAICoachService implements CoachInferenceService {
   constructor(private readonly env: Env) {}
   async generateProfileInsights(
-    request: CoachProfileInsightsRequest
+    request: CoachProfileInsightsRequest,
+    options: GenerateProfileInsightsOptions = {}
   ): Promise<InferenceResult<CoachProfileInsightsResponse>> {
     const operation = "profile_insights";
-    const localFallback = buildNeutralProfileInsights(request);
+    const timeoutProfile = options.timeoutProfile ?? "sync";
+    const timeouts =
+      timeoutProfile === "async_job" ? ASYNC_LONG_TIMEOUTS : PROFILE_INSIGHTS_TIMEOUTS;
+    const promptExecution = resolvePromptExecution(
+      request,
+      options,
+      timeoutProfile === "async_job"
+        ? "rich_async_analytics_v1"
+        : "compact_sync_v2",
+      timeoutProfile === "async_job"
+        ? "profile_rich_async_analytics_v1"
+        : "profile_compact_context_v2"
+    );
+    const localFallback = buildNeutralProfileInsights(
+      request,
+      promptExecution.derivedAnalytics
+    );
     const startedAt = Date.now();
     const sharedDetails = {
-      promptVariant: "profile_compact_context_v1",
+      promptVariant: promptExecution.promptProfile,
+      contextProfile: promptExecution.contextProfile,
       programCommentChars:
         request.snapshot?.coachAnalysisSettings.programComment.trim().length ?? 0,
       recentPrCount: request.snapshot?.analytics.recentPersonalRecords.length ?? 0,
@@ -154,14 +204,20 @@ export class WorkersAICoachService implements CoachInferenceService {
       preferredProgramWorkoutCount:
         request.snapshot?.preferredProgram?.workouts.length ?? 0,
     };
+    const structuredMaxTokens = isRichContextProfile(promptExecution.contextProfile)
+      ? PROFILE_INSIGHTS_ASYNC_STRUCTURED_MAX_TOKENS
+      : PROFILE_INSIGHTS_STRUCTURED_MAX_TOKENS;
+    const fallbackMaxTokens = isRichContextProfile(promptExecution.contextProfile)
+      ? PROFILE_INSIGHTS_ASYNC_PLAIN_TEXT_MAX_TOKENS
+      : PROFILE_INSIGHTS_PLAIN_TEXT_MAX_TOKENS;
 
     try {
       const invocation = await this.runStructured({
         operation,
-        messages: buildProfileInsightsMessages(request),
+        messages: buildProfileInsightsMessages(request, promptExecution),
         schema: profileInsightsResponseJsonSchema,
-        maxTokens: PROFILE_INSIGHTS_STRUCTURED_MAX_TOKENS,
-        timeoutMs: PROFILE_INSIGHTS_STRUCTURED_TIMEOUT_MS,
+        maxTokens: structuredMaxTokens,
+        timeoutMs: timeouts.structuredTimeoutMs,
         extraDetails: sharedDetails,
       });
       const parsed = normalizeProfileInsightsResponse(
@@ -184,7 +240,8 @@ export class WorkersAICoachService implements CoachInferenceService {
             generationStatus: "model",
             insightSource: "fresh_model",
           },
-          localFallback
+          localFallback,
+          promptExecution.derivedAnalytics
         ),
         model: this.modelName,
         mode: "structured",
@@ -216,7 +273,10 @@ export class WorkersAICoachService implements CoachInferenceService {
         };
       }
 
-      const remainingBudgetMs = remainingProfileInsightsBudgetMs(startedAt);
+      const remainingBudgetMs = remainingProfileInsightsBudgetMs(
+        startedAt,
+        timeouts.totalBudgetMs
+      );
 
       console.warn(
         JSON.stringify({
@@ -230,7 +290,7 @@ export class WorkersAICoachService implements CoachInferenceService {
         })
       );
 
-      if (remainingBudgetMs < PROFILE_INSIGHTS_FALLBACK_MIN_TIMEOUT_MS) {
+      if (remainingBudgetMs < timeouts.fallbackMinTimeoutMs) {
         console.warn(
           JSON.stringify({
             event: "coach_profile_local_fallback",
@@ -254,12 +314,9 @@ export class WorkersAICoachService implements CoachInferenceService {
       try {
         const fallbackInvocation = await this.runPlainText({
           operation,
-          messages: buildFallbackProfileInsightsMessages(request),
-          maxTokens: PROFILE_INSIGHTS_PLAIN_TEXT_MAX_TOKENS,
-          timeoutMs: Math.min(
-            PROFILE_INSIGHTS_PLAIN_TEXT_TIMEOUT_MS,
-            remainingBudgetMs
-          ),
+          messages: buildFallbackProfileInsightsMessages(request, promptExecution),
+          maxTokens: fallbackMaxTokens,
+          timeoutMs: Math.min(timeouts.fallbackTimeoutMs, remainingBudgetMs),
           includeFallbackNotice: false,
           extraDetails: {
             ...sharedDetails,
@@ -278,7 +335,8 @@ export class WorkersAICoachService implements CoachInferenceService {
               generationStatus: "model",
               insightSource: "fresh_model",
             },
-            localFallback
+            localFallback,
+            promptExecution.derivedAnalytics
           ),
           model: this.modelName,
           mode: "plain_text_fallback",
@@ -320,7 +378,15 @@ export class WorkersAICoachService implements CoachInferenceService {
     const operation = "workout_summary";
     const startedAt = Date.now();
     const localFallback = buildNeutralWorkoutSummary(request);
+    const promptExecution = resolvePromptExecution(
+      request as CoachWorkoutSummaryJobCreateRequest & CoachMetadataCarrier,
+      {},
+      "rich_async_v1",
+      "workout_summary_rich_async_v1"
+    );
     const sharedDetails = {
+      promptVariant: promptExecution.promptProfile,
+      contextProfile: promptExecution.contextProfile,
       sessionID: request.sessionID,
       fingerprint: request.fingerprint,
       requestMode: request.requestMode,
@@ -339,8 +405,8 @@ export class WorkersAICoachService implements CoachInferenceService {
         operation,
         messages: buildWorkoutSummaryMessages(request),
         schema: workoutSummaryResponseJsonSchema,
-        maxTokens: WORKOUT_SUMMARY_STRUCTURED_MAX_TOKENS,
-        timeoutMs: WORKOUT_SUMMARY_STRUCTURED_TIMEOUT_MS,
+        maxTokens: WORKOUT_SUMMARY_ASYNC_STRUCTURED_MAX_TOKENS,
+        timeoutMs: ASYNC_LONG_TIMEOUTS.structuredTimeoutMs,
         extraDetails: sharedDetails,
       });
       const parsed = normalizeWorkoutSummaryResponse(
@@ -383,7 +449,10 @@ export class WorkersAICoachService implements CoachInferenceService {
         };
       }
 
-      const remainingBudgetMs = remainingWorkoutSummaryBudgetMs(startedAt);
+      const remainingBudgetMs = remainingWorkoutSummaryBudgetMs(
+        startedAt,
+        ASYNC_LONG_TIMEOUTS.totalBudgetMs
+      );
 
       console.warn(
         JSON.stringify({
@@ -397,7 +466,7 @@ export class WorkersAICoachService implements CoachInferenceService {
         })
       );
 
-      if (remainingBudgetMs < WORKOUT_SUMMARY_FALLBACK_MIN_TIMEOUT_MS) {
+      if (remainingBudgetMs < ASYNC_LONG_TIMEOUTS.fallbackMinTimeoutMs) {
         return {
           data: localFallback,
           model: this.modelName,
@@ -411,9 +480,9 @@ export class WorkersAICoachService implements CoachInferenceService {
         const fallbackInvocation = await this.runPlainText({
           operation,
           messages: buildFallbackWorkoutSummaryMessages(request),
-          maxTokens: WORKOUT_SUMMARY_PLAIN_TEXT_MAX_TOKENS,
+          maxTokens: WORKOUT_SUMMARY_ASYNC_PLAIN_TEXT_MAX_TOKENS,
           timeoutMs: Math.min(
-            WORKOUT_SUMMARY_PLAIN_TEXT_TIMEOUT_MS,
+            ASYNC_LONG_TIMEOUTS.fallbackTimeoutMs,
             remainingBudgetMs
           ),
           includeFallbackNotice: false,
@@ -478,26 +547,47 @@ export class WorkersAICoachService implements CoachInferenceService {
   ): Promise<InferenceResult<CoachChatResponse>> {
     const operation = "chat";
     const turnID = options.responseId ?? buildOpaqueResponseID();
-    const messages = buildChatMessages(request);
-    const localFallback = buildNeutralChatResponse(request);
+    const promptExecution = resolvePromptExecution(
+      request,
+      options,
+      options.timeoutProfile === "async_job"
+        ? "rich_async_analytics_v1"
+        : "compact_sync_v2",
+      options.timeoutProfile === "async_job"
+        ? "chat_rich_async_analytics_v1"
+        : "chat_compact_sync_v2"
+    );
+    const messages = buildChatMessages(request, promptExecution);
+    const localFallback = buildNeutralChatResponse(
+      request,
+      promptExecution.derivedAnalytics
+    );
     const startedAt = Date.now();
     const timeouts =
       options.timeoutProfile === "async_job"
-        ? ASYNC_CHAT_TIMEOUTS
+        ? ASYNC_LONG_TIMEOUTS
         : SYNC_CHAT_TIMEOUTS;
     const sharedDetails = {
+      promptVariant: promptExecution.promptProfile,
+      contextProfile: promptExecution.contextProfile,
       turnID,
       recentTurnCount: request.clientRecentTurns.length,
       recentTurnChars: totalTurnCharacters(request.clientRecentTurns),
       questionChars: request.question.trim().length,
     };
+    const structuredMaxTokens = isRichContextProfile(promptExecution.contextProfile)
+      ? CHAT_ASYNC_STRUCTURED_MAX_TOKENS
+      : CHAT_STRUCTURED_MAX_TOKENS;
+    const fallbackMaxTokens = isRichContextProfile(promptExecution.contextProfile)
+      ? CHAT_ASYNC_FALLBACK_MAX_TOKENS
+      : CHAT_FALLBACK_MAX_TOKENS;
 
     try {
       const rawResponse = await this.runStructured({
         operation,
         messages,
         schema: chatResponseJsonSchema,
-        maxTokens: CHAT_STRUCTURED_MAX_TOKENS,
+        maxTokens: structuredMaxTokens,
         timeoutMs: timeouts.structuredTimeoutMs,
         extraDetails: sharedDetails,
       });
@@ -519,7 +609,7 @@ export class WorkersAICoachService implements CoachInferenceService {
           ...applyChatGuardrails(request, {
             ...parsed,
             generationStatus: "model",
-          }),
+          }, promptExecution.derivedAnalytics),
           responseID: turnID,
         },
         responseId: turnID,
@@ -575,6 +665,7 @@ export class WorkersAICoachService implements CoachInferenceService {
           model: this.modelName,
           mode: "degraded_fallback",
           startedAt,
+          derivedAnalytics: promptExecution.derivedAnalytics,
           errors: [error],
         });
       }
@@ -582,8 +673,8 @@ export class WorkersAICoachService implements CoachInferenceService {
       try {
         const fallbackResponse = await this.runPlainText({
           operation,
-          messages: buildFallbackChatMessages(request),
-          maxTokens: CHAT_FALLBACK_MAX_TOKENS,
+          messages: buildFallbackChatMessages(request, promptExecution),
+          maxTokens: fallbackMaxTokens,
           timeoutMs: Math.min(timeouts.fallbackTimeoutMs, remainingBudgetMs),
           extraDetails: {
             ...sharedDetails,
@@ -602,7 +693,7 @@ export class WorkersAICoachService implements CoachInferenceService {
               answerMarkdown,
               followUps: [],
               generationStatus: "model",
-            }),
+            }, promptExecution.derivedAnalytics),
             responseID: turnID,
           },
           responseId: turnID,
@@ -640,6 +731,7 @@ export class WorkersAICoachService implements CoachInferenceService {
           model: this.modelName,
           mode: "degraded_fallback",
           startedAt,
+          derivedAnalytics: promptExecution.derivedAnalytics,
           errors: [fallbackError, error],
         });
       }
@@ -778,6 +870,49 @@ function shouldAttemptChatPlainTextFallback(
   error: CoachInferenceServiceError
 ): boolean {
   return error.code.startsWith("upstream_");
+}
+
+function isRichContextProfile(contextProfile: CoachContextProfile): boolean {
+  return (
+    contextProfile === "rich_async_v1" ||
+    contextProfile === "rich_async_analytics_v1"
+  );
+}
+
+function resolvePromptExecution(
+  request: CoachMetadataCarrier & {
+    snapshot?: CoachProfileInsightsRequest["snapshot"] | CoachChatRequest["snapshot"];
+  },
+  options:
+    | GenerateChatOptions
+    | GenerateProfileInsightsOptions
+    | Record<string, never>,
+  defaultContextProfile: CoachContextProfile,
+  defaultPromptProfile: string
+): ResolvedPromptExecution {
+  const metadata = request.metadata;
+  const contextProfile =
+    ("contextProfile" in options && options.contextProfile) ||
+    metadata?.contextProfile ||
+    defaultContextProfile;
+  const promptProfile =
+    ("promptProfile" in options && options.promptProfile) ||
+    metadata?.promptProfile ||
+    defaultPromptProfile;
+  const derivedAnalytics =
+    ("derivedAnalytics" in options && options.derivedAnalytics) ||
+    metadata?.derivedAnalytics ||
+    (request.snapshot
+      ? buildDerivedCoachAnalyticsFromCompactSnapshot(
+          request.snapshot as NonNullable<typeof request.snapshot>
+        )
+      : undefined);
+
+  return {
+    contextProfile,
+    promptProfile,
+    derivedAnalytics,
+  };
 }
 
 function parseStructuredOutput<T>(
@@ -936,15 +1071,18 @@ function parsePlainWorkoutSummary(
 function applyProfileInsightsGuardrails(
   request: CoachProfileInsightsRequest,
   response: CoachProfileInsightsResponse,
-  fallback: CoachProfileInsightsResponse
+  fallback: CoachProfileInsightsResponse,
+  derivedAnalytics?: CoachDerivedAnalytics
 ): CoachProfileInsightsResponse {
   const constraints = extractConstraintsFromSnapshot(request.snapshot);
-  const summary = shouldBlockFrequencyStructureText(response.summary, constraints)
+  const summary =
+    shouldBlockFrequencyStructureText(response.summary, constraints) ||
+    shouldBlockUnsupportedClaimText(response.summary, derivedAnalytics)
     ? fallback.summary
     : response.summary;
-  const recommendations = filterFrequencyStructureText(
-    response.recommendations,
-    constraints
+  const recommendations = filterUnsupportedClaimText(
+    filterFrequencyStructureText(response.recommendations, constraints),
+    derivedAnalytics
   );
   return {
     summary,
@@ -957,14 +1095,16 @@ function applyProfileInsightsGuardrails(
 
 function applyChatGuardrails(
   request: CoachChatRequest,
-  response: Omit<CoachChatResponse, "responseID">
+  response: Omit<CoachChatResponse, "responseID">,
+  derivedAnalytics?: CoachDerivedAnalytics
 ): Omit<CoachChatResponse, "responseID"> {
   const constraints = extractConstraintsFromSnapshot(request.snapshot);
   return {
     answerMarkdown: filterChatAnswerMarkdown(
       response.answerMarkdown,
       constraints,
-      request.locale
+      request.locale,
+      derivedAnalytics
     ),
     followUps: response.followUps,
     generationStatus: response.generationStatus,
@@ -972,7 +1112,8 @@ function applyChatGuardrails(
 }
 
 function buildNeutralProfileInsights(
-  request: CoachProfileInsightsRequest
+  request: CoachProfileInsightsRequest,
+  derivedAnalytics?: CoachDerivedAnalytics
 ): CoachProfileInsightsResponse {
   const snapshot = request.snapshot;
   if (!snapshot) {
@@ -994,7 +1135,8 @@ function buildNeutralProfileInsights(
   if (
     constraints.rollingSplitExecution ||
     constraints.preserveWeeklyFrequency ||
-    constraints.preserveProgramWorkoutCount
+    constraints.preserveProgramWorkoutCount ||
+    derivedAnalytics?.splitExecution.mode === "rolling_rotation"
   ) {
     recommendations.push(
       localizedCoachText(locale, "fallbackCommentGuardrail")
@@ -1105,7 +1247,8 @@ function buildNeutralWorkoutSummary(
 }
 
 function buildNeutralChatResponse(
-  request: CoachChatRequest
+  request: CoachChatRequest,
+  derivedAnalytics?: CoachDerivedAnalytics
 ): Omit<CoachChatResponse, "responseID"> {
   const snapshot = request.snapshot;
   const locale = request.locale;
@@ -1129,7 +1272,8 @@ function buildNeutralChatResponse(
   if (
     constraints.rollingSplitExecution ||
     constraints.preserveWeeklyFrequency ||
-    constraints.preserveProgramWorkoutCount
+    constraints.preserveProgramWorkoutCount ||
+    derivedAnalytics?.splitExecution.mode === "rolling_rotation"
   ) {
     bullets.push(localizedCoachText(locale, "fallbackCommentGuardrail"));
   }
@@ -1195,11 +1339,12 @@ function filterFrequencyStructureText(
 function filterChatAnswerMarkdown(
   answerMarkdown: string,
   constraints: ProgramCommentConstraints,
-  locale: string
+  locale: string,
+  derivedAnalytics?: CoachDerivedAnalytics
 ): string {
   const sanitizedAnswer = sanitizeChatAnswerMarkdown(answerMarkdown);
 
-  if (!hasFrequencyStructureGuardrails(constraints)) {
+  if (!hasFrequencyStructureGuardrails(constraints) && !derivedAnalytics) {
     return sanitizedAnswer;
   }
 
@@ -1207,7 +1352,8 @@ function filterChatAnswerMarkdown(
     .split(/\n+/)
     .map((line) => line.trim())
     .filter(Boolean)
-    .filter((line) => !shouldBlockFrequencyStructureText(line, constraints));
+    .filter((line) => !shouldBlockFrequencyStructureText(line, constraints))
+    .filter((line) => !shouldBlockUnsupportedClaimText(line, derivedAnalytics));
 
   if (lines.length > 0) {
     return lines.join("\n\n");
@@ -1324,6 +1470,71 @@ function shouldBlockFrequencyStructureText(
   if (
     blockFrequency &&
     frequencyPatterns.some((pattern) => pattern.test(normalized))
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+function filterUnsupportedClaimText(
+  values: string[],
+  derivedAnalytics?: CoachDerivedAnalytics
+): string[] {
+  return dedupeText(
+    values.filter((value) => !shouldBlockUnsupportedClaimText(value, derivedAnalytics))
+  ).slice(0, 8);
+}
+
+function shouldBlockUnsupportedClaimText(
+  value: string,
+  derivedAnalytics?: CoachDerivedAnalytics
+): boolean {
+  if (!derivedAnalytics) {
+    return false;
+  }
+
+  const normalized = value.trim();
+  if (!normalized) {
+    return false;
+  }
+
+  const mismatchPatterns = [
+    /\bmismatch\b/i,
+    /\bprogram\b.*\bdoes not match\b/i,
+    /\bsaved\s+program\b.*\bweekly\s+target\b/i,
+    /несоответств/i,
+  ];
+  const muscleFrequencyPatterns = [
+    /\b(?:chest|back|legs|shoulders|arms|core)\b.*\b(?:once|twice|\d+\s*(?:x|times?))\b.*\b(?:per|a)\s+week\b/i,
+    /\b(?:train|hit)\b.*\b(?:chest|back|legs|shoulders|arms|core)\b.*\b(?:per|a)\s+week\b/i,
+    /\b(?:груд|спин|ног|плеч|рук|кор)\w*\b.*(?:раз|раза)\s+в\s+недел/i,
+  ];
+  const laggingPatterns = [
+    /\blagging\b/i,
+    /\bundertrained\b/i,
+    /\bimbalanc(?:e|ed)\b/i,
+    /отстающ/i,
+    /дисбаланс/i,
+  ];
+
+  if (
+    !derivedAnalytics.splitExecution.shouldTreatProgramCountAsMismatch &&
+    mismatchPatterns.some((pattern) => pattern.test(normalized))
+  ) {
+    return true;
+  }
+
+  if (
+    !derivedAnalytics.supportedClaims.muscleExposure &&
+    muscleFrequencyPatterns.some((pattern) => pattern.test(normalized))
+  ) {
+    return true;
+  }
+
+  if (
+    !derivedAnalytics.supportedClaims.laggingCandidates &&
+    laggingPatterns.some((pattern) => pattern.test(normalized))
   ) {
     return true;
   }
@@ -1556,12 +1767,18 @@ function totalTurnCharacters(turns: CoachChatRequest["clientRecentTurns"]): numb
   return turns.reduce((total, turn) => total + turn.content.length, 0);
 }
 
-function remainingProfileInsightsBudgetMs(startedAt: number): number {
-  return Math.max(PROFILE_INSIGHTS_TOTAL_BUDGET_MS - (Date.now() - startedAt), 0);
+function remainingProfileInsightsBudgetMs(
+  startedAt: number,
+  totalBudgetMs: number
+): number {
+  return Math.max(totalBudgetMs - (Date.now() - startedAt), 0);
 }
 
-function remainingWorkoutSummaryBudgetMs(startedAt: number): number {
-  return Math.max(WORKOUT_SUMMARY_TOTAL_BUDGET_MS - (Date.now() - startedAt), 0);
+function remainingWorkoutSummaryBudgetMs(
+  startedAt: number,
+  totalBudgetMs: number
+): number {
+  return Math.max(totalBudgetMs - (Date.now() - startedAt), 0);
 }
 
 function remainingChatBudgetMs(startedAt: number, totalBudgetMs: number): number {
@@ -1575,6 +1792,7 @@ function buildDegradedChatResult(input: {
   model: string;
   mode: string;
   startedAt: number;
+  derivedAnalytics?: CoachDerivedAnalytics;
   errors: CoachInferenceServiceError[];
 }): InferenceResult<CoachChatResponse> {
   const promptBytes = input.errors
@@ -1583,7 +1801,11 @@ function buildDegradedChatResult(input: {
 
   return {
     data: {
-      ...applyChatGuardrails(input.request, input.fallback),
+      ...applyChatGuardrails(
+        input.request,
+        input.fallback,
+        input.derivedAnalytics
+      ),
       responseID: input.responseId,
     },
     responseId: input.responseId,

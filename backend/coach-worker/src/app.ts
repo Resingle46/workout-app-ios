@@ -1,4 +1,4 @@
-import { jsonByteLength } from "./context";
+import { jsonByteLength, type CoachExecutionMetadata } from "./context";
 import {
   backupDownloadResponseSchema,
   backupReconcileRequestSchema,
@@ -18,6 +18,7 @@ import {
   workoutSummaryJobCreateRequestSchema,
   workoutSummaryJobCreateResponseSchema,
   workoutSummaryJobStatusResponseSchema,
+  type CoachConversationTurn,
   type CoachProfileInsightsResponse,
 } from "./schemas";
 import {
@@ -35,6 +36,7 @@ import {
   MissingRemoteBackupError,
   StaleRemoteStateError,
   normalizeChatTurns,
+  storageKeyFromMetadata,
   type CoachD1Database,
   type CoachKVNamespace,
   type CoachR2Bucket,
@@ -49,6 +51,8 @@ interface AppDependencies {
 }
 
 const CHAT_JOB_INITIAL_POLL_AFTER_MS = 1_500;
+const ASYNC_CHAT_JOB_TTL_MS = 20 * 60 * 1_000;
+const ASYNC_WORKOUT_SUMMARY_JOB_TTL_MS = 10 * 60 * 1_000;
 
 export function createApp(
   overrides: Partial<AppDependencies> = {}
@@ -214,6 +218,20 @@ export function createApp(
           const contextResolveStartedAt = deps.now();
           const context = await stateRepository.resolveCoachContext(body);
           const contextResolveMs = deps.now() - contextResolveStartedAt;
+          const executionMetadata = buildExecutionMetadata({
+            contextProfile: "compact_sync_v2",
+            promptProfile: "profile_compact_context_v2",
+            contextVersion: context.contextVersion,
+            analyticsVersion: context.analyticsVersion,
+            memoryProfile: "compact_v1",
+            derivedAnalytics: context.derivedAnalytics,
+          });
+          const storageKey = storageKeyFromMetadata(
+            context.contextHash,
+            executionMetadata,
+            resolvePromptVersion(env),
+            resolveModel(env)
+          );
           const snapshotBytes = jsonByteLength(context.snapshot);
           const programCommentChars =
             context.snapshot.coachAnalysisSettings.programComment.trim().length;
@@ -226,7 +244,7 @@ export function createApp(
           routeDiagnostics = {
             installID: body.installID,
             contextSource: context.source,
-            profileContextVariant: "compact_profile_v1",
+            profileContextVariant: executionMetadata.promptProfile,
             forceRefresh: body.forceRefresh,
             snapshotBytes,
             programCommentChars,
@@ -238,7 +256,7 @@ export function createApp(
           const cachedResponse = !body.forceRefresh && context.cacheAllowed
             ? await stateRepository.getInsightsCache(
                 body.installID,
-                context.contextHash
+                storageKey
               )
             : null;
           const cacheLookupMs = deps.now() - cacheLookupStartedAt;
@@ -255,7 +273,7 @@ export function createApp(
               durationMs: deps.now() - startedAt,
               installID: body.installID,
               contextSource: context.source,
-              profileContextVariant: "compact_profile_v1",
+              profileContextVariant: executionMetadata.promptProfile,
               forceRefresh: body.forceRefresh,
               insightsCacheHit: true,
               cacheLookupMs,
@@ -278,6 +296,10 @@ export function createApp(
             snapshot: context.snapshot,
             snapshotUpdatedAt:
               context.backupHead?.uploadedAt ?? body.snapshotUpdatedAt,
+          }, {
+            contextProfile: executionMetadata.contextProfile,
+            promptProfile: executionMetadata.promptProfile,
+            derivedAnalytics: executionMetadata.derivedAnalytics,
           });
           const modelDurationMs = deps.now() - inferenceStartedAt;
           const cacheStoreStartedAt = deps.now();
@@ -293,7 +315,7 @@ export function createApp(
           ) {
             await stateRepository.storeInsightsCache(
               body.installID,
-              context.contextHash,
+              storageKey,
               result.data
             );
           }
@@ -333,13 +355,27 @@ export function createApp(
         if (pathname === "/v2/coach/chat-jobs" && request.method === "POST") {
           const body = chatJobCreateRequestSchema.parse(await readJSON(request));
           const context = await stateRepository.resolveCoachContext(body);
+          const executionMetadata = buildExecutionMetadata({
+            contextProfile: "rich_async_analytics_v1",
+            promptProfile: "chat_rich_async_analytics_v1",
+            contextVersion: context.contextVersion,
+            analyticsVersion: context.analyticsVersion,
+            memoryProfile: "rich_async_v1",
+            jobDeadlineAt: new Date(deps.now() + ASYNC_CHAT_JOB_TTL_MS).toISOString(),
+            derivedAnalytics: context.derivedAnalytics,
+          });
+          const storageKey = storageKeyFromMetadata(
+            context.contextHash,
+            executionMetadata,
+            resolvePromptVersion(env),
+            resolveModel(env)
+          );
           const storedMemory = context.cacheAllowed
-            ? await stateRepository.getChatMemory(body.installID, context.contextHash)
+            ? await stateRepository.getChatMemory(body.installID, storageKey)
             : null;
-          const recentTurns = normalizeChatTurns(
-            storedMemory?.recentTurns?.length
-              ? storedMemory.recentTurns
-              : body.clientRecentTurns
+          const recentTurns = mergeRecentTurns(
+            storedMemory?.recentTurns ?? [],
+            body.clientRecentTurns
           );
           const chatMemoryHit = Boolean(storedMemory?.recentTurns?.length);
           const snapshotBytes = jsonByteLength(context.snapshot);
@@ -374,6 +410,7 @@ export function createApp(
                 context.backupHead?.uploadedAt ?? body.snapshotUpdatedAt,
               clientRecentTurns: recentTurns,
               responseID,
+              metadata: executionMetadata,
             },
             contextHash: context.contextHash,
             contextSource: context.source,
@@ -443,6 +480,7 @@ export function createApp(
             status: job.status,
             createdAt: job.createdAt,
             pollAfterMs: CHAT_JOB_INITIAL_POLL_AFTER_MS,
+            metadata: publicJobMetadata(job.preparedRequest.metadata),
           });
 
           console.log(
@@ -485,13 +523,26 @@ export function createApp(
         if (pathname === "/v1/coach/chat" && request.method === "POST") {
           const body = chatRequestSchema.parse(await readJSON(request));
           const context = await stateRepository.resolveCoachContext(body);
+          const executionMetadata = buildExecutionMetadata({
+            contextProfile: "compact_sync_v2",
+            promptProfile: "chat_compact_sync_v2",
+            contextVersion: context.contextVersion,
+            analyticsVersion: context.analyticsVersion,
+            memoryProfile: "compact_v1",
+            derivedAnalytics: context.derivedAnalytics,
+          });
+          const storageKey = storageKeyFromMetadata(
+            context.contextHash,
+            executionMetadata,
+            resolvePromptVersion(env),
+            resolveModel(env)
+          );
           const storedMemory = context.cacheAllowed
-            ? await stateRepository.getChatMemory(body.installID, context.contextHash)
+            ? await stateRepository.getChatMemory(body.installID, storageKey)
             : null;
-          const recentTurns = normalizeChatTurns(
-            storedMemory?.recentTurns?.length
-              ? storedMemory.recentTurns
-              : body.clientRecentTurns
+          const recentTurns = mergeRecentTurns(
+            storedMemory?.recentTurns ?? [],
+            body.clientRecentTurns
           );
           const chatMemoryHit = Boolean(storedMemory?.recentTurns?.length);
           const snapshotBytes = jsonByteLength(context.snapshot);
@@ -516,13 +567,17 @@ export function createApp(
             snapshotUpdatedAt:
               context.backupHead?.uploadedAt ?? body.snapshotUpdatedAt,
             clientRecentTurns: recentTurns,
+          }, {
+            contextProfile: executionMetadata.contextProfile,
+            promptProfile: executionMetadata.promptProfile,
+            derivedAnalytics: executionMetadata.derivedAnalytics,
           });
           const modelDurationMs = deps.now() - inferenceStartedAt;
 
           if (context.cacheAllowed) {
             await stateRepository.appendChatMemory(
               body.installID,
-              context.contextHash,
+              storageKey,
               recentTurns,
               body.question,
               result.data.answerMarkdown
@@ -556,6 +611,16 @@ export function createApp(
           const body = workoutSummaryJobCreateRequestSchema.parse(
             await readJSON(request)
           );
+          const executionMetadata = buildExecutionMetadata({
+            contextProfile: "rich_async_v1",
+            promptProfile: "workout_summary_rich_async_v1",
+            contextVersion: "2026-03-27.context.v1",
+            analyticsVersion: "2026-03-27.analytics.v1",
+            memoryProfile: "rich_async_v1",
+            jobDeadlineAt: new Date(
+              deps.now() + ASYNC_WORKOUT_SUMMARY_JOB_TTL_MS
+            ).toISOString(),
+          });
           const currentExerciseCount = body.currentWorkout.exerciseCount;
           const historyExerciseCount = body.recentExerciseHistory.length;
           const historySessionCount = totalWorkoutSummaryHistorySessionCount(
@@ -583,7 +648,10 @@ export function createApp(
             sessionID: body.sessionID,
             fingerprint: body.fingerprint,
             createdAt,
-            preparedRequest: body,
+            preparedRequest: {
+              ...body,
+              metadata: executionMetadata,
+            },
             requestMode: body.requestMode,
             trigger: body.trigger,
             inputMode: body.inputMode,
@@ -639,6 +707,7 @@ export function createApp(
               ? 0
               : CHAT_JOB_INITIAL_POLL_AFTER_MS,
             reusedExistingJob,
+            metadata: publicJobMetadata(job.preparedRequest.metadata),
           });
 
           console.log(
@@ -700,6 +769,7 @@ export function createApp(
             completedAt: job.completedAt,
             result: job.result,
             error: job.error,
+            metadata: publicJobMetadata(job.preparedRequest.metadata),
           });
 
           logRequest({
@@ -749,6 +819,7 @@ export function createApp(
             completedAt: job.completedAt,
             result: job.result,
             error: job.error,
+            metadata: publicJobMetadata(job.preparedRequest.metadata),
           });
 
           logRequest({
@@ -825,8 +896,8 @@ function buildHealthPayload(env: Env): {
   const missing = missingSecrets(env);
   return {
     status: missing.length === 0 ? "ok" : "error",
-    model: env.AI_MODEL?.trim() || DEFAULT_AI_MODEL,
-    promptVersion: env.COACH_PROMPT_VERSION?.trim() || "2026-03-25.v1",
+    model: resolveModel(env),
+    promptVersion: resolvePromptVersion(env),
     ...(missing.length > 0 ? { missing } : {}),
   };
 }
@@ -1439,6 +1510,104 @@ function totalWorkoutSummaryHistorySessionCount(
   history: Array<{ sessions: unknown[] }>
 ): number {
   return history.reduce((total, exerciseHistory) => total + exerciseHistory.sessions.length, 0);
+}
+
+function resolvePromptVersion(env: Env): string {
+  return env.COACH_PROMPT_VERSION?.trim() || "2026-03-25.v1";
+}
+
+function resolveModel(env: Env): string {
+  return env.AI_MODEL?.trim() || DEFAULT_AI_MODEL;
+}
+
+function mergeRecentTurns(
+  storedTurns: CoachConversationTurn[],
+  clientTurns: CoachConversationTurn[]
+): CoachConversationTurn[] {
+  if (storedTurns.length === 0) {
+    return normalizeChatTurns(clientTurns);
+  }
+  if (clientTurns.length === 0) {
+    return normalizeChatTurns(storedTurns);
+  }
+
+  const overlap = sharedTurnSuffixPrefixLength(storedTurns, clientTurns);
+  return normalizeChatTurns([
+    ...storedTurns,
+    ...clientTurns.slice(overlap),
+  ]);
+}
+
+function sharedTurnSuffixPrefixLength(
+  left: CoachConversationTurn[],
+  right: CoachConversationTurn[]
+): number {
+  const maxOverlap = Math.min(left.length, right.length);
+  for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
+    let matches = true;
+    for (let index = 0; index < overlap; index += 1) {
+      const leftTurn = left[left.length - overlap + index];
+      const rightTurn = right[index];
+      if (
+        leftTurn?.role !== rightTurn?.role ||
+        leftTurn?.content.trim() !== rightTurn?.content.trim()
+      ) {
+        matches = false;
+        break;
+      }
+    }
+    if (matches) {
+      return overlap;
+    }
+  }
+
+  return 0;
+}
+
+function buildExecutionMetadata(input: {
+  contextProfile: CoachExecutionMetadata["contextProfile"];
+  promptProfile: string;
+  contextVersion: string;
+  analyticsVersion: string;
+  memoryProfile: CoachExecutionMetadata["memoryProfile"];
+  jobDeadlineAt?: string;
+  derivedAnalytics?: CoachExecutionMetadata["derivedAnalytics"];
+}): CoachExecutionMetadata {
+  return {
+    contextProfile: input.contextProfile,
+    promptProfile: input.promptProfile,
+    contextVersion: input.contextVersion,
+    analyticsVersion: input.analyticsVersion,
+    memoryProfile: input.memoryProfile,
+    jobDeadlineAt: input.jobDeadlineAt,
+    derivedAnalytics: input.derivedAnalytics,
+  };
+}
+
+function publicJobMetadata(
+  metadata: Partial<CoachExecutionMetadata> | undefined
+):
+  | {
+      jobDeadlineAt?: string;
+      contextProfile?: string;
+      promptProfile?: string;
+      contextVersion?: string;
+      analyticsVersion?: string;
+      memoryProfile?: string;
+    }
+  | undefined {
+  if (!metadata) {
+    return undefined;
+  }
+
+  return {
+    jobDeadlineAt: metadata.jobDeadlineAt,
+    contextProfile: metadata.contextProfile,
+    promptProfile: metadata.promptProfile,
+    contextVersion: metadata.contextVersion,
+    analyticsVersion: metadata.analyticsVersion,
+    memoryProfile: metadata.memoryProfile,
+  };
 }
 
 function isTerminalJobStatus(status: string): boolean {

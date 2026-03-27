@@ -14,6 +14,15 @@ import {
 } from "./state";
 import type { CoachChatJobError } from "./schemas";
 
+const DEFAULT_WORKFLOW_STEP_CONFIG = {
+  timeout: "10 minutes",
+  retries: {
+    limit: 5,
+    delay: "10 seconds",
+    backoff: "exponential" as const,
+  },
+} as const;
+
 export interface CoachChatWorkflowPayload {
   jobID: string;
 }
@@ -55,105 +64,183 @@ export async function executeChatJob(
     return initialJob;
   }
 
+  if (isJobExpired(initialJob, now())) {
+    return expireChatJob(stateRepository, initialJob, now);
+  }
+
   const startedAt = new Date(now()).toISOString();
   const claimResult = await runWorkflowStep(
     step,
     "mark_chat_job_running",
+    DEFAULT_WORKFLOW_STEP_CONFIG,
     async () => {
       const updated = await stateRepository.markChatJobRunning(jobID, startedAt);
-      if (!updated.job) {
-        throw new Error(`Coach chat job ${jobID} was not found.`);
-      }
-      return updated;
+      return {
+        claimed: updated.claimed,
+        found: Boolean(updated.job),
+        status: updated.job?.status ?? null,
+      };
     }
   );
 
-  if (!claimResult.job) {
+  if (!claimResult.found) {
     return null;
   }
 
-  if (!claimResult.claimed) {
-    if (claimResult.job.status === "running") {
-      logChatJobEvent(
-        "coach_chat_job_duplicate_execution_skipped",
-        claimResult.job
-      );
-    }
-    return claimResult.job;
+  const claimedJob = await stateRepository.getChatJobByID(jobID);
+  if (!claimedJob) {
+    throw new Error(`Coach chat job ${jobID} was not found.`);
   }
 
-  const runningJob = claimResult.job;
+  if (!claimResult.claimed) {
+    if (claimedJob.status === "running") {
+      logChatJobEvent(
+        "coach_chat_job_duplicate_execution_skipped",
+        claimedJob
+      );
+    }
+    return claimedJob;
+  }
+
+  const runningJob = claimedJob;
+
+  if (isJobExpired(runningJob, now())) {
+    return expireChatJob(stateRepository, runningJob, now);
+  }
 
   logChatJobEvent("coach_chat_job_started", runningJob);
   logChatJobEvent("coach_chat_job_running", runningJob);
 
   try {
-    const inferenceResult = await runWorkflowStep(
+    await runWorkflowStep(
       step,
-      "generate_chat_response",
-      async () =>
-        inferenceService.generateChat(runningJob.preparedRequest, {
-          responseId: runningJob.preparedRequest.responseID,
-          timeoutProfile: "async_job",
-        })
-    );
+      "generate_and_persist_chat_response",
+      DEFAULT_WORKFLOW_STEP_CONFIG,
+      async () => {
+        const latestJob = await stateRepository.getChatJobByID(jobID);
+        if (!latestJob) {
+          throw new Error(`Coach chat job ${jobID} was not found.`);
+        }
+        if (isTerminalJobStatus(latestJob.status)) {
+          return { terminalStatus: latestJob.status };
+        }
+        if (isJobExpired(latestJob, now())) {
+          await expireChatJob(stateRepository, latestJob, now);
+          return { terminalStatus: "failed" as const };
+        }
 
-    const completedAt = new Date(now()).toISOString();
-    const totalJobDurationMs = Math.max(
-      now() - Date.parse(runningJob.createdAt),
-      0
-    );
-    const inferenceMode =
-      inferenceResult.mode === "plain_text_fallback"
-        ? "plain_text_fallback"
-        : inferenceResult.mode === "degraded_fallback"
-          ? "degraded_fallback"
-          : "structured";
+        try {
+          const inferenceResult = await inferenceService.generateChat(
+            latestJob.preparedRequest,
+            {
+              responseId: latestJob.preparedRequest.responseID,
+              timeoutProfile: "async_job",
+            }
+          );
+          const completedAt = new Date(now()).toISOString();
+          const totalJobDurationMs = Math.max(
+            now() - Date.parse(latestJob.createdAt),
+            0
+          );
+          const inferenceMode =
+            inferenceResult.mode === "plain_text_fallback"
+              ? "plain_text_fallback"
+              : inferenceResult.mode === "degraded_fallback"
+                ? "degraded_fallback"
+                : "structured";
 
-    const completedJob = await runWorkflowStep(
-      step,
-      "persist_chat_job_completion",
-      async () =>
-        stateRepository.completeChatJob(jobID, {
-          completedAt,
-          result: {
-            ...inferenceResult.data,
-            responseID: runningJob.preparedRequest.responseID,
-            inferenceMode,
+          await stateRepository.completeChatJob(jobID, {
+            completedAt,
+            result: {
+              ...inferenceResult.data,
+              responseID: latestJob.preparedRequest.responseID,
+              inferenceMode,
+              modelDurationMs: inferenceResult.modelDurationMs,
+              totalJobDurationMs,
+            },
+            promptBytes: inferenceResult.promptBytes,
+            fallbackPromptBytes: inferenceResult.fallbackPromptBytes,
             modelDurationMs: inferenceResult.modelDurationMs,
+            fallbackModelDurationMs: inferenceResult.fallbackModelDurationMs,
             totalJobDurationMs,
-          },
-          promptBytes: inferenceResult.promptBytes,
-          fallbackPromptBytes: inferenceResult.fallbackPromptBytes,
-          modelDurationMs: inferenceResult.modelDurationMs,
-          fallbackModelDurationMs: inferenceResult.fallbackModelDurationMs,
-          totalJobDurationMs,
-          inferenceMode,
-          generationStatus: inferenceResult.data.generationStatus,
-        })
+            inferenceMode,
+            generationStatus: inferenceResult.data.generationStatus,
+          });
+
+          return { terminalStatus: "completed" as const };
+        } catch (error) {
+          const failure = normalizeChatJobExecutionError(error);
+          if (failure.retryable) {
+            throw error;
+          }
+
+          const failedAt = new Date(now()).toISOString();
+          const totalJobDurationMs = Math.max(
+            now() - Date.parse(latestJob.createdAt),
+            0
+          );
+          await persistFailedStateSafely(
+            stateRepository,
+            jobID,
+            {
+              completedAt: failedAt,
+              error: failure,
+              promptBytes: extractNumericErrorDetail(error, "promptBytes"),
+              fallbackPromptBytes: extractNumericErrorDetail(
+                error,
+                "fallbackPromptBytes"
+              ),
+              modelDurationMs: extractNumericErrorDetail(error, "modelDurationMs"),
+              fallbackModelDurationMs: extractNumericErrorDetail(
+                error,
+                "fallbackModelDurationMs"
+              ),
+              totalJobDurationMs,
+              inferenceMode: normalizeInferenceMode(error),
+            },
+            latestJob
+          );
+
+          return { terminalStatus: "failed" as const, errorCode: failure.code };
+        }
+      }
     );
 
-    try {
-      await runWorkflowStep(step, "commit_chat_memory", async () => {
+    const finalJob = (await stateRepository.getChatJobByID(jobID)) ?? runningJob;
+
+    if (finalJob.status === "completed") {
+      try {
+        await runWorkflowStep(
+          step,
+          "commit_chat_memory",
+          DEFAULT_WORKFLOW_STEP_CONFIG,
+          async () => {
         await stateRepository.commitChatJobMemory(jobID);
         return { committed: true };
-      });
-    } catch (error) {
-      console.error(
-        JSON.stringify({
-          event: "coach_chat_job_memory_commit_failed",
-          jobID: completedJob.jobID,
-          installID: completedJob.installID,
-          clientRequestID: completedJob.clientRequestID,
-          status: completedJob.status,
-          errorMessage:
-            error instanceof Error ? error.message.slice(0, 300) : "Unknown error",
-        })
-      );
+          }
+        );
+      } catch (error) {
+        console.error(
+          JSON.stringify({
+            event: "coach_chat_job_memory_commit_failed",
+            jobID: finalJob.jobID,
+            installID: finalJob.installID,
+            clientRequestID: finalJob.clientRequestID,
+            status: finalJob.status,
+            errorMessage:
+              error instanceof Error ? error.message.slice(0, 300) : "Unknown error",
+          })
+        );
+      }
     }
 
-    const finalJob = (await stateRepository.getChatJobByID(jobID)) ?? completedJob;
-    logChatJobEvent("coach_chat_job_completed", finalJob);
+    if (finalJob.status === "completed") {
+      logChatJobEvent("coach_chat_job_completed", finalJob);
+    } else if (finalJob.status === "failed") {
+      logChatJobEvent("coach_chat_job_failed", finalJob, {
+        errorCode: finalJob.error?.code,
+      });
+    }
     return finalJob;
   } catch (error) {
     const failedAt = new Date(now()).toISOString();
@@ -271,10 +358,28 @@ function createDefaultStateRepository(env: Env): CoachStateStore {
 async function runWorkflowStep<T>(
   step: WorkflowStep | undefined,
   name: string,
+  config: {
+    timeout: string;
+    retries: {
+      limit: number;
+      delay: string;
+      backoff: "constant" | "linear" | "exponential";
+    };
+  } | undefined,
   callback: () => Promise<T>
 ): Promise<T> {
   if (!step) {
     return callback();
+  }
+
+  if (config) {
+    return (
+      step.do as unknown as (
+        stepName: string,
+        stepConfig: typeof config,
+        stepCallback: () => Promise<T>
+      ) => Promise<T>
+    )(name, config, callback);
   }
 
   return step.do(name, callback);
@@ -404,4 +509,40 @@ function normalizeInferenceMode(error: unknown): CoachChatJobRecord["inferenceMo
 
 function isTerminalJobStatus(status: CoachChatJobRecord["status"]): boolean {
   return status === "completed" || status === "failed" || status === "canceled";
+}
+
+function isJobExpired(
+  job: CoachChatJobRecord,
+  nowMs: number
+): boolean {
+  const deadlineAt = job.preparedRequest.metadata?.jobDeadlineAt;
+  if (!deadlineAt) {
+    return false;
+  }
+
+  const deadlineMs = Date.parse(deadlineAt);
+  return Number.isFinite(deadlineMs) && nowMs >= deadlineMs;
+}
+
+async function expireChatJob(
+  stateRepository: CoachStateStore,
+  job: CoachChatJobRecord,
+  now: () => number
+): Promise<CoachChatJobRecord> {
+  const failedAt = new Date(now()).toISOString();
+  const totalJobDurationMs = Math.max(now() - Date.parse(job.createdAt), 0);
+  return persistFailedStateSafely(
+    stateRepository,
+    job.jobID,
+    {
+      completedAt: failedAt,
+      error: {
+        code: "job_ttl_expired",
+        message: "Chat job exceeded its execution deadline.",
+        retryable: false,
+      },
+      totalJobDurationMs,
+    },
+    job
+  );
 }

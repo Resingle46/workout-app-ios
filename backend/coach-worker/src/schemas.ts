@@ -167,6 +167,62 @@ const relativeStrengthContextSchema = z
   })
   .strict();
 
+const splitExecutionInterpretationSchema = z
+  .object({
+    mode: z.enum([
+      "rolling_rotation",
+      "calendar_matched",
+      "program_count_mismatch",
+      "unknown",
+    ]),
+    shouldTreatProgramCountAsMismatch: z.boolean(),
+    programWorkoutCount: z.int().min(0).optional(),
+    weeklyTarget: z.int().min(0),
+    statedWeeklyFrequency: z.int().min(0).optional(),
+    explanation: nonEmptyStringSchema,
+  })
+  .strict();
+
+const muscleExposureContextSchema = z
+  .object({
+    muscleGroup: nonEmptyStringSchema,
+    recentCompletedSets: z.int().min(0),
+    recentSessionsHit: z.int().min(0),
+    plannedExerciseCount: z.int().min(0),
+    lastHitDaysAgo: z.number().finite().min(0).optional(),
+  })
+  .strict();
+
+const derivedAnalyticsSchema = z
+  .object({
+    splitExecution: splitExecutionInterpretationSchema,
+    adherenceSummary: z
+      .object({
+        weeklyTarget: z.int().min(0),
+        observedAverageWorkoutsPerWeek: z.number().finite().min(0).optional(),
+        consistencyGap: z.number().finite().optional(),
+      })
+      .strict(),
+    progressionSummary: z
+      .object({
+        recentPersonalRecordCount: z.int().min(0),
+        topRecentPersonalRecordExercise: nonEmptyStringSchema.optional(),
+        lastWorkoutDate: isoDateTimeSchema.optional(),
+        completedWorkoutsLast30Days: z.int().min(0),
+      })
+      .strict(),
+    muscleExposure: z.array(muscleExposureContextSchema),
+    supportedClaims: z
+      .object({
+        splitExecution: z.boolean(),
+        programFrequency: z.boolean(),
+        muscleExposure: z.boolean(),
+        laggingCandidates: z.boolean(),
+      })
+      .strict(),
+  })
+  .strict();
+
 const recentSessionExerciseContextSchema = z
   .object({
     templateExerciseID: uuidSchema,
@@ -203,6 +259,7 @@ const analyticsContextSchema = z
     consistency: consistencyContextSchema,
     recentPersonalRecords: z.array(personalRecordContextSchema),
     relativeStrength: z.array(relativeStrengthContextSchema),
+    derivedAnalytics: derivedAnalyticsSchema.optional(),
   })
   .strict();
 
@@ -265,7 +322,7 @@ export const chatRequestSchema = z
     snapshot: coachContextPayloadSchema.optional(),
     snapshotUpdatedAt: isoDateTimeSchema.optional(),
     runtimeContextDelta: runtimeContextDeltaSchema.optional(),
-    clientRecentTurns: z.array(coachConversationTurnSchema).max(6).default([]),
+    clientRecentTurns: z.array(coachConversationTurnSchema).max(12).default([]),
     capabilityScope: capabilityScopeSchema,
   })
   .strict();
@@ -335,7 +392,18 @@ const workoutSummaryExerciseHistorySchema = z
   .object({
     exerciseID: uuidSchema,
     exerciseName: nonEmptyStringSchema,
-    sessions: z.array(workoutSummaryHistorySessionSchema).max(3),
+    sessions: z.array(workoutSummaryHistorySessionSchema).max(6),
+  })
+  .strict();
+
+const jobMetadataSchema = z
+  .object({
+    jobDeadlineAt: isoDateTimeSchema.optional(),
+    contextProfile: nonEmptyStringSchema.max(80).optional(),
+    promptProfile: nonEmptyStringSchema.max(80).optional(),
+    contextVersion: nonEmptyStringSchema.max(80).optional(),
+    analyticsVersion: nonEmptyStringSchema.max(80).optional(),
+    memoryProfile: nonEmptyStringSchema.max(80).optional(),
   })
   .strict();
 
@@ -639,6 +707,7 @@ export const chatJobCreateResponseSchema = z
     status: chatJobStatusSchema,
     createdAt: isoDateTimeSchema,
     pollAfterMs: z.int().min(0),
+    metadata: jobMetadataSchema.optional(),
   })
   .strict();
 
@@ -651,6 +720,7 @@ export const chatJobStatusResponseSchema = z
     completedAt: isoDateTimeSchema.optional(),
     result: chatJobResultSchema.optional(),
     error: chatJobErrorSchema.optional(),
+    metadata: jobMetadataSchema.optional(),
   })
   .strict();
 
@@ -696,6 +766,7 @@ export const workoutSummaryJobCreateResponseSchema = z
     createdAt: isoDateTimeSchema,
     pollAfterMs: z.int().min(0),
     reusedExistingJob: z.boolean(),
+    metadata: jobMetadataSchema.optional(),
   })
   .strict();
 
@@ -710,6 +781,7 @@ export const workoutSummaryJobStatusResponseSchema = z
     completedAt: isoDateTimeSchema.optional(),
     result: workoutSummaryJobResultSchema.optional(),
     error: chatJobErrorSchema.optional(),
+    metadata: jobMetadataSchema.optional(),
   })
   .strict();
 

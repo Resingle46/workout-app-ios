@@ -1,11 +1,19 @@
 import {
   buildCoachContextFromSnapshot,
+  buildDerivedCoachAnalyticsFromCompactSnapshot,
+  buildDerivedCoachAnalyticsFromSnapshot,
+  DEFAULT_ANALYTICS_VERSION,
+  DEFAULT_CONTEXT_VERSION,
   hashAppSnapshot,
   hashCoachContext,
   jsonByteLength,
   normalizeCoachAnalysisSettings,
   overlayCoachAnalysisSettings,
   stableJSONStringify,
+  type CoachContextProfile,
+  type CoachDerivedAnalytics,
+  type CoachExecutionMetadata,
+  type CoachMemoryProfile,
 } from "./context";
 import type {
   AppSnapshotPayload,
@@ -40,9 +48,9 @@ import type {
 const LEGACY_SNAPSHOT_TTL_SECONDS = 30 * 24 * 60 * 60;
 const CHAT_MEMORY_TTL_SECONDS = 7 * 24 * 60 * 60;
 const INSIGHTS_CACHE_TTL_SECONDS = 6 * 60 * 60;
-const CHAT_MEMORY_MAX_TURNS = 4;
-const CHAT_MEMORY_MAX_CONTENT_LENGTH = 220;
-const CHAT_MEMORY_MAX_TOTAL_CHARACTERS = 600;
+const CHAT_MEMORY_MAX_TURNS = 12;
+const CHAT_MEMORY_MAX_CONTENT_LENGTH = 800;
+const CHAT_MEMORY_MAX_TOTAL_CHARACTERS = 4_800;
 const BACKUP_SCHEMA_VERSION = 2;
 
 export interface CoachKVNamespace {
@@ -105,11 +113,20 @@ export interface ResolvedCoachContext {
   cacheAllowed: boolean;
   source: "remote_full" | "inline_legacy" | "stored_legacy";
   backupHead?: BackupHead;
+  contextVersion: string;
+  analyticsVersion: string;
+  derivedAnalytics: CoachDerivedAnalytics;
 }
 
 export interface PreparedCoachChatJobRequest extends CoachChatRequest {
   clientRequestID: string;
   responseID: string;
+  metadata?: CoachExecutionMetadata;
+}
+
+export interface PreparedWorkoutSummaryJobRequest
+  extends CoachWorkoutSummaryJobCreateRequest {
+  metadata?: CoachExecutionMetadata;
 }
 
 export interface CreateCoachChatJobInput {
@@ -157,7 +174,7 @@ export interface CreateWorkoutSummaryJobInput {
   sessionID: string;
   fingerprint: string;
   createdAt: string;
-  preparedRequest: CoachWorkoutSummaryJobCreateRequest;
+  preparedRequest: PreparedWorkoutSummaryJobRequest;
   requestMode: CoachWorkoutSummaryRequestMode;
   trigger: CoachWorkoutSummaryTrigger;
   inputMode: CoachWorkoutSummaryInputMode;
@@ -226,7 +243,7 @@ export interface CoachWorkoutSummaryJobRecord {
   sessionID: string;
   fingerprint: string;
   status: CoachChatJobStatus;
-  preparedRequest: CoachWorkoutSummaryJobCreateRequest;
+  preparedRequest: PreparedWorkoutSummaryJobRequest;
   result?: CoachWorkoutSummaryJobResult;
   error?: CoachChatJobError;
   createdAt: string;
@@ -254,6 +271,16 @@ export interface ClaimCoachChatJobExecutionResult {
   claimed: boolean;
 }
 
+export interface ContextStorageKeyInput {
+  contextHash: string;
+  contextProfile: CoachContextProfile;
+  contextVersion: string;
+  analyticsVersion: string;
+  promptVersion?: string;
+  model?: string;
+  memoryProfile?: CoachMemoryProfile;
+}
+
 export interface CoachStateStore {
   storeLegacySnapshot(
     request: CoachSnapshotSyncRequest
@@ -271,20 +298,20 @@ export interface CoachStateStore {
   ): Promise<ResolvedCoachContext>;
   getInsightsCache(
     installID: string,
-    contextHash: string
+    key: ContextStorageKeyInput
   ): Promise<CoachProfileInsightsResponse | null>;
   storeInsightsCache(
     installID: string,
-    contextHash: string,
+    key: ContextStorageKeyInput,
     response: CoachProfileInsightsResponse
   ): Promise<void>;
   getChatMemory(
     installID: string,
-    contextHash: string
+    key: ContextStorageKeyInput
   ): Promise<StoredChatMemory | null>;
   appendChatMemory(
     installID: string,
-    contextHash: string,
+    key: ContextStorageKeyInput,
     baseTurns: CoachConversationTurn[],
     question: string,
     answerMarkdown: string
@@ -500,14 +527,34 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
         remoteState.current_backup_version
       );
       if (backup) {
+        const snapshot = overlayCoachAnalysisSettings(backup.envelope.snapshot, {
+          selectedProgramID: remoteState.selected_program_id,
+          programComment: remoteState.program_comment,
+        });
         const serverSnapshot = buildCoachContextFromSnapshot({
-          snapshot: overlayCoachAnalysisSettings(backup.envelope.snapshot, {
-            selectedProgramID: remoteState.selected_program_id,
-            programComment: remoteState.program_comment,
-          }),
+          snapshot,
           selectedProgramID: remoteState.selected_program_id,
           programComment: remoteState.program_comment,
           runtimeContextDelta: request.runtimeContextDelta,
+        });
+        const finishedSessions = snapshot.history
+          .filter((session) => Boolean(session.endedAt))
+          .sort(
+            (left, right) => Date.parse(right.startedAt) - Date.parse(left.startedAt)
+          );
+        const selectedProgram = snapshot.coachAnalysisSettings.selectedProgramID
+          ? snapshot.programs.find(
+              (program) => program.id === snapshot.coachAnalysisSettings.selectedProgramID
+            )
+          : snapshot.programs.find((program) => program.workouts.length > 0);
+        const consistencySummary = serverSnapshot.analytics.consistency;
+        const derivedAnalytics = buildDerivedCoachAnalyticsFromSnapshot({
+          snapshot,
+          preferredProgram: selectedProgram,
+          profile: snapshot.profile,
+          consistencySummary,
+          coachAnalysisSettings: snapshot.coachAnalysisSettings,
+          finishedSessions,
         });
         const contextHash = `${remoteState.current_backup_hash}:${remoteState.coach_state_version}`;
         return {
@@ -516,6 +563,9 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
           cacheAllowed: !request.runtimeContextDelta?.activeWorkout,
           source: "remote_full",
           backupHead: toBackupHead(remoteState),
+          contextVersion: DEFAULT_CONTEXT_VERSION,
+          analyticsVersion: DEFAULT_ANALYTICS_VERSION,
+          derivedAnalytics,
         };
       }
     }
@@ -523,11 +573,18 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
     if (request.snapshot) {
       const contextHash =
         request.snapshotHash || (await hashCoachContext(request.snapshot));
+      const snapshot = withRuntimeContext(
+        request.snapshot,
+        request.runtimeContextDelta
+      );
       return {
-        snapshot: withRuntimeContext(request.snapshot, request.runtimeContextDelta),
+        snapshot,
         contextHash,
         cacheAllowed: !request.runtimeContextDelta?.activeWorkout,
         source: "inline_legacy",
+        contextVersion: DEFAULT_CONTEXT_VERSION,
+        analyticsVersion: DEFAULT_ANALYTICS_VERSION,
+        derivedAnalytics: buildDerivedCoachAnalyticsFromCompactSnapshot(snapshot),
       };
     }
 
@@ -544,6 +601,11 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
         contextHash: legacySnapshot.hash,
         cacheAllowed: !request.runtimeContextDelta?.activeWorkout,
         source: "stored_legacy",
+        contextVersion: DEFAULT_CONTEXT_VERSION,
+        analyticsVersion: DEFAULT_ANALYTICS_VERSION,
+        derivedAnalytics: buildDerivedCoachAnalyticsFromCompactSnapshot(
+          withRuntimeContext(legacySnapshot.snapshot, request.runtimeContextDelta)
+        ),
       };
     }
 
@@ -552,21 +614,37 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
 
   async getInsightsCache(
     installID: string,
-    contextHash: string
+    key: ContextStorageKeyInput
   ): Promise<CoachProfileInsightsResponse | null> {
     return this.kv.get<CoachProfileInsightsResponse>(
-      insightsCacheKey(installID, contextHash, this.promptVersion, this.model),
+      insightsCacheKey(
+        installID,
+        key.contextHash,
+        key.contextProfile,
+        key.contextVersion,
+        key.analyticsVersion,
+        key.promptVersion ?? this.promptVersion,
+        key.model ?? this.model
+      ),
       "json"
     );
   }
 
   async storeInsightsCache(
     installID: string,
-    contextHash: string,
+    key: ContextStorageKeyInput,
     response: CoachProfileInsightsResponse
   ): Promise<void> {
     await this.kv.put(
-      insightsCacheKey(installID, contextHash, this.promptVersion, this.model),
+      insightsCacheKey(
+        installID,
+        key.contextHash,
+        key.contextProfile,
+        key.contextVersion,
+        key.analyticsVersion,
+        key.promptVersion ?? this.promptVersion,
+        key.model ?? this.model
+      ),
       JSON.stringify(response),
       { expirationTtl: INSIGHTS_CACHE_TTL_SECONDS }
     );
@@ -574,17 +652,26 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
 
   async getChatMemory(
     installID: string,
-    contextHash: string
+    key: ContextStorageKeyInput
   ): Promise<StoredChatMemory | null> {
     return this.kv.get<StoredChatMemory>(
-      chatMemoryKey(installID, contextHash),
+      chatMemoryKey(
+        installID,
+        key.contextHash,
+        key.contextProfile,
+        key.contextVersion,
+        key.analyticsVersion,
+        key.promptVersion ?? this.promptVersion,
+        key.model ?? this.model,
+        key.memoryProfile ?? "compact_v1"
+      ),
       "json"
     );
   }
 
   async appendChatMemory(
     installID: string,
-    contextHash: string,
+    key: ContextStorageKeyInput,
     baseTurns: CoachConversationTurn[],
     question: string,
     answerMarkdown: string
@@ -599,7 +686,16 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
     };
 
     await this.kv.put(
-      chatMemoryKey(installID, contextHash),
+      chatMemoryKey(
+        installID,
+        key.contextHash,
+        key.contextProfile,
+        key.contextVersion,
+        key.analyticsVersion,
+        key.promptVersion ?? this.promptVersion,
+        key.model ?? this.model,
+        key.memoryProfile ?? "compact_v1"
+      ),
       JSON.stringify(memory),
       { expirationTtl: CHAT_MEMORY_TTL_SECONDS }
     );
@@ -844,7 +940,12 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
     if (cacheAllowed && job.status === "completed" && job.result) {
       await this.appendChatMemory(
         job.installID,
-        job.contextHash,
+        storageKeyFromMetadata(
+          job.contextHash,
+          job.preparedRequest.metadata,
+          job.promptVersion,
+          job.model
+        ),
         job.preparedRequest.clientRecentTurns,
         job.preparedRequest.question,
         job.result.answerMarkdown
@@ -878,7 +979,9 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
     const existingByFingerprint = await this.getWorkoutSummaryJobByFingerprint(
       input.installID,
       input.sessionID,
-      input.fingerprint
+      input.fingerprint,
+      this.promptVersion,
+      this.model
     );
     if (existingByFingerprint) {
       return existingByFingerprint;
@@ -940,7 +1043,9 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
       const duplicatedByFingerprint = await this.getWorkoutSummaryJobByFingerprint(
         input.installID,
         input.sessionID,
-        input.fingerprint
+        input.fingerprint,
+        this.promptVersion,
+        this.model
       );
       if (duplicatedByFingerprint) {
         return duplicatedByFingerprint;
@@ -1559,7 +1664,9 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
   private async getWorkoutSummaryJobByFingerprint(
     installID: string,
     sessionID: string,
-    fingerprint: string
+    fingerprint: string,
+    promptVersion: string,
+    model: string
   ): Promise<CoachWorkoutSummaryJobRecord | null> {
     const row = await this.db
       .prepare(
@@ -1568,12 +1675,14 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
           WHERE install_id = ?
             AND session_id = ?
             AND fingerprint = ?
+            AND prompt_version = ?
+            AND model = ?
             AND status IN ('queued', 'running', 'completed')
           ORDER BY created_at DESC
           LIMIT 1
         `
       )
-      .bind(installID, sessionID, fingerprint)
+      .bind(installID, sessionID, fingerprint, promptVersion, model)
       .first<WorkoutSummaryJobRow>();
     return row ? parseWorkoutSummaryJobRow(row) : null;
   }
@@ -1624,41 +1733,71 @@ export class InMemoryCoachStateRepository implements CoachStateStore {
     if (remote) {
       const backup = this.backups.get(request.installID)?.get(remote.backupVersion);
       if (backup) {
+        const snapshot = overlayCoachAnalysisSettings(backup.snapshot, {
+          selectedProgramID: remote.selectedProgramID,
+          programComment: remote.programComment,
+        });
+        const compactSnapshot = buildCoachContextFromSnapshot({
+          snapshot,
+          selectedProgramID: remote.selectedProgramID,
+          programComment: remote.programComment,
+          runtimeContextDelta: request.runtimeContextDelta,
+        });
+        const finishedSessions = snapshot.history
+          .filter((session) => Boolean(session.endedAt))
+          .sort(
+            (left, right) => Date.parse(right.startedAt) - Date.parse(left.startedAt)
+          );
+        const preferredProgram = snapshot.coachAnalysisSettings.selectedProgramID
+          ? snapshot.programs.find(
+              (program) => program.id === snapshot.coachAnalysisSettings.selectedProgramID
+            )
+          : snapshot.programs.find((program) => program.workouts.length > 0);
         return {
-          snapshot: buildCoachContextFromSnapshot({
-            snapshot: overlayCoachAnalysisSettings(backup.snapshot, {
-              selectedProgramID: remote.selectedProgramID,
-              programComment: remote.programComment,
-            }),
-            selectedProgramID: remote.selectedProgramID,
-            programComment: remote.programComment,
-            runtimeContextDelta: request.runtimeContextDelta,
-          }),
+          snapshot: compactSnapshot,
           contextHash: `${remote.backupHash}:${remote.coachStateVersion}`,
           cacheAllowed: !request.runtimeContextDelta?.activeWorkout,
           source: "remote_full",
           backupHead: remote,
+          contextVersion: DEFAULT_CONTEXT_VERSION,
+          analyticsVersion: DEFAULT_ANALYTICS_VERSION,
+          derivedAnalytics: buildDerivedCoachAnalyticsFromSnapshot({
+            snapshot,
+            preferredProgram,
+            profile: snapshot.profile,
+            consistencySummary: compactSnapshot.analytics.consistency,
+            coachAnalysisSettings: snapshot.coachAnalysisSettings,
+            finishedSessions,
+          }),
         };
       }
     }
 
     if (request.snapshot) {
+      const snapshot = withRuntimeContext(request.snapshot, request.runtimeContextDelta);
       return {
-        snapshot: withRuntimeContext(request.snapshot, request.runtimeContextDelta),
+        snapshot,
         contextHash:
           request.snapshotHash || (await hashCoachContext(request.snapshot)),
         cacheAllowed: !request.runtimeContextDelta?.activeWorkout,
         source: "inline_legacy",
+        contextVersion: DEFAULT_CONTEXT_VERSION,
+        analyticsVersion: DEFAULT_ANALYTICS_VERSION,
+        derivedAnalytics: buildDerivedCoachAnalyticsFromCompactSnapshot(snapshot),
       };
     }
 
     const stored = this.legacySnapshots.get(request.installID);
     if (stored && (!request.snapshotHash || stored.hash === request.snapshotHash)) {
+      const snapshot = withRuntimeContext(stored.snapshot, request.runtimeContextDelta);
       return {
-        snapshot: withRuntimeContext(stored.snapshot, request.runtimeContextDelta),
+        snapshot,
         contextHash: stored.hash,
         cacheAllowed: !request.runtimeContextDelta?.activeWorkout,
         source: "stored_legacy",
+        contextVersion: DEFAULT_CONTEXT_VERSION,
+        analyticsVersion: DEFAULT_ANALYTICS_VERSION,
+        derivedAnalytics: buildDerivedCoachAnalyticsFromCompactSnapshot(snapshot),
       };
     }
 
@@ -1667,36 +1806,65 @@ export class InMemoryCoachStateRepository implements CoachStateStore {
 
   async getInsightsCache(
     installID: string,
-    contextHash: string
+    key: ContextStorageKeyInput
   ): Promise<CoachProfileInsightsResponse | null> {
     return (
       this.insightsCache.get(
-        insightsCacheKey(installID, contextHash, this.promptVersion, this.model)
+        insightsCacheKey(
+          installID,
+          key.contextHash,
+          key.contextProfile,
+          key.contextVersion,
+          key.analyticsVersion,
+          key.promptVersion ?? this.promptVersion,
+          key.model ?? this.model
+        )
       ) ?? null
     );
   }
 
   async storeInsightsCache(
     installID: string,
-    contextHash: string,
+    key: ContextStorageKeyInput,
     response: CoachProfileInsightsResponse
   ): Promise<void> {
     this.insightsCache.set(
-      insightsCacheKey(installID, contextHash, this.promptVersion, this.model),
+      insightsCacheKey(
+        installID,
+        key.contextHash,
+        key.contextProfile,
+        key.contextVersion,
+        key.analyticsVersion,
+        key.promptVersion ?? this.promptVersion,
+        key.model ?? this.model
+      ),
       response
     );
   }
 
   async getChatMemory(
     installID: string,
-    contextHash: string
+    key: ContextStorageKeyInput
   ): Promise<StoredChatMemory | null> {
-    return this.chatMemory.get(chatMemoryKey(installID, contextHash)) ?? null;
+    return (
+      this.chatMemory.get(
+        chatMemoryKey(
+          installID,
+          key.contextHash,
+          key.contextProfile,
+          key.contextVersion,
+          key.analyticsVersion,
+          key.promptVersion ?? this.promptVersion,
+          key.model ?? this.model,
+          key.memoryProfile ?? "compact_v1"
+        )
+      ) ?? null
+    );
   }
 
   async appendChatMemory(
     installID: string,
-    contextHash: string,
+    key: ContextStorageKeyInput,
     baseTurns: CoachConversationTurn[],
     question: string,
     answerMarkdown: string
@@ -1709,7 +1877,19 @@ export class InMemoryCoachStateRepository implements CoachStateStore {
         { role: "assistant", content: answerMarkdown },
       ]),
     };
-    this.chatMemory.set(chatMemoryKey(installID, contextHash), memory);
+    this.chatMemory.set(
+      chatMemoryKey(
+        installID,
+        key.contextHash,
+        key.contextProfile,
+        key.contextVersion,
+        key.analyticsVersion,
+        key.promptVersion ?? this.promptVersion,
+        key.model ?? this.model,
+        key.memoryProfile ?? "compact_v1"
+      ),
+      memory
+    );
     return memory;
   }
 
@@ -1866,7 +2046,12 @@ export class InMemoryCoachStateRepository implements CoachStateStore {
     ) {
       await this.appendChatMemory(
         job.installID,
-        job.contextHash,
+        storageKeyFromMetadata(
+          job.contextHash,
+          job.preparedRequest.metadata,
+          job.promptVersion,
+          job.model
+        ),
         job.preparedRequest.clientRecentTurns,
         job.preparedRequest.question,
         job.result.answerMarkdown
@@ -1894,6 +2079,8 @@ export class InMemoryCoachStateRepository implements CoachStateStore {
           job.installID === input.installID &&
           job.sessionID === input.sessionID &&
           job.fingerprint === input.fingerprint &&
+          job.promptVersion === this.promptVersion &&
+          job.model === this.model &&
           isReusableWorkoutSummaryJobStatus(job.status)
       )
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
@@ -2319,7 +2506,7 @@ function parseWorkoutSummaryJobRow(
     status: row.status,
     preparedRequest: JSON.parse(
       row.prepared_request_json
-    ) as CoachWorkoutSummaryJobCreateRequest,
+    ) as PreparedWorkoutSummaryJobRequest,
     result: row.response_json
       ? (JSON.parse(row.response_json) as CoachWorkoutSummaryJobResult)
       : undefined,
@@ -2390,14 +2577,43 @@ function isReusableWorkoutSummaryJobStatus(
 function insightsCacheKey(
   installID: string,
   contextHash: string,
+  contextProfile: CoachContextProfile,
+  contextVersion: string,
+  analyticsVersion: string,
   promptVersion: string,
   model: string
 ): string {
-  return `${installID}:insights:${contextHash}:${promptVersion}:${model}`;
+  return `${installID}:insights:${contextHash}:${contextProfile}:${contextVersion}:${analyticsVersion}:${promptVersion}:${model}`;
 }
 
-function chatMemoryKey(installID: string, contextHash: string): string {
-  return `${installID}:chat-memory:${contextHash}`;
+function chatMemoryKey(
+  installID: string,
+  contextHash: string,
+  contextProfile: CoachContextProfile,
+  contextVersion: string,
+  analyticsVersion: string,
+  promptVersion: string,
+  model: string,
+  memoryProfile: CoachMemoryProfile
+): string {
+  return `${installID}:chat-memory:${contextHash}:${contextProfile}:${memoryProfile}:${contextVersion}:${analyticsVersion}:${promptVersion}:${model}`;
+}
+
+export function storageKeyFromMetadata(
+  contextHash: string,
+  metadata: Partial<CoachExecutionMetadata> | undefined,
+  promptVersion: string,
+  model: string
+): ContextStorageKeyInput {
+  return {
+    contextHash,
+    contextProfile: metadata?.contextProfile ?? "compact_sync_v2",
+    contextVersion: metadata?.contextVersion ?? DEFAULT_CONTEXT_VERSION,
+    analyticsVersion: metadata?.analyticsVersion ?? DEFAULT_ANALYTICS_VERSION,
+    promptVersion,
+    model,
+    memoryProfile: metadata?.memoryProfile ?? "compact_v1",
+  };
 }
 
 function backupObjectKey(

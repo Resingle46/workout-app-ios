@@ -18,6 +18,9 @@
       "invocation_logs": true
     }
   },
+  "limits": {
+    "cpu_ms": 300000
+  },
   "ai": {
     "binding": "AI"
   },

@@ -4,8 +4,11 @@ import type {
   CoachWorkoutSummaryJobCreateRequest,
 } from "./schemas";
 import {
+  buildDerivedCoachAnalyticsFromCompactSnapshot,
   buildInferencePromptContext,
   buildProfileInsightsPromptContext,
+  type CoachContextProfile,
+  type CoachDerivedAnalytics,
 } from "./context";
 
 type PromptMessage = {
@@ -14,10 +17,17 @@ type PromptMessage = {
 };
 
 type CoachAnalysisContextOptions = {
+  contextProfile?: CoachContextProfile;
+  derivedAnalytics?: CoachDerivedAnalytics;
   includeCoachAnalysisSettings?: boolean;
   includePreferredProgram?: boolean;
   includeUserComment?: boolean;
   includeSanitizedContext?: boolean;
+};
+
+type PromptBuildOptions = {
+  contextProfile?: CoachContextProfile;
+  derivedAnalytics?: CoachDerivedAnalytics;
 };
 
 function localeInstruction(locale: string): string {
@@ -34,12 +44,36 @@ function sharedRules(locale: string): string {
     "Treat explicit user-authored execution notes in programComment as higher priority than heuristic assumptions about split structure or weekly frequency.",
     "If the user says they rotate through more workout templates than they perform each week, do not treat that alone as a mismatch.",
     "If the saved note explicitly says not to change weekly frequency or workout count, respect that in your advice.",
+    "Do not make unsupported factual claims about program mismatches, split execution, weekly muscle frequency, lagging muscles, or adherence if the supplied context does not explicitly support them.",
+    "If derived analytics are present, treat them as authoritative over title-based or split-name heuristics.",
     "Stay within workout programming, progression, recovery, and adherence guidance.",
     "Do not give medical diagnosis, treatment plans, or supplement protocols.",
     "Write recommendations as plain coaching advice, not as app actions or structured field dumps.",
     "Do not mention internal IDs, schema fields, or JSON keys.",
     "Be concise and specific.",
   ].join("\n");
+}
+
+function isRichContextProfile(contextProfile: CoachContextProfile | undefined): boolean {
+  return (
+    contextProfile === "rich_async_v1" ||
+    contextProfile === "rich_async_analytics_v1"
+  );
+}
+
+function resolveDerivedAnalytics(
+  snapshot: CoachProfileInsightsRequest["snapshot"] | CoachChatRequest["snapshot"],
+  options: PromptBuildOptions
+): CoachDerivedAnalytics | undefined {
+  if (options.derivedAnalytics) {
+    return options.derivedAnalytics;
+  }
+
+  if (!snapshot) {
+    return undefined;
+  }
+
+  return buildDerivedCoachAnalyticsFromCompactSnapshot(snapshot);
 }
 
 function highPriorityConstraintLines(
@@ -83,13 +117,18 @@ function coachAnalysisContextLines(
     return [];
   }
 
-  const promptContext = buildInferencePromptContext(snapshot);
   const {
+    contextProfile = "compact_sync_v2",
+    derivedAnalytics = resolveDerivedAnalytics(snapshot, options),
     includeCoachAnalysisSettings = true,
     includePreferredProgram = true,
     includeUserComment = true,
     includeSanitizedContext = true,
   } = options;
+  const promptContext = buildInferencePromptContext(snapshot, {
+    contextProfile,
+    derivedAnalytics,
+  });
   const lines: string[] = [];
 
   if (includeCoachAnalysisSettings) {
@@ -118,26 +157,55 @@ function coachAnalysisContextLines(
   }
 
   if (includeSanitizedContext) {
-    lines.push("Sanitized coach context JSON:");
+    lines.push(
+      isRichContextProfile(contextProfile)
+        ? "Coach context JSON:"
+        : "Sanitized coach context JSON:"
+    );
     lines.push(JSON.stringify(promptContext));
+  }
+
+  if (promptContext.analytics.training) {
+    lines.push("Training recommendation JSON:");
+    lines.push(JSON.stringify(promptContext.analytics.training));
+  }
+
+  if (promptContext.analytics.compatibility) {
+    lines.push("Compatibility assessment JSON:");
+    lines.push(JSON.stringify(promptContext.analytics.compatibility));
+  }
+
+  if (promptContext.analytics.derived) {
+    lines.push("Derived coach analytics JSON:");
+    lines.push(JSON.stringify(promptContext.analytics.derived));
   }
 
   return lines;
 }
 
 function profileInsightsContextLines(
-  snapshot: CoachProfileInsightsRequest["snapshot"]
+  snapshot: CoachProfileInsightsRequest["snapshot"],
+  options: PromptBuildOptions = {}
 ): string[] {
   if (!snapshot) {
     return [];
   }
 
-  const promptContext = buildProfileInsightsPromptContext(snapshot);
+  const contextProfile = options.contextProfile ?? "compact_sync_v2";
+  const derivedAnalytics = resolveDerivedAnalytics(snapshot, options);
+  const promptContext = buildProfileInsightsPromptContext(snapshot, {
+    contextProfile,
+    derivedAnalytics,
+  });
   const comment = snapshot.coachAnalysisSettings.programComment.trim();
   const lines: string[] = [];
 
   if (comment) {
-    lines.push(`Saved user note: ${comment.slice(0, 220)}`);
+    lines.push(
+      `Saved user note: ${
+        isRichContextProfile(contextProfile) ? comment : comment.slice(0, 220)
+      }`
+    );
   }
 
   const constraintLines = highPriorityConstraintLines(snapshot);
@@ -153,6 +221,16 @@ function profileInsightsContextLines(
   lines.push("30-day progress JSON:");
   lines.push(JSON.stringify(promptContext.progress30Days));
 
+  if (promptContext.training) {
+    lines.push("Training recommendation JSON:");
+    lines.push(JSON.stringify(promptContext.training));
+  }
+
+  if (promptContext.compatibility) {
+    lines.push("Compatibility assessment JSON:");
+    lines.push(JSON.stringify(promptContext.compatibility));
+  }
+
   if (promptContext.recentPersonalRecords.length > 0) {
     lines.push("Recent personal records JSON:");
     lines.push(JSON.stringify(promptContext.recentPersonalRecords));
@@ -163,9 +241,19 @@ function profileInsightsContextLines(
     lines.push(JSON.stringify(promptContext.relativeStrength));
   }
 
+  if (promptContext.recentFinishedSessions.length > 0) {
+    lines.push("Recent finished sessions JSON:");
+    lines.push(JSON.stringify(promptContext.recentFinishedSessions));
+  }
+
   if (promptContext.preferredProgram) {
     lines.push("Preferred program summary JSON:");
     lines.push(JSON.stringify(promptContext.preferredProgram));
+  }
+
+  if (promptContext.derived) {
+    lines.push("Derived coach analytics JSON:");
+    lines.push(JSON.stringify(promptContext.derived));
   }
 
   return lines;
@@ -186,14 +274,18 @@ function workoutSummaryContextLines(
 }
 
 export function buildProfileInsightsMessages(
-  request: CoachProfileInsightsRequest
+  request: CoachProfileInsightsRequest,
+  options: PromptBuildOptions = {}
 ): PromptMessage[] {
+  const contextProfile = options.contextProfile ?? "compact_sync_v2";
   return [
     {
       role: "system",
       content: [
         sharedRules(request.locale),
-        "Task: analyze the user's current training state and return a compact coach summary with concrete recommendations.",
+        isRichContextProfile(contextProfile)
+          ? "Task: analyze the user's current training state and return a detailed coach summary with concrete recommendations grounded in the provided context and derived analytics."
+          : "Task: analyze the user's current training state and return a compact coach summary with concrete recommendations.",
         "Prefer high-signal observations over generic motivation.",
         "Do not mention missing data unless it materially limits the advice.",
       ].join("\n\n"),
@@ -202,15 +294,17 @@ export function buildProfileInsightsMessages(
       role: "user",
       content: [
         "Return JSON that strictly matches the provided schema.",
-        ...profileInsightsContextLines(request.snapshot),
+        ...profileInsightsContextLines(request.snapshot, options),
       ].join("\n"),
     },
   ];
 }
 
 export function buildChatMessages(
-  request: CoachChatRequest
+  request: CoachChatRequest,
+  options: PromptBuildOptions = {}
 ): PromptMessage[] {
+  const contextProfile = options.contextProfile ?? "compact_sync_v2";
   return [
     {
       role: "system",
@@ -218,7 +312,9 @@ export function buildChatMessages(
         sharedRules(request.locale),
         "Task: answer the user's training question using the supplied app context.",
         "Use the supplied recent conversation turns only as short-term context. The current app context in the final user message is authoritative.",
-        "Return markdown in answerMarkdown when formatting helps, but keep it compact.",
+        isRichContextProfile(contextProfile)
+          ? "Return markdown in answerMarkdown when formatting helps. Use enough detail to stay precise and well-supported."
+          : "Return markdown in answerMarkdown when formatting helps, but keep it compact.",
         "Prefer short paragraphs or bullet lists instead of one dense block of text.",
         "Leave a blank line between distinct sections.",
         "Do not repeat the user's question as a heading.",
@@ -239,9 +335,11 @@ export function buildChatMessages(
         `Question: ${request.question}`,
         "Return JSON that strictly matches the provided schema.",
         ...coachAnalysisContextLines(request.snapshot, {
-          includeCoachAnalysisSettings: false,
-          includePreferredProgram: false,
-          includeUserComment: false,
+          contextProfile,
+          derivedAnalytics: resolveDerivedAnalytics(request.snapshot, options),
+          includeCoachAnalysisSettings: isRichContextProfile(contextProfile),
+          includePreferredProgram: isRichContextProfile(contextProfile),
+          includeUserComment: true,
         }),
       ].join("\n\n"),
     },
@@ -249,7 +347,8 @@ export function buildChatMessages(
 }
 
 export function buildFallbackProfileInsightsMessages(
-  request: CoachProfileInsightsRequest
+  request: CoachProfileInsightsRequest,
+  options: PromptBuildOptions = {}
 ): PromptMessage[] {
   return [
     {
@@ -266,15 +365,17 @@ export function buildFallbackProfileInsightsMessages(
     {
       role: "user",
       content: [
-        ...profileInsightsContextLines(request.snapshot),
+        ...profileInsightsContextLines(request.snapshot, options),
       ].join("\n"),
     },
   ];
 }
 
 export function buildFallbackChatMessages(
-  request: CoachChatRequest
+  request: CoachChatRequest,
+  options: PromptBuildOptions = {}
 ): PromptMessage[] {
+  const contextProfile = options.contextProfile ?? "compact_sync_v2";
   return [
     {
       role: "system",
@@ -300,9 +401,11 @@ export function buildFallbackChatMessages(
       content: [
         `Question: ${request.question}`,
         ...coachAnalysisContextLines(request.snapshot, {
-          includeCoachAnalysisSettings: false,
-          includePreferredProgram: false,
-          includeUserComment: false,
+          contextProfile,
+          derivedAnalytics: resolveDerivedAnalytics(request.snapshot, options),
+          includeCoachAnalysisSettings: isRichContextProfile(contextProfile),
+          includePreferredProgram: isRichContextProfile(contextProfile),
+          includeUserComment: true,
         }),
       ].join("\n\n"),
     },

@@ -13,6 +13,15 @@ import {
 } from "./state";
 import type { CoachChatJobError } from "./schemas";
 
+const DEFAULT_WORKFLOW_STEP_CONFIG = {
+  timeout: "10 minutes",
+  retries: {
+    limit: 5,
+    delay: "10 seconds",
+    backoff: "exponential" as const,
+  },
+} as const;
+
 export interface WorkoutSummaryWorkflowPayload {
   jobID: string;
 }
@@ -54,78 +63,152 @@ export async function executeWorkoutSummaryJob(
     return initialJob;
   }
 
+  if (isJobExpired(initialJob, now())) {
+    return expireWorkoutSummaryJob(stateRepository, initialJob, now);
+  }
+
   const startedAt = new Date(now()).toISOString();
   const claimResult = await runWorkflowStep(
     step,
     "mark_workout_summary_job_running",
-    async () => stateRepository.markWorkoutSummaryJobRunning(jobID, startedAt)
+    DEFAULT_WORKFLOW_STEP_CONFIG,
+    async () => {
+      const updated = await stateRepository.markWorkoutSummaryJobRunning(
+        jobID,
+        startedAt
+      );
+      return {
+        claimed: updated.claimed,
+        found: Boolean(updated.job),
+        status: updated.job?.status ?? null,
+      };
+    }
   );
 
-  if (!claimResult.job) {
+  if (!claimResult.found) {
     return null;
   }
 
-  if (!claimResult.claimed) {
-    if (claimResult.job.status === "running") {
-      logWorkoutSummaryJobEvent(
-        "workout_summary_job_duplicate_execution_skipped",
-        claimResult.job
-      );
-    }
-    return claimResult.job;
+  const claimedJob = await stateRepository.getWorkoutSummaryJobByID(jobID);
+  if (!claimedJob) {
+    throw new Error(`Workout summary job ${jobID} was not found.`);
   }
 
-  const runningJob = claimResult.job;
+  if (!claimResult.claimed) {
+    if (claimedJob.status === "running") {
+      logWorkoutSummaryJobEvent(
+        "workout_summary_job_duplicate_execution_skipped",
+        claimedJob
+      );
+    }
+    return claimedJob;
+  }
+
+  const runningJob = claimedJob;
+  if (isJobExpired(runningJob, now())) {
+    return expireWorkoutSummaryJob(stateRepository, runningJob, now);
+  }
   logWorkoutSummaryJobEvent("workout_summary_job_started", runningJob);
   logWorkoutSummaryJobEvent("workout_summary_job_running", runningJob);
 
   try {
-    const inferenceResult = await runWorkflowStep(
+    await runWorkflowStep(
       step,
-      "generate_workout_summary",
-      async () => inferenceService.generateWorkoutSummary(runningJob.preparedRequest)
-    );
+      "generate_and_persist_workout_summary",
+      DEFAULT_WORKFLOW_STEP_CONFIG,
+      async () => {
+        const latestJob = await stateRepository.getWorkoutSummaryJobByID(jobID);
+        if (!latestJob) {
+          throw new Error(`Workout summary job ${jobID} was not found.`);
+        }
+        if (isTerminalJobStatus(latestJob.status)) {
+          return { terminalStatus: latestJob.status };
+        }
+        if (isJobExpired(latestJob, now())) {
+          await expireWorkoutSummaryJob(stateRepository, latestJob, now);
+          return { terminalStatus: "failed" as const };
+        }
 
-    const completedAt = new Date(now()).toISOString();
-    const totalJobDurationMs = Math.max(
-      now() - Date.parse(runningJob.createdAt),
-      0
-    );
-    const inferenceMode =
-      inferenceResult.mode === "plain_text_fallback"
-        ? "plain_text_fallback"
-        : inferenceResult.mode === "degraded_fallback"
-          ? "degraded_fallback"
-          : "structured";
+        try {
+          const inferenceResult = await inferenceService.generateWorkoutSummary(
+            latestJob.preparedRequest
+          );
+          const completedAt = new Date(now()).toISOString();
+          const totalJobDurationMs = Math.max(
+            now() - Date.parse(latestJob.createdAt),
+            0
+          );
+          const inferenceMode =
+            inferenceResult.mode === "plain_text_fallback"
+              ? "plain_text_fallback"
+              : inferenceResult.mode === "degraded_fallback"
+                ? "degraded_fallback"
+                : "structured";
 
-    const completedJob = await runWorkflowStep(
-      step,
-      "persist_workout_summary_job_completion",
-      async () =>
-        stateRepository.completeWorkoutSummaryJob(jobID, {
-          completedAt,
-          result: {
-            ...inferenceResult.data,
-            inferenceMode,
+          await stateRepository.completeWorkoutSummaryJob(jobID, {
+            completedAt,
+            result: {
+              ...inferenceResult.data,
+              inferenceMode,
+              modelDurationMs:
+                inferenceResult.fallbackModelDurationMs ??
+                inferenceResult.modelDurationMs,
+              totalJobDurationMs,
+            },
+            promptBytes: inferenceResult.promptBytes,
+            fallbackPromptBytes: inferenceResult.fallbackPromptBytes,
             modelDurationMs:
               inferenceResult.fallbackModelDurationMs ??
               inferenceResult.modelDurationMs,
+            fallbackModelDurationMs: inferenceResult.fallbackModelDurationMs,
             totalJobDurationMs,
-          },
-          promptBytes: inferenceResult.promptBytes,
-          fallbackPromptBytes: inferenceResult.fallbackPromptBytes,
-          modelDurationMs:
-            inferenceResult.fallbackModelDurationMs ??
-            inferenceResult.modelDurationMs,
-          fallbackModelDurationMs: inferenceResult.fallbackModelDurationMs,
-          totalJobDurationMs,
-          inferenceMode,
-          generationStatus: inferenceResult.data.generationStatus,
-        })
-    );
+            inferenceMode,
+            generationStatus: inferenceResult.data.generationStatus,
+          });
 
-    logWorkoutSummaryJobEvent("workout_summary_job_completed", completedJob);
-    return completedJob;
+          return { terminalStatus: "completed" as const };
+        } catch (error) {
+          const failure = normalizeWorkoutSummaryJobExecutionError(error);
+          if (failure.retryable) {
+            throw error;
+          }
+
+          const failedAt = new Date(now()).toISOString();
+          const totalJobDurationMs = Math.max(
+            now() - Date.parse(latestJob.createdAt),
+            0
+          );
+          await stateRepository.failWorkoutSummaryJob(jobID, {
+            completedAt: failedAt,
+            error: failure,
+            promptBytes: extractNumericErrorDetail(error, "promptBytes"),
+            fallbackPromptBytes: extractNumericErrorDetail(
+              error,
+              "fallbackPromptBytes"
+            ),
+            modelDurationMs: extractNumericErrorDetail(error, "modelDurationMs"),
+            fallbackModelDurationMs: extractNumericErrorDetail(
+              error,
+              "fallbackModelDurationMs"
+            ),
+            totalJobDurationMs,
+            inferenceMode: normalizeInferenceMode(error),
+          });
+
+          return { terminalStatus: "failed" as const, errorCode: failure.code };
+        }
+      }
+    );
+    const finalJob =
+      (await stateRepository.getWorkoutSummaryJobByID(jobID)) ?? runningJob;
+    if (finalJob.status === "completed") {
+      logWorkoutSummaryJobEvent("workout_summary_job_completed", finalJob);
+    } else if (finalJob.status === "failed") {
+      logWorkoutSummaryJobEvent("workout_summary_job_failed", finalJob, {
+        errorCode: finalJob.error?.code,
+      });
+    }
+    return finalJob;
   } catch (error) {
     const failedAt = new Date(now()).toISOString();
     const currentJob =
@@ -172,10 +255,28 @@ function createDefaultStateRepository(env: Env): CoachStateStore {
 async function runWorkflowStep<T>(
   step: WorkflowStep | undefined,
   name: string,
+  config: {
+    timeout: string;
+    retries: {
+      limit: number;
+      delay: string;
+      backoff: "constant" | "linear" | "exponential";
+    };
+  } | undefined,
   callback: () => Promise<T>
 ): Promise<T> {
   if (!step) {
     return callback();
+  }
+
+  if (config) {
+    return (
+      step.do as unknown as (
+        stepName: string,
+        stepConfig: typeof config,
+        stepCallback: () => Promise<T>
+      ) => Promise<T>
+    )(name, config, callback);
   }
 
   return step.do(name, callback);
@@ -261,4 +362,35 @@ function normalizeInferenceMode(error: unknown): CoachWorkoutSummaryJobRecord["i
 
 function isTerminalJobStatus(status: CoachWorkoutSummaryJobRecord["status"]): boolean {
   return status === "completed" || status === "failed" || status === "canceled";
+}
+
+function isJobExpired(
+  job: CoachWorkoutSummaryJobRecord,
+  nowMs: number
+): boolean {
+  const deadlineAt = job.preparedRequest.metadata?.jobDeadlineAt;
+  if (!deadlineAt) {
+    return false;
+  }
+
+  const deadlineMs = Date.parse(deadlineAt);
+  return Number.isFinite(deadlineMs) && nowMs >= deadlineMs;
+}
+
+async function expireWorkoutSummaryJob(
+  stateRepository: CoachStateStore,
+  job: CoachWorkoutSummaryJobRecord,
+  now: () => number
+): Promise<CoachWorkoutSummaryJobRecord> {
+  const failedAt = new Date(now()).toISOString();
+  const totalJobDurationMs = Math.max(now() - Date.parse(job.createdAt), 0);
+  return stateRepository.failWorkoutSummaryJob(job.jobID, {
+    completedAt: failedAt,
+    error: {
+      code: "job_ttl_expired",
+      message: "Workout summary job exceeded its execution deadline.",
+      retryable: false,
+    },
+    totalJobDurationMs,
+  });
 }

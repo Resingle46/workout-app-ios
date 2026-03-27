@@ -2,6 +2,70 @@ import Foundation
 import Observation
 import ObjectiveC
 
+private struct CoachProgramCommentConstraints: Equatable {
+    var rawComment: String
+    var rollingSplitExecution: Bool
+    var preserveWeeklyFrequency: Bool
+    var preserveProgramWorkoutCount: Bool
+    var statedWeeklyFrequency: Int?
+}
+
+private struct CoachSplitExecutionInterpretation: Equatable {
+    enum Mode: Equatable {
+        case rollingRotation
+        case calendarMatched
+        case programCountMismatch
+        case unknown
+    }
+
+    var mode: Mode
+    var shouldTreatProgramCountAsMismatch: Bool
+    var programWorkoutCount: Int?
+    var weeklyTarget: Int
+    var statedWeeklyFrequency: Int?
+}
+
+private let coachRotationPatterns: [NSRegularExpression] = [
+    try! NSRegularExpression(pattern: #"\brotate\b"#, options: .caseInsensitive),
+    try! NSRegularExpression(pattern: #"\brotating\b"#, options: .caseInsensitive),
+    try! NSRegularExpression(pattern: #"\brotation\b"#, options: .caseInsensitive),
+    try! NSRegularExpression(pattern: #"\bcycle through\b"#, options: .caseInsensitive),
+    try! NSRegularExpression(pattern: #"\bin order\b"#, options: .caseInsensitive),
+    try! NSRegularExpression(pattern: #"\bsequentially\b"#, options: .caseInsensitive),
+    try! NSRegularExpression(pattern: #"по\s*очеред"#, options: .caseInsensitive),
+    try! NSRegularExpression(pattern: #"поочеред"#, options: .caseInsensitive),
+    try! NSRegularExpression(pattern: #"по\s*кругу"#, options: .caseInsensitive),
+    try! NSRegularExpression(pattern: #"черед"#, options: .caseInsensitive),
+    try! NSRegularExpression(pattern: #"ротац"#, options: .caseInsensitive)
+]
+
+private let coachPreserveWeeklyFrequencyPatterns: [NSRegularExpression] = [
+    try! NSRegularExpression(pattern: #"не\s+предлагай.*(?:частот|кол-?во|количество).*(?:трениров|занят).*(?:в\s+недел|/нед)"#, options: .caseInsensitive),
+    try! NSRegularExpression(pattern: #"не\s+меняй.*(?:частот|кол-?во|количество).*(?:трениров|занят).*(?:в\s+недел|/нед)"#, options: .caseInsensitive),
+    try! NSRegularExpression(pattern: #"не\s+предлагай.*изменени.*(?:трениров|занят).*(?:в\s+недел|/нед)"#, options: .caseInsensitive),
+    try! NSRegularExpression(pattern: #"не\s+меняй.*недельн.*частот"#, options: .caseInsensitive),
+    try! NSRegularExpression(pattern: #"\bdo not\b.*(?:change|adjust).*(?:training|workout|session).*(?:per\s+week|weekly)"#, options: .caseInsensitive),
+    try! NSRegularExpression(pattern: #"\bdon't\b.*(?:change|adjust).*(?:training|workout|session).*(?:per\s+week|weekly)"#, options: .caseInsensitive),
+    try! NSRegularExpression(pattern: #"\bdo not\b.*change.*weekly.*frequency"#, options: .caseInsensitive),
+    try! NSRegularExpression(pattern: #"\bdon't\b.*change.*weekly.*frequency"#, options: .caseInsensitive)
+]
+
+private let coachPreserveProgramCountPatterns: [NSRegularExpression] = [
+    try! NSRegularExpression(pattern: #"не\s+предлагай.*(?:изменени|меняй).*(?:кол-?во|количество).*(?:тренировок|дней).*(?:в\s+програм|сплит)"#, options: .caseInsensitive),
+    try! NSRegularExpression(pattern: #"не\s+меняй.*(?:кол-?во|количество).*(?:тренировок|дней).*(?:в\s+програм|сплит)"#, options: .caseInsensitive),
+    try! NSRegularExpression(pattern: #"\bdo not\b.*change.*(?:number|count).*(?:workouts|days).*(?:program|split)"#, options: .caseInsensitive),
+    try! NSRegularExpression(pattern: #"\bdon't\b.*change.*(?:number|count).*(?:workouts|days).*(?:program|split)"#, options: .caseInsensitive)
+]
+
+private let coachStatedWeeklyFrequencyPatterns: [NSRegularExpression] = [
+    try! NSRegularExpression(pattern: #"(\d+)\s*(?:раза?|трениров(?:ки|ок)?|занят(?:ия|ий)?)\s*в\s*недел"#, options: .caseInsensitive),
+    try! NSRegularExpression(pattern: #"(\d+)\s*(?:days?|sessions?|workouts?)\s*(?:per|a)\s*week"#, options: .caseInsensitive)
+]
+
+private func nsRange(for text: String) -> NSRange {
+    NSRange(text.startIndex..<text.endIndex, in: text)
+}
+
 @MainActor
 @Observable
 final class AppStore {
@@ -844,8 +908,13 @@ final class AppStore {
     func profileTrainingRecommendationSummary() -> ProfileTrainingRecommendationSummary {
         let isGenericFallback = profile.primaryGoal == .notSet || profile.experienceLevel == .notSet
         let preferredProgram = preferredProgramForProfileInsights()
+        let splitExecution = splitExecutionInterpretation(for: preferredProgram)
         let splitWorkoutDays = preferredProgram.flatMap { program in
-            program.workouts.isEmpty ? nil : program.workouts.count
+            guard !program.workouts.isEmpty,
+                  splitExecution.mode == .calendarMatched else {
+                return nil
+            }
+            return program.workouts.count
         }
         let split = splitWorkoutDays.map { splitRecommendation(for: $0) }
             ?? (isGenericFallback
@@ -904,6 +973,7 @@ final class AppStore {
         let goalSummary = profileGoalSummary()
         let workoutAverage = recentAverageWorkoutsPerWeek(referenceDate: referenceDate, calendar: calendar)
         let preferredProgram = preferredProgramForProfileInsights()
+        let splitExecution = splitExecutionInterpretation(for: preferredProgram)
         let usesObservedHistory = workoutAverage.source == .history
         var issues: [ProfileGoalCompatibilityIssue] = []
 
@@ -985,7 +1055,7 @@ final class AppStore {
 
         if let programWorkoutCount = preferredProgram?.workouts.count,
            programWorkoutCount > 0,
-           programWorkoutCount != profile.weeklyWorkoutTarget {
+           splitExecution.shouldTreatProgramCountAsMismatch {
             issues.append(
                 ProfileGoalCompatibilityIssue(
                     id: ProfileGoalCompatibilityIssueKind.programFrequencyMismatch.rawValue,
@@ -1239,6 +1309,12 @@ final class AppStore {
     }
 
     private func preferredProgramForProfileInsights() -> WorkoutProgram? {
+        if let selectedProgramID = coachAnalysisSettings.selectedProgramID,
+           let selectedProgram = program(for: selectedProgramID),
+           !selectedProgram.workouts.isEmpty {
+            return selectedProgram
+        }
+
         if let workoutTemplateID = activeSession?.workoutTemplateID,
            let program = program(containingWorkoutTemplateID: workoutTemplateID) {
             return program
@@ -1255,6 +1331,99 @@ final class AppStore {
         }
 
         return programs.first(where: { !$0.workouts.isEmpty })
+    }
+
+    private func programCommentConstraints() -> CoachProgramCommentConstraints {
+        let rawComment = coachAnalysisSettings.programComment
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let rollingSplitExecution = coachRotationPatterns.contains {
+            $0.firstMatch(in: rawComment, options: [], range: nsRange(for: rawComment)) != nil
+        }
+        let preserveWeeklyFrequency = coachPreserveWeeklyFrequencyPatterns.contains {
+            $0.firstMatch(in: rawComment, options: [], range: nsRange(for: rawComment)) != nil
+        }
+        let preserveProgramWorkoutCount = coachPreserveProgramCountPatterns.contains {
+            $0.firstMatch(in: rawComment, options: [], range: nsRange(for: rawComment)) != nil
+        }
+        let statedWeeklyFrequency = coachStatedWeeklyFrequencyPatterns.lazy.compactMap { pattern -> Int? in
+            guard let match = pattern.firstMatch(
+                in: rawComment,
+                options: [],
+                range: nsRange(for: rawComment)
+            ),
+            match.numberOfRanges > 1,
+            let range = Range(match.range(at: 1), in: rawComment) else {
+                return nil
+            }
+
+            return Int(String(rawComment[range]))
+        }.first
+
+        return CoachProgramCommentConstraints(
+            rawComment: rawComment,
+            rollingSplitExecution: rollingSplitExecution,
+            preserveWeeklyFrequency: preserveWeeklyFrequency,
+            preserveProgramWorkoutCount: preserveProgramWorkoutCount,
+            statedWeeklyFrequency: statedWeeklyFrequency
+        )
+    }
+
+    private func splitExecutionInterpretation(
+        for preferredProgram: WorkoutProgram?
+    ) -> CoachSplitExecutionInterpretation {
+        let constraints = programCommentConstraints()
+        let programWorkoutCount = preferredProgram?.workouts.count
+        let statedWeeklyFrequency = constraints.statedWeeklyFrequency ?? profile.weeklyWorkoutTarget
+
+        guard let programWorkoutCount, programWorkoutCount > 0 else {
+            return CoachSplitExecutionInterpretation(
+                mode: .unknown,
+                shouldTreatProgramCountAsMismatch: false,
+                programWorkoutCount: nil,
+                weeklyTarget: profile.weeklyWorkoutTarget,
+                statedWeeklyFrequency: statedWeeklyFrequency
+            )
+        }
+
+        let effectiveWeeklyFrequency = constraints.statedWeeklyFrequency ?? profile.weeklyWorkoutTarget
+        if constraints.rollingSplitExecution {
+            return CoachSplitExecutionInterpretation(
+                mode: .rollingRotation,
+                shouldTreatProgramCountAsMismatch: false,
+                programWorkoutCount: programWorkoutCount,
+                weeklyTarget: profile.weeklyWorkoutTarget,
+                statedWeeklyFrequency: statedWeeklyFrequency
+            )
+        }
+
+        if programWorkoutCount == effectiveWeeklyFrequency {
+            return CoachSplitExecutionInterpretation(
+                mode: .calendarMatched,
+                shouldTreatProgramCountAsMismatch: false,
+                programWorkoutCount: programWorkoutCount,
+                weeklyTarget: profile.weeklyWorkoutTarget,
+                statedWeeklyFrequency: statedWeeklyFrequency
+            )
+        }
+
+        if constraints.preserveWeeklyFrequency || constraints.preserveProgramWorkoutCount {
+            return CoachSplitExecutionInterpretation(
+                mode: .rollingRotation,
+                shouldTreatProgramCountAsMismatch: false,
+                programWorkoutCount: programWorkoutCount,
+                weeklyTarget: profile.weeklyWorkoutTarget,
+                statedWeeklyFrequency: statedWeeklyFrequency
+            )
+        }
+
+        return CoachSplitExecutionInterpretation(
+            mode: .programCountMismatch,
+            shouldTreatProgramCountAsMismatch: true,
+            programWorkoutCount: programWorkoutCount,
+            weeklyTarget: profile.weeklyWorkoutTarget,
+            statedWeeklyFrequency: statedWeeklyFrequency
+        )
     }
 
     private func program(containingWorkoutTemplateID workoutTemplateID: UUID) -> WorkoutProgram? {

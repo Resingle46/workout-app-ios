@@ -5,7 +5,6 @@ import {
 } from "cloudflare:workers";
 import { executeChatJob, type CoachChatWorkflowPayload } from "./chat-job-executor";
 import type { Env } from "./openai";
-import type { CoachChatJobRecord } from "./state";
 
 export class CoachChatJobWorkflow extends WorkflowEntrypoint<
   Env,
@@ -14,7 +13,7 @@ export class CoachChatJobWorkflow extends WorkflowEntrypoint<
   async run(
     event: WorkflowEvent<CoachChatWorkflowPayload>,
     step: WorkflowStep
-  ): Promise<CoachChatJobRecord | null> {
+  ): Promise<{ jobID: string; finalStatus?: string } | null> {
     const workflowInstanceID =
       "instanceId" in event && typeof event.instanceId === "string"
         ? event.instanceId
@@ -35,7 +34,10 @@ export class CoachChatJobWorkflow extends WorkflowEntrypoint<
           totalJobDurationMs: finalJob?.totalJobDurationMs,
         })
       );
-      return finalJob;
+      return {
+        jobID: event.payload.jobID,
+        finalStatus: finalJob?.status,
+      };
     } catch (error) {
       console.error(
         JSON.stringify({

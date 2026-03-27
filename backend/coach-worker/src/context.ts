@@ -17,18 +17,14 @@ import type {
 const RECENT_FINISHED_SESSIONS_LIMIT = 8;
 const RECENT_PR_LIMIT = 3;
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
-const PROMPT_PROGRAM_WORKOUT_LIMIT = 4;
-const PROMPT_PROGRAM_EXERCISE_LIMIT = 4;
-const PROMPT_RECENT_SESSION_LIMIT = 3;
-const PROMPT_RECENT_SESSION_EXERCISE_LIMIT = 3;
-const PROMPT_RECENT_PR_LIMIT = 2;
-const PROMPT_RELATIVE_STRENGTH_LIMIT = 3;
-const PROMPT_RECENT_WEEKLY_ACTIVITY_LIMIT = 2;
-const PROFILE_INSIGHTS_PROGRAM_WORKOUT_LIMIT = 3;
-const PROFILE_INSIGHTS_PROGRAM_EXERCISE_LIMIT = 3;
-const PROFILE_INSIGHTS_RECENT_PR_LIMIT = 2;
-const PROFILE_INSIGHTS_RELATIVE_STRENGTH_LIMIT = 2;
-const PROFILE_INSIGHTS_RECENT_WEEKLY_ACTIVITY_LIMIT = 2;
+const MUSCLE_CATEGORY_NAMES: Readonly<Record<string, string>> = {
+  "A1000000-0000-4000-8000-000000000001": "chest",
+  "A1000000-0000-4000-8000-000000000002": "back",
+  "A1000000-0000-4000-8000-000000000003": "legs",
+  "A1000000-0000-4000-8000-000000000004": "shoulders",
+  "A1000000-0000-4000-8000-000000000005": "arms",
+  "A1000000-0000-4000-8000-000000000006": "core",
+};
 const CANONICAL_LIFT_NAMES: Record<string, string> = {
   benchPress: "Barbell Bench Press",
   backSquat: "Back Squat",
@@ -37,6 +33,14 @@ const CANONICAL_LIFT_NAMES: Record<string, string> = {
 };
 
 type SupportedLocale = "en" | "ru";
+export type CoachContextProfile =
+  | "compact_sync_v2"
+  | "rich_async_v1"
+  | "rich_async_analytics_v1";
+export type CoachMemoryProfile = "compact_v1" | "rich_async_v1";
+
+export const DEFAULT_CONTEXT_VERSION = "2026-03-27.context.v1";
+export const DEFAULT_ANALYTICS_VERSION = "2026-03-27.analytics.v1";
 
 export interface ProgramCommentConstraints {
   rawComment: string;
@@ -46,7 +50,127 @@ export interface ProgramCommentConstraints {
   statedWeeklyFrequency?: number;
 }
 
+export interface CoachSplitExecutionInterpretation {
+  mode: "rolling_rotation" | "calendar_matched" | "program_count_mismatch" | "unknown";
+  shouldTreatProgramCountAsMismatch: boolean;
+  programWorkoutCount?: number;
+  weeklyTarget: number;
+  statedWeeklyFrequency?: number;
+  explanation: string;
+}
+
+export interface CoachMuscleExposureSummary {
+  muscleGroup: string;
+  recentCompletedSets: number;
+  recentSessionsHit: number;
+  plannedExerciseCount: number;
+  lastHitDaysAgo?: number;
+}
+
+export interface CoachDerivedAnalytics {
+  splitExecution: CoachSplitExecutionInterpretation;
+  adherenceSummary: {
+    weeklyTarget: number;
+    observedAverageWorkoutsPerWeek?: number;
+    consistencyGap?: number;
+  };
+  progressionSummary: {
+    recentPersonalRecordCount: number;
+    topRecentPersonalRecordExercise?: string;
+    lastWorkoutDate?: string;
+    completedWorkoutsLast30Days: number;
+  };
+  muscleExposure: CoachMuscleExposureSummary[];
+  supportedClaims: {
+    splitExecution: boolean;
+    programFrequency: boolean;
+    muscleExposure: boolean;
+    laggingCandidates: boolean;
+  };
+}
+
+export interface CoachExecutionMetadata {
+  contextProfile: CoachContextProfile;
+  promptProfile: string;
+  contextVersion: string;
+  analyticsVersion: string;
+  memoryProfile: CoachMemoryProfile;
+  jobDeadlineAt?: string;
+  derivedAnalytics?: CoachDerivedAnalytics;
+}
+
+interface PromptLimitProfile {
+  programWorkoutLimit: number;
+  programExerciseLimit: number;
+  recentSessionLimit: number;
+  recentSessionExerciseLimit: number;
+  recentPrLimit: number;
+  relativeStrengthLimit: number;
+  recentWeeklyActivityLimit: number;
+}
+
+const CHAT_PROMPT_LIMITS: Readonly<Record<CoachContextProfile, PromptLimitProfile>> = {
+  compact_sync_v2: {
+    programWorkoutLimit: 4,
+    programExerciseLimit: 4,
+    recentSessionLimit: 3,
+    recentSessionExerciseLimit: 3,
+    recentPrLimit: 2,
+    relativeStrengthLimit: 3,
+    recentWeeklyActivityLimit: 2,
+  },
+  rich_async_v1: {
+    programWorkoutLimit: 8,
+    programExerciseLimit: 10,
+    recentSessionLimit: 6,
+    recentSessionExerciseLimit: 6,
+    recentPrLimit: 6,
+    relativeStrengthLimit: 6,
+    recentWeeklyActivityLimit: 4,
+  },
+  rich_async_analytics_v1: {
+    programWorkoutLimit: 8,
+    programExerciseLimit: 12,
+    recentSessionLimit: 8,
+    recentSessionExerciseLimit: 8,
+    recentPrLimit: 8,
+    relativeStrengthLimit: 6,
+    recentWeeklyActivityLimit: 4,
+  },
+};
+
+const PROFILE_PROMPT_LIMITS: Readonly<Record<CoachContextProfile, PromptLimitProfile>> = {
+  compact_sync_v2: {
+    programWorkoutLimit: 3,
+    programExerciseLimit: 3,
+    recentSessionLimit: 0,
+    recentSessionExerciseLimit: 0,
+    recentPrLimit: 2,
+    relativeStrengthLimit: 2,
+    recentWeeklyActivityLimit: 2,
+  },
+  rich_async_v1: {
+    programWorkoutLimit: 6,
+    programExerciseLimit: 8,
+    recentSessionLimit: 4,
+    recentSessionExerciseLimit: 4,
+    recentPrLimit: 6,
+    relativeStrengthLimit: 4,
+    recentWeeklyActivityLimit: 4,
+  },
+  rich_async_analytics_v1: {
+    programWorkoutLimit: 8,
+    programExerciseLimit: 10,
+    recentSessionLimit: 6,
+    recentSessionExerciseLimit: 6,
+    recentPrLimit: 8,
+    relativeStrengthLimit: 6,
+    recentWeeklyActivityLimit: 4,
+  },
+};
+
 export interface InferencePromptContext {
+  contextProfile: CoachContextProfile;
   localeIdentifier: string;
   profile: CompactCoachSnapshot["profile"];
   userConstraints: ProgramCommentConstraints;
@@ -74,6 +198,8 @@ export interface InferencePromptContext {
   };
   analytics: {
     progress30Days: CompactCoachSnapshot["analytics"]["progress30Days"];
+    training?: CompactCoachSnapshot["analytics"]["training"];
+    compatibility?: CompactCoachSnapshot["analytics"]["compatibility"];
     consistency: {
       workoutsThisWeek: number;
       weeklyTarget: number;
@@ -89,6 +215,7 @@ export interface InferencePromptContext {
       delta: number;
     }>;
     relativeStrength: CompactCoachSnapshot["analytics"]["relativeStrength"];
+    derived?: CoachDerivedAnalytics;
   };
   recentFinishedSessions: Array<{
     title: string;
@@ -105,7 +232,11 @@ export interface InferencePromptContext {
 }
 
 export interface ProfileInsightsPromptContext {
+  contextProfile: CoachContextProfile;
+  userConstraints: ProgramCommentConstraints;
   goal: CompactCoachSnapshot["analytics"]["goal"];
+  training?: CompactCoachSnapshot["analytics"]["training"];
+  compatibility?: CompactCoachSnapshot["analytics"]["compatibility"];
   consistency: {
     workoutsThisWeek: number;
     weeklyTarget: number;
@@ -124,6 +255,19 @@ export interface ProfileInsightsPromptContext {
     bestLoad?: number;
     relativeToBodyWeight?: number;
   }>;
+  recentFinishedSessions: Array<{
+    title: string;
+    startedAt: string;
+    completedSetsCount: number;
+    totalVolume: number;
+    exercises: Array<{
+      exerciseName: string;
+      completedSetsCount: number;
+      bestWeight?: number;
+      averageReps?: number;
+    }>;
+  }>;
+  derived?: CoachDerivedAnalytics;
   preferredProgram?: {
     title: string;
     workoutCount: number;
@@ -290,14 +434,277 @@ export function extractProgramCommentConstraints(
   };
 }
 
-export function buildInferencePromptContext(
+export function resolveSplitExecutionInterpretation(input: {
+  weeklyTarget: number;
+  programWorkoutCount?: number;
+  constraints: ProgramCommentConstraints;
+}): CoachSplitExecutionInterpretation {
+  const { weeklyTarget, programWorkoutCount, constraints } = input;
+  const statedWeeklyFrequency =
+    constraints.statedWeeklyFrequency ?? weeklyTarget ?? undefined;
+
+  if (!programWorkoutCount || programWorkoutCount <= 0) {
+    return {
+      mode: "unknown",
+      shouldTreatProgramCountAsMismatch: false,
+      programWorkoutCount,
+      weeklyTarget,
+      statedWeeklyFrequency,
+      explanation: "No selected program was available for split interpretation.",
+    };
+  }
+
+  const effectiveWeeklyFrequency =
+    constraints.statedWeeklyFrequency ?? weeklyTarget;
+
+  if (constraints.rollingSplitExecution) {
+    return {
+      mode: "rolling_rotation",
+      shouldTreatProgramCountAsMismatch: false,
+      programWorkoutCount,
+      weeklyTarget,
+      statedWeeklyFrequency,
+      explanation:
+        "The user explicitly says they rotate through templates in sequence instead of matching template count to calendar-week sessions.",
+    };
+  }
+
+  if (programWorkoutCount === effectiveWeeklyFrequency) {
+    return {
+      mode: "calendar_matched",
+      shouldTreatProgramCountAsMismatch: false,
+      programWorkoutCount,
+      weeklyTarget,
+      statedWeeklyFrequency,
+      explanation:
+        "Program template count matches the stated/effective weekly training frequency.",
+    };
+  }
+
+  return {
+    mode: "program_count_mismatch",
+    shouldTreatProgramCountAsMismatch: true,
+    programWorkoutCount,
+    weeklyTarget,
+    statedWeeklyFrequency,
+    explanation:
+      "Program template count differs from the effective weekly training frequency and no rolling-rotation note was detected.",
+  };
+}
+
+export function buildDerivedCoachAnalyticsFromCompactSnapshot(
   snapshot: CompactCoachSnapshot
+): CoachDerivedAnalytics {
+  const constraints = extractProgramCommentConstraints(
+    snapshot.coachAnalysisSettings.programComment
+  );
+  const splitExecution = resolveSplitExecutionInterpretation({
+    weeklyTarget: snapshot.profile.weeklyWorkoutTarget,
+    programWorkoutCount: snapshot.preferredProgram?.workoutCount,
+    constraints,
+  });
+  const observedAverage = observedAverageWorkoutsPerWeek(
+    snapshot.analytics.consistency
+  );
+
+  return {
+    splitExecution,
+    adherenceSummary: {
+      weeklyTarget: snapshot.analytics.consistency.weeklyTarget,
+      observedAverageWorkoutsPerWeek: observedAverage,
+      consistencyGap:
+        observedAverage !== undefined
+          ? Math.max(snapshot.analytics.consistency.weeklyTarget - observedAverage, 0)
+          : undefined,
+    },
+    progressionSummary: {
+      recentPersonalRecordCount: snapshot.analytics.recentPersonalRecords.length,
+      topRecentPersonalRecordExercise:
+        snapshot.analytics.recentPersonalRecords[0]?.exerciseName,
+      lastWorkoutDate: snapshot.analytics.progress30Days.lastWorkoutDate,
+      completedWorkoutsLast30Days:
+        snapshot.analytics.progress30Days.totalFinishedWorkouts,
+    },
+    muscleExposure: [],
+    supportedClaims: {
+      splitExecution: true,
+      programFrequency: true,
+      muscleExposure: false,
+      laggingCandidates: false,
+    },
+  };
+}
+
+export function buildDerivedCoachAnalyticsFromSnapshot(input: {
+  snapshot: AppSnapshotPayload;
+  preferredProgram?: WorkoutProgramPayload;
+  profile: CoachProfile;
+  consistencySummary: ConsistencySummary;
+  coachAnalysisSettings?: CoachAnalysisSettingsPayload;
+  finishedSessions: WorkoutSessionPayload[];
+}): CoachDerivedAnalytics {
+  const constraints = extractProgramCommentConstraints(
+    input.coachAnalysisSettings?.programComment
+  );
+  const splitExecution = resolveSplitExecutionInterpretation({
+    weeklyTarget: input.profile.weeklyWorkoutTarget,
+    programWorkoutCount: input.preferredProgram?.workouts.length,
+    constraints,
+  });
+  const exerciseByID = new Map(
+    input.snapshot.exercises.map((exercise) => [exercise.id, exercise] as const)
+  );
+  const recentWindow = input.finishedSessions.slice(0, RECENT_FINISHED_SESSIONS_LIMIT);
+  const exposureByGroup = new Map<
+    string,
+    {
+      recentCompletedSets: number;
+      recentSessionsHit: number;
+      plannedExerciseCount: number;
+      lastHitAt?: number;
+    }
+  >();
+
+  for (const session of recentWindow) {
+    const groupsHitThisSession = new Set<string>();
+
+    for (const exerciseLog of session.exercises) {
+      const exercise = exerciseByID.get(exerciseLog.exerciseID);
+      const muscleGroup = exercise
+        ? MUSCLE_CATEGORY_NAMES[exercise.categoryID]
+        : undefined;
+      if (!muscleGroup) {
+        continue;
+      }
+
+      const completedSets = exerciseLog.sets.filter((set) => Boolean(set.completedAt));
+      if (completedSets.length === 0) {
+        continue;
+      }
+
+      const next = exposureByGroup.get(muscleGroup) ?? {
+        recentCompletedSets: 0,
+        recentSessionsHit: 0,
+        plannedExerciseCount: 0,
+      };
+      next.recentCompletedSets += completedSets.length;
+
+      if (!groupsHitThisSession.has(muscleGroup)) {
+        next.recentSessionsHit += 1;
+        groupsHitThisSession.add(muscleGroup);
+      }
+
+      const latestCompletedAt = completedSets
+        .map((set) => dateValue(set.completedAt as string))
+        .sort((left, right) => right - left)[0];
+      if (
+        latestCompletedAt !== undefined &&
+        (next.lastHitAt === undefined || latestCompletedAt > next.lastHitAt)
+      ) {
+        next.lastHitAt = latestCompletedAt;
+      }
+
+      exposureByGroup.set(muscleGroup, next);
+    }
+  }
+
+  for (const workout of input.preferredProgram?.workouts ?? []) {
+    for (const templateExercise of workout.exercises) {
+      const exercise = exerciseByID.get(templateExercise.exerciseID);
+      const muscleGroup = exercise
+        ? MUSCLE_CATEGORY_NAMES[exercise.categoryID]
+        : undefined;
+      if (!muscleGroup) {
+        continue;
+      }
+
+      const next = exposureByGroup.get(muscleGroup) ?? {
+        recentCompletedSets: 0,
+        recentSessionsHit: 0,
+        plannedExerciseCount: 0,
+      };
+      next.plannedExerciseCount += 1;
+      exposureByGroup.set(muscleGroup, next);
+    }
+  }
+
+  const observedAverage = observedAverageWorkoutsPerWeek(input.consistencySummary);
+  const muscleExposure = Array.from(exposureByGroup.entries())
+    .map(([muscleGroup, summary]) => ({
+      muscleGroup,
+      recentCompletedSets: summary.recentCompletedSets,
+      recentSessionsHit: summary.recentSessionsHit,
+      plannedExerciseCount: summary.plannedExerciseCount,
+      lastHitDaysAgo:
+        summary.lastHitAt !== undefined
+          ? Math.max(Math.round((Date.now() - summary.lastHitAt) / (24 * 60 * 60 * 1000)), 0)
+          : undefined,
+    }))
+    .sort((left, right) => {
+      if (left.recentCompletedSets === right.recentCompletedSets) {
+        return left.muscleGroup.localeCompare(right.muscleGroup);
+      }
+      return right.recentCompletedSets - left.recentCompletedSets;
+    });
+
+  return {
+    splitExecution,
+    adherenceSummary: {
+      weeklyTarget: input.consistencySummary.weeklyTarget,
+      observedAverageWorkoutsPerWeek: observedAverage,
+      consistencyGap:
+        observedAverage !== undefined
+          ? Math.max(input.consistencySummary.weeklyTarget - observedAverage, 0)
+          : undefined,
+    },
+    progressionSummary: {
+      recentPersonalRecordCount: recentPersonalRecords({
+        exercises: input.snapshot.exercises,
+        finishedSessions: input.finishedSessions,
+      }).length,
+      topRecentPersonalRecordExercise: recentPersonalRecords({
+        exercises: input.snapshot.exercises,
+        finishedSessions: input.finishedSessions,
+      })[0]?.exerciseName,
+      lastWorkoutDate: input.finishedSessions[0]
+        ? finishedSessionDate(input.finishedSessions[0])
+        : undefined,
+      completedWorkoutsLast30Days: profileProgressSummary(input.finishedSessions)
+        .totalFinishedWorkouts,
+    },
+    muscleExposure,
+    supportedClaims: {
+      splitExecution: true,
+      programFrequency: true,
+      muscleExposure: muscleExposure.length > 0,
+      laggingCandidates: false,
+    },
+  };
+}
+
+function contextPromptLimits(profile: CoachContextProfile): PromptLimitProfile {
+  return CHAT_PROMPT_LIMITS[profile];
+}
+
+function profilePromptLimits(profile: CoachContextProfile): PromptLimitProfile {
+  return PROFILE_PROMPT_LIMITS[profile];
+}
+
+export function buildInferencePromptContext(
+  snapshot: CompactCoachSnapshot,
+  options: {
+    contextProfile?: CoachContextProfile;
+    derivedAnalytics?: CoachDerivedAnalytics;
+  } = {}
 ): InferencePromptContext {
+  const contextProfile = options.contextProfile ?? "compact_sync_v2";
+  const limits = contextPromptLimits(contextProfile);
   const userConstraints = extractProgramCommentConstraints(
     snapshot.coachAnalysisSettings.programComment
   );
 
   return {
+    contextProfile,
     localeIdentifier: snapshot.localeIdentifier,
     profile: snapshot.profile,
     userConstraints,
@@ -306,13 +713,13 @@ export function buildInferencePromptContext(
           title: snapshot.preferredProgram.title,
           workoutCount: snapshot.preferredProgram.workoutCount,
           workouts: snapshot.preferredProgram.workouts
-            .slice(0, PROMPT_PROGRAM_WORKOUT_LIMIT)
+            .slice(0, limits.programWorkoutLimit)
             .map((workout) => ({
               title: workout.title,
               focus: workout.focus,
               exerciseCount: workout.exerciseCount,
               exercises: workout.exercises
-                .slice(0, PROMPT_PROGRAM_EXERCISE_LIMIT)
+                .slice(0, limits.programExerciseLimit)
                 .map((exercise) => ({
                   exerciseName: exercise.exerciseName,
                   setsCount: exercise.setsCount,
@@ -333,6 +740,14 @@ export function buildInferencePromptContext(
       : undefined,
     analytics: {
       progress30Days: snapshot.analytics.progress30Days,
+      training:
+        contextProfile === "compact_sync_v2"
+          ? undefined
+          : snapshot.analytics.training,
+      compatibility:
+        contextProfile === "compact_sync_v2"
+          ? undefined
+          : snapshot.analytics.compatibility,
       consistency: {
         workoutsThisWeek: snapshot.analytics.consistency.workoutsThisWeek,
         weeklyTarget: snapshot.analytics.consistency.weeklyTarget,
@@ -342,11 +757,11 @@ export function buildInferencePromptContext(
         ),
         recentWeeklyActivity:
           snapshot.analytics.consistency.recentWeeklyActivity.slice(
-            -PROMPT_RECENT_WEEKLY_ACTIVITY_LIMIT
+            -limits.recentWeeklyActivityLimit
           ),
       },
       recentPersonalRecords: snapshot.analytics.recentPersonalRecords
-        .slice(0, PROMPT_RECENT_PR_LIMIT)
+        .slice(0, limits.recentPrLimit)
         .map((record) => ({
           exerciseName: record.exerciseName,
           achievedAt: record.achievedAt,
@@ -356,18 +771,19 @@ export function buildInferencePromptContext(
         })),
       relativeStrength: snapshot.analytics.relativeStrength.slice(
         0,
-        PROMPT_RELATIVE_STRENGTH_LIMIT
+        limits.relativeStrengthLimit
       ),
+      derived: options.derivedAnalytics,
     },
     recentFinishedSessions: snapshot.recentFinishedSessions
-      .slice(0, PROMPT_RECENT_SESSION_LIMIT)
+      .slice(0, limits.recentSessionLimit)
       .map((session) => ({
         title: session.title,
         startedAt: session.startedAt,
         completedSetsCount: session.completedSetsCount,
         totalVolume: session.totalVolume,
         exercises: session.exercises
-          .slice(0, PROMPT_RECENT_SESSION_EXERCISE_LIMIT)
+          .slice(0, limits.recentSessionExerciseLimit)
           .map((exercise) => ({
             exerciseName: exercise.exerciseName,
             completedSetsCount: exercise.completedSetsCount,
@@ -379,10 +795,30 @@ export function buildInferencePromptContext(
 }
 
 export function buildProfileInsightsPromptContext(
-  snapshot: CompactCoachSnapshot
+  snapshot: CompactCoachSnapshot,
+  options: {
+    contextProfile?: CoachContextProfile;
+    derivedAnalytics?: CoachDerivedAnalytics;
+  } = {}
 ): ProfileInsightsPromptContext {
+  const contextProfile = options.contextProfile ?? "compact_sync_v2";
+  const limits = profilePromptLimits(contextProfile);
+  const userConstraints = extractProgramCommentConstraints(
+    snapshot.coachAnalysisSettings.programComment
+  );
+
   return {
+    contextProfile,
+    userConstraints,
     goal: snapshot.analytics.goal,
+    training:
+      contextProfile === "compact_sync_v2"
+        ? undefined
+        : snapshot.analytics.training,
+    compatibility:
+      contextProfile === "compact_sync_v2"
+        ? undefined
+        : snapshot.analytics.compatibility,
     consistency: {
       workoutsThisWeek: snapshot.analytics.consistency.workoutsThisWeek,
       weeklyTarget: snapshot.analytics.consistency.weeklyTarget,
@@ -392,12 +828,12 @@ export function buildProfileInsightsPromptContext(
       ),
       recentWeeklyActivity:
         snapshot.analytics.consistency.recentWeeklyActivity.slice(
-          -PROFILE_INSIGHTS_RECENT_WEEKLY_ACTIVITY_LIMIT
+          -limits.recentWeeklyActivityLimit
         ),
     },
     progress30Days: snapshot.analytics.progress30Days,
     recentPersonalRecords: snapshot.analytics.recentPersonalRecords
-      .slice(0, PROFILE_INSIGHTS_RECENT_PR_LIMIT)
+      .slice(0, limits.recentPrLimit)
       .map((record) => ({
         exerciseName: record.exerciseName,
         achievedAt: record.achievedAt,
@@ -405,20 +841,37 @@ export function buildProfileInsightsPromptContext(
       })),
     relativeStrength: snapshot.analytics.relativeStrength.slice(
       0,
-      PROFILE_INSIGHTS_RELATIVE_STRENGTH_LIMIT
+      limits.relativeStrengthLimit
     ),
+    recentFinishedSessions: snapshot.recentFinishedSessions
+      .slice(0, limits.recentSessionLimit)
+      .map((session) => ({
+        title: session.title,
+        startedAt: session.startedAt,
+        completedSetsCount: session.completedSetsCount,
+        totalVolume: session.totalVolume,
+        exercises: session.exercises
+          .slice(0, limits.recentSessionExerciseLimit)
+          .map((exercise) => ({
+            exerciseName: exercise.exerciseName,
+            completedSetsCount: exercise.completedSetsCount,
+            bestWeight: exercise.bestWeight,
+            averageReps: exercise.averageReps,
+          })),
+      })),
+    derived: options.derivedAnalytics,
     preferredProgram: snapshot.preferredProgram
       ? {
           title: snapshot.preferredProgram.title,
           workoutCount: snapshot.preferredProgram.workoutCount,
           workouts: snapshot.preferredProgram.workouts
-            .slice(0, PROFILE_INSIGHTS_PROGRAM_WORKOUT_LIMIT)
+            .slice(0, limits.programWorkoutLimit)
             .map((workout) => ({
               title: workout.title,
               focus: workout.focus,
               exerciseCount: workout.exerciseCount,
               exerciseNames: workout.exercises
-                .slice(0, PROFILE_INSIGHTS_PROGRAM_EXERCISE_LIMIT)
+                .slice(0, limits.programExerciseLimit)
                 .map((exercise) => exercise.exerciseName),
             })),
         }
@@ -519,6 +972,7 @@ export function buildCoachContextFromSnapshot(input: {
   const trainingSummary = profileTrainingRecommendationSummary({
     profile: snapshot.profile,
     preferredProgram,
+    coachAnalysisSettings: snapshot.coachAnalysisSettings,
   });
   const consistencySummary = profileConsistencySummary({
     finishedSessions,
@@ -529,6 +983,7 @@ export function buildCoachContextFromSnapshot(input: {
     goalSummary,
     preferredProgram,
     consistencySummary,
+    coachAnalysisSettings: snapshot.coachAnalysisSettings,
   });
   const personalRecords = recentPersonalRecords({
     exercises: snapshot.exercises,
@@ -538,6 +993,14 @@ export function buildCoachContextFromSnapshot(input: {
     exercises: snapshot.exercises,
     finishedSessions,
     currentWeight: snapshot.profile.weight,
+  });
+  const derivedAnalytics = buildDerivedCoachAnalyticsFromSnapshot({
+    snapshot,
+    preferredProgram,
+    profile: snapshot.profile,
+    consistencySummary,
+    coachAnalysisSettings: snapshot.coachAnalysisSettings,
+    finishedSessions,
   });
 
   return {
@@ -557,6 +1020,7 @@ export function buildCoachContextFromSnapshot(input: {
       consistency: consistencySummary,
       recentPersonalRecords: personalRecords,
       relativeStrength,
+      derivedAnalytics,
     },
     recentFinishedSessions: finishedSessions
       .slice(0, RECENT_FINISHED_SESSIONS_LIMIT)
@@ -830,12 +1294,23 @@ function profileGoalSummary(profile: CoachProfile): GoalSummary {
 function profileTrainingRecommendationSummary(input: {
   profile: CoachProfile;
   preferredProgram?: WorkoutProgramPayload;
+  coachAnalysisSettings?: CoachAnalysisSettingsPayload;
 }): TrainingRecommendationSummary {
   const isGenericFallback =
     input.profile.primaryGoal === "not_set" ||
     input.profile.experienceLevel === "not_set";
+  const constraints = extractProgramCommentConstraints(
+    input.coachAnalysisSettings?.programComment
+  );
+  const splitExecution = resolveSplitExecutionInterpretation({
+    weeklyTarget: input.profile.weeklyWorkoutTarget,
+    programWorkoutCount: input.preferredProgram?.workouts.length,
+    constraints,
+  });
   const splitWorkoutDays =
-    input.preferredProgram && input.preferredProgram.workouts.length > 0
+    input.preferredProgram &&
+    input.preferredProgram.workouts.length > 0 &&
+    splitExecution.mode === "calendar_matched"
       ? input.preferredProgram.workouts.length
       : undefined;
   const split = splitWorkoutDays
@@ -955,10 +1430,19 @@ function profileGoalCompatibilitySummary(input: {
   goalSummary: GoalSummary;
   preferredProgram?: WorkoutProgramPayload;
   consistencySummary: ConsistencySummary;
+  coachAnalysisSettings?: CoachAnalysisSettingsPayload;
 }): CompactCoachSnapshot["analytics"]["compatibility"] {
   const workoutAverage = recentAverageWorkoutsPerWeek(input.consistencySummary);
   const usesObservedHistory = workoutAverage.source === "history";
   const issues: CompatibilityIssue[] = [];
+  const constraints = extractProgramCommentConstraints(
+    input.coachAnalysisSettings?.programComment
+  );
+  const splitExecution = resolveSplitExecutionInterpretation({
+    weeklyTarget: input.profile.weeklyWorkoutTarget,
+    programWorkoutCount: input.preferredProgram?.workouts.length,
+    constraints,
+  });
 
   if (input.profile.targetBodyWeight !== undefined) {
     const targetBodyWeight = input.profile.targetBodyWeight;
@@ -1012,7 +1496,7 @@ function profileGoalCompatibilitySummary(input: {
   if (
     programWorkoutCount &&
     programWorkoutCount > 0 &&
-    programWorkoutCount !== input.profile.weeklyWorkoutTarget
+    splitExecution.shouldTreatProgramCountAsMismatch
   ) {
     issues.push({
       kind: "program_frequency_mismatch",

@@ -4,7 +4,8 @@ import Observation
 import OSLog
 
 private let workoutSummaryDefaultPrewarmDebounceDuration: Duration = .milliseconds(300)
-private let workoutSummaryDefaultMaxPollingDuration: TimeInterval = 90
+private let workoutSummaryDefaultMaxPollingDuration: TimeInterval = 180
+private let workoutSummaryDeferredResumeDelay: Duration = .seconds(20)
 
 private func workoutSummaryDefaultPollIntervalMs(_ attempt: Int) -> Int {
     switch attempt {
@@ -124,6 +125,7 @@ struct WorkoutSummaryJobCreateResponse: Codable, Hashable, Sendable {
     var createdAt: Date
     var pollAfterMs: Int
     var reusedExistingJob: Bool
+    var metadata: CoachJobMetadata?
 }
 
 struct WorkoutSummaryJobStatusResponse: Codable, Hashable, Sendable {
@@ -136,6 +138,7 @@ struct WorkoutSummaryJobStatusResponse: Codable, Hashable, Sendable {
     var completedAt: Date?
     var result: WorkoutSummaryJobResult?
     var error: CoachChatJobError?
+    var metadata: CoachJobMetadata?
 }
 
 enum WorkoutSummaryCardState: Hashable, Sendable {
@@ -327,7 +330,7 @@ enum WorkoutSummaryRequestBuilder {
                         exerciseID: exerciseID
                     )
                 }
-                .prefix(3)
+                .prefix(6)
 
             return WorkoutSummaryExerciseHistoryPayload(
                 exerciseID: exerciseID,
@@ -440,6 +443,7 @@ private struct WorkoutSummarySessionState: Hashable, Sendable {
     var reusedPreparedResult = false
     var finalRegenerated = false
     var finalRequestedAt: Date?
+    var awaitingResume = false
     var lastTouchedAt: Date = .now
 }
 
@@ -462,6 +466,7 @@ final class WorkoutSummaryStore {
     @ObservationIgnored private var prewarmTasks: [UUID: Task<Void, Never>] = [:]
     @ObservationIgnored private var pollTasks: [UUID: Task<Void, Never>] = [:]
     @ObservationIgnored private var pollTaskJobIDs: [UUID: String] = [:]
+    @ObservationIgnored private var deferredResumeTasks: [UUID: Task<Void, Never>] = [:]
 
     init(
         client: any CoachAPIClient,
@@ -512,6 +517,7 @@ final class WorkoutSummaryStore {
             return .ready(result)
         }
         if state.requestMode == .final,
+           !state.awaitingResume,
            state.error != nil {
             return .unavailable
         }
@@ -598,6 +604,7 @@ final class WorkoutSummaryStore {
         using appStore: AppStore
     ) async {
         cancelPrewarmTask(for: session.id)
+        cancelDeferredResumeTask(for: session.id)
 
         guard configuration.canUseRemoteCoach else {
             return
@@ -633,6 +640,7 @@ final class WorkoutSummaryStore {
                 nextState.activeJobFingerprint = nil
                 nextState.error = nil
                 nextState.finalRequestedAt = nil
+                nextState.awaitingResume = false
                 sessionStates[session.id] = nextState
                 logReady(
                     event: "existing_result_reused",
@@ -662,8 +670,10 @@ final class WorkoutSummaryStore {
             nextState.activeJobID = nil
             nextState.activeJobFingerprint = preparedRequest.fingerprint
             nextState.error = nil
+            nextState.awaitingResume = false
             sessionStates[session.id] = nextState
             cancelPollTask(for: session.id)
+            cancelDeferredResumeTask(for: session.id)
 
             if nextState.finalRegenerated {
                 logger.notice(
@@ -685,6 +695,7 @@ final class WorkoutSummaryStore {
     ) async {
         cancelPrewarmTask(for: session.id)
         cancelPollTask(for: session.id)
+        cancelDeferredResumeTask(for: session.id)
 
         guard configuration.canUseRemoteCoach else {
             return
@@ -704,6 +715,7 @@ final class WorkoutSummaryStore {
             state.activeJobID = nil
             state.activeJobFingerprint = preparedRequest.fingerprint
             state.error = nil
+            state.awaitingResume = false
             state.finalRequestedAt = .now
             state.lastTouchedAt = .now
             sessionStates[session.id] = state
@@ -761,8 +773,10 @@ final class WorkoutSummaryStore {
             nextState.activeJobFingerprint = response.fingerprint
             nextState.status = response.status
             nextState.error = nil
+            nextState.awaitingResume = false
             nextState.lastTouchedAt = .now
             sessionStates[sessionID] = nextState
+            cancelDeferredResumeTask(for: sessionID)
 
             if isTerminal(response.status) {
                 await fetchJobStatusNow(
@@ -796,6 +810,8 @@ final class WorkoutSummaryStore {
         if pollTasks[sessionID] != nil {
             return
         }
+
+        cancelDeferredResumeTask(for: sessionID)
 
         do {
             let response = try await client.getWorkoutSummaryJob(
@@ -866,6 +882,7 @@ final class WorkoutSummaryStore {
         fingerprint: String,
         initialDelayMs: Int
     ) {
+        cancelDeferredResumeTask(for: sessionID)
         cancelPollTask(for: sessionID)
         pollTaskJobIDs[sessionID] = jobID
         pollTasks[sessionID] = Task { [sessionID, jobID, fingerprint, initialDelayMs] in
@@ -971,6 +988,7 @@ final class WorkoutSummaryStore {
 
         state.lastTouchedAt = .now
         state.status = response.status
+        state.awaitingResume = false
 
         if isPending(response.status) {
             sessionStates[response.sessionID] = state
@@ -979,6 +997,7 @@ final class WorkoutSummaryStore {
 
         state.activeJobID = nil
         state.activeJobFingerprint = nil
+        state.awaitingResume = false
 
         if response.status == .completed,
            let result = response.result {
@@ -987,6 +1006,7 @@ final class WorkoutSummaryStore {
             let waitStartedAt = state.finalRequestedAt
             state.finalRequestedAt = nil
             sessionStates[response.sessionID] = state
+            cancelDeferredResumeTask(for: response.sessionID)
             logReady(
                 event: "summary_ready",
                 sessionID: response.sessionID,
@@ -1002,6 +1022,7 @@ final class WorkoutSummaryStore {
             )
             state.finalRequestedAt = nil
             sessionStates[response.sessionID] = state
+            cancelDeferredResumeTask(for: response.sessionID)
             logger.error(
                 "summary_failed session=\(response.sessionID.uuidString, privacy: .public) fingerprint=\(response.fingerprint, privacy: .public) status=\(response.status.rawValue, privacy: .public) error=\(state.error?.message ?? "", privacy: .public)"
             )
@@ -1026,8 +1047,10 @@ final class WorkoutSummaryStore {
         state.activeJobFingerprint = nil
         state.error = WorkoutSummaryStore.makeJobError(from: error)
         state.finalRequestedAt = nil
+        state.awaitingResume = false
         state.lastTouchedAt = .now
         sessionStates[sessionID] = state
+        cancelDeferredResumeTask(for: sessionID)
 
         logger.error(
             "summary_failed session=\(sessionID.uuidString, privacy: .public) fingerprint=\(fingerprint, privacy: .public) error=\(state.error?.message ?? error.localizedDescription, privacy: .public)"
@@ -1047,22 +1070,19 @@ final class WorkoutSummaryStore {
             return
         }
 
-        state.status = nil
-        state.activeJobID = nil
-        state.activeJobFingerprint = nil
-        state.error = CoachChatJobError(
-            code: "workout_summary_polling_timed_out",
-            message: workoutSummaryLocalizedString("workout_summary.unavailable_message"),
-            retryable: true
-        )
-        state.finalRequestedAt = nil
+        state.awaitingResume = true
+        state.error = nil
         state.lastTouchedAt = .now
         sessionStates[sessionID] = state
 
-        logger.error(
-            "summary_polling_timed_out session=\(sessionID.uuidString, privacy: .public) fingerprint=\(fingerprint, privacy: .public) jobID=\(jobID, privacy: .public)"
+        logger.notice(
+            "summary_polling_suspended session=\(sessionID.uuidString, privacy: .public) fingerprint=\(fingerprint, privacy: .public) jobID=\(jobID, privacy: .public)"
         )
-        purgeSessionStates()
+        scheduleDeferredResume(
+            sessionID: sessionID,
+            jobID: jobID,
+            fingerprint: fingerprint
+        )
     }
 
     private func logReady(
@@ -1108,6 +1128,11 @@ final class WorkoutSummaryStore {
         pollTaskJobIDs[sessionID] = nil
     }
 
+    private func cancelDeferredResumeTask(for sessionID: UUID) {
+        deferredResumeTasks[sessionID]?.cancel()
+        deferredResumeTasks[sessionID] = nil
+    }
+
     private func clearPollTaskIfNeeded(sessionID: UUID, jobID: String) {
         if pollTaskJobIDs[sessionID] == jobID {
             pollTasks[sessionID] = nil
@@ -1122,9 +1147,13 @@ final class WorkoutSummaryStore {
         for task in pollTasks.values {
             task.cancel()
         }
+        for task in deferredResumeTasks.values {
+            task.cancel()
+        }
         prewarmTasks.removeAll()
         pollTasks.removeAll()
         pollTaskJobIDs.removeAll()
+        deferredResumeTasks.removeAll()
     }
 
     private func purgeSessionStates() {
@@ -1140,6 +1169,7 @@ final class WorkoutSummaryStore {
         for sessionID in removableSessionIDs {
             cancelPrewarmTask(for: sessionID)
             cancelPollTask(for: sessionID)
+            cancelDeferredResumeTask(for: sessionID)
             sessionStates.removeValue(forKey: sessionID)
         }
     }
@@ -1205,6 +1235,42 @@ final class WorkoutSummaryStore {
             message: message,
             retryable: retryable
         )
+    }
+
+    private func scheduleDeferredResume(
+        sessionID: UUID,
+        jobID: String,
+        fingerprint: String
+    ) {
+        cancelDeferredResumeTask(for: sessionID)
+        deferredResumeTasks[sessionID] = Task { [weak self] in
+            do {
+                try await Task.sleep(for: workoutSummaryDeferredResumeDelay)
+            } catch {
+                return
+            }
+
+            guard let self else {
+                return
+            }
+
+            guard let state = sessionStates[sessionID],
+                  state.awaitingResume,
+                  state.activeJobID == jobID,
+                  state.activeJobFingerprint == fingerprint,
+                  isPending(state.status),
+                  pollTasks[sessionID] == nil else {
+                cancelDeferredResumeTask(for: sessionID)
+                return
+            }
+
+            cancelDeferredResumeTask(for: sessionID)
+            await inspectOrResumeJob(
+                sessionID: sessionID,
+                jobID: jobID,
+                fingerprint: fingerprint
+            )
+        }
     }
 }
 

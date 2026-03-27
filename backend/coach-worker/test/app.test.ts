@@ -15,7 +15,10 @@ import {
   type CoachInferenceService,
   type Env,
 } from "../src/openai";
-import { InMemoryCoachStateRepository } from "../src/state";
+import {
+  InMemoryCoachStateRepository,
+  storageKeyFromMetadata,
+} from "../src/state";
 import type {
   AppSnapshotPayload,
   BackupUploadRequest,
@@ -437,12 +440,22 @@ describe("coach worker app", () => {
       installID: upload.installID,
       capabilityScope: "draft_changes",
     });
-    await repository.storeInsightsCache(upload.installID, context.contextHash, {
+    await repository.storeInsightsCache(
+      upload.installID,
+      storageKeyFromMetadata(context.contextHash, {
+        contextProfile: "compact_sync_v2",
+        contextVersion: context.contextVersion,
+        analyticsVersion: context.analyticsVersion,
+        promptProfile: "profile_compact_context_v2",
+        memoryProfile: "compact_v1",
+      }, "test.v1", DEFAULT_AI_MODEL),
+      {
       summary: "Cached fallback summary",
       recommendations: ["Cached fallback recommendation"],
       generationStatus: "fallback",
       insightSource: "fallback",
-    });
+      }
+    );
 
     const response = await app.fetch(
       authedRequest("https://coach.example.workers.dev/v1/coach/profile-insights", {
@@ -506,12 +519,22 @@ describe("coach worker app", () => {
       installID: upload.installID,
       capabilityScope: "draft_changes",
     });
-    await repository.storeInsightsCache(upload.installID, context.contextHash, {
+    await repository.storeInsightsCache(
+      upload.installID,
+      storageKeyFromMetadata(context.contextHash, {
+        contextProfile: "compact_sync_v2",
+        contextVersion: context.contextVersion,
+        analyticsVersion: context.analyticsVersion,
+        promptProfile: "profile_compact_context_v2",
+        memoryProfile: "compact_v1",
+      }, "test.v1", DEFAULT_AI_MODEL),
+      {
       summary: "Cached remote summary",
       recommendations: ["Cached remote recommendation"],
       generationStatus: "model",
       insightSource: "fresh_model",
-    });
+      }
+    );
 
     const response = await app.fetch(
       authedRequest("https://coach.example.workers.dev/v1/coach/profile-insights", {
@@ -575,12 +598,22 @@ describe("coach worker app", () => {
       installID: upload.installID,
       capabilityScope: "draft_changes",
     });
-    await repository.storeInsightsCache(upload.installID, context.contextHash, {
+    await repository.storeInsightsCache(
+      upload.installID,
+      storageKeyFromMetadata(context.contextHash, {
+        contextProfile: "compact_sync_v2",
+        contextVersion: context.contextVersion,
+        analyticsVersion: context.analyticsVersion,
+        promptProfile: "profile_compact_context_v2",
+        memoryProfile: "compact_v1",
+      }, "test.v1", DEFAULT_AI_MODEL),
+      {
       summary: "Cached remote summary",
       recommendations: ["Cached remote recommendation"],
       generationStatus: "model",
       insightSource: "fresh_model",
-    });
+      }
+    );
 
     const response = await app.fetch(
       authedRequest("https://coach.example.workers.dev/v1/coach/profile-insights", {
@@ -603,12 +636,60 @@ describe("coach worker app", () => {
       insightSource: "fresh_model",
     });
     await expect(
-      repository.getInsightsCache(upload.installID, context.contextHash)
+      repository.getInsightsCache(
+        upload.installID,
+        storageKeyFromMetadata(context.contextHash, {
+          contextProfile: "compact_sync_v2",
+          contextVersion: context.contextVersion,
+          analyticsVersion: context.analyticsVersion,
+          promptProfile: "profile_compact_context_v2",
+          memoryProfile: "compact_v1",
+        }, "test.v1", DEFAULT_AI_MODEL)
+      )
     ).resolves.toMatchObject({
       summary: "Fresh remote summary",
       generationStatus: "model",
       insightSource: "fresh_model",
     });
+  });
+
+  it("does not mark rolling rotation as program frequency mismatch", () => {
+    const snapshot = makeAppSnapshotFixture();
+    snapshot.profile.weeklyWorkoutTarget = 3;
+    snapshot.programs[0]!.workouts = [
+      snapshot.programs[0]!.workouts[0]!,
+      {
+        ...snapshot.programs[0]!.workouts[0]!,
+        id: "22222222-2222-4222-8222-222222222223",
+        title: "Lower A",
+        focus: "Quads and hamstrings",
+      },
+      {
+        ...snapshot.programs[0]!.workouts[0]!,
+        id: "22222222-2222-4222-8222-222222222224",
+        title: "Upper B",
+        focus: "Back and shoulders",
+      },
+      {
+        ...snapshot.programs[0]!.workouts[0]!,
+        id: "22222222-2222-4222-8222-222222222225",
+        title: "Lower B",
+        focus: "Glutes and calves",
+      },
+    ];
+
+    const compactSnapshot = buildCoachContextFromSnapshot({
+      snapshot,
+    });
+
+    expect(
+      compactSnapshot.analytics.compatibility.issues.some(
+        (issue) => issue.kind === "program_frequency_mismatch"
+      )
+    ).toBe(false);
+    expect(compactSnapshot.analytics.derivedAnalytics?.splitExecution.mode).toBe(
+      "rolling_rotation"
+    );
   });
 
   it("uses server-side context for slim chat requests", async () => {
@@ -746,6 +827,11 @@ describe("coach worker app", () => {
     expect(body).toMatchObject({
       status: "queued",
       pollAfterMs: 1500,
+      metadata: {
+        contextProfile: "rich_async_analytics_v1",
+        promptProfile: "chat_rich_async_analytics_v1",
+        memoryProfile: "rich_async_v1",
+      },
     });
     expect(body.jobID).toMatch(/^coach-job_/);
     expect(workflowCreate).toHaveBeenCalledTimes(1);
@@ -753,6 +839,11 @@ describe("coach worker app", () => {
     const storedJob = await repository.getChatJob(body.jobID, request.installID);
     expect(storedJob?.preparedRequest.clientRequestID).toBe(request.clientRequestID);
     expect(storedJob?.preparedRequest.responseID).toMatch(/^coach-turn_/);
+    expect(storedJob?.preparedRequest.metadata).toMatchObject({
+      contextProfile: "rich_async_analytics_v1",
+      promptProfile: "chat_rich_async_analytics_v1",
+      memoryProfile: "rich_async_v1",
+    });
   });
 
   it("returns the existing async chat job for duplicate clientRequestID", async () => {
@@ -898,7 +989,15 @@ describe("coach worker app", () => {
 
     const storedJob = await repository.getChatJob(created.jobID, createRequest.installID);
     const memory = storedJob
-      ? await repository.getChatMemory(storedJob.installID, storedJob.contextHash)
+      ? await repository.getChatMemory(
+          storedJob.installID,
+          storageKeyFromMetadata(
+            storedJob.contextHash,
+            storedJob.preparedRequest.metadata,
+            storedJob.promptVersion,
+            storedJob.model
+          )
+        )
       : null;
 
     expect(memory?.recentTurns.at(-2)).toMatchObject({
@@ -912,7 +1011,15 @@ describe("coach worker app", () => {
 
     await repository.commitChatJobMemory(created.jobID);
     const committedAgain = storedJob
-      ? await repository.getChatMemory(storedJob.installID, storedJob.contextHash)
+      ? await repository.getChatMemory(
+          storedJob.installID,
+          storageKeyFromMetadata(
+            storedJob.contextHash,
+            storedJob.preparedRequest.metadata,
+            storedJob.promptVersion,
+            storedJob.model
+          )
+        )
       : null;
     expect(committedAgain).toEqual(memory);
   });
@@ -1026,7 +1133,10 @@ describe("coach worker app", () => {
     try {
       const result = await workflow.run(event, step);
 
-      expect(result).toBe(returnedJob);
+      expect(result).toEqual({
+        jobID: returnedJob.jobID,
+        finalStatus: returnedJob.status,
+      });
       expect(executeSpy).toHaveBeenCalledWith(returnedJob.jobID, env, {}, step);
       expect(errorSpy).not.toHaveBeenCalled();
       expect(logSpy).toHaveBeenCalledTimes(1);
@@ -1167,7 +1277,15 @@ describe("coach worker app", () => {
 
     const storedJob = await repository.getChatJob(created.jobID, createRequest.installID);
     const memory = storedJob
-      ? await repository.getChatMemory(storedJob.installID, storedJob.contextHash)
+      ? await repository.getChatMemory(
+          storedJob.installID,
+          storageKeyFromMetadata(
+            storedJob.contextHash,
+            storedJob.preparedRequest.metadata,
+            storedJob.promptVersion,
+            storedJob.model
+          )
+        )
       : null;
     expect(memory).toBeNull();
   });
@@ -1254,6 +1372,11 @@ describe("coach worker app", () => {
       status: "queued",
       pollAfterMs: 1500,
       reusedExistingJob: false,
+      metadata: {
+        contextProfile: "rich_async_v1",
+        promptProfile: "workout_summary_rich_async_v1",
+        memoryProfile: "rich_async_v1",
+      },
     });
     expect(workflowCreate).toHaveBeenCalledTimes(1);
   });
