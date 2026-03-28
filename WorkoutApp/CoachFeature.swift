@@ -5017,10 +5017,6 @@ private struct CoachInsightsOverviewCard: View {
                             .lineSpacing(2)
                             .fixedSize(horizontal: false, vertical: true)
 
-                        if let executionContext = insights.executionContext {
-                            executionContextSection(executionContext)
-                        }
-
                         insightsSection(
                             titleKey: "coach.insights.section.observations",
                             items: insights.keyObservations,
@@ -5078,64 +5074,6 @@ private struct CoachInsightsOverviewCard: View {
                     }
                 }
             }
-        }
-    }
-
-    @ViewBuilder
-    private func executionContextSection(
-        _ context: CoachProfileExecutionContext
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("coach.insights.execution.title")
-                .font(AppTypography.caption(size: 12, weight: .semibold))
-                .foregroundStyle(AppTheme.secondaryText)
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text(coachNormalizedReadableText(context.explanation))
-                    .font(AppTypography.body(size: 15, weight: .semibold, relativeTo: .subheadline))
-                    .foregroundStyle(AppTheme.primaryText)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                if let userNote = context.userNote?
-                    .trimmingCharacters(in: .whitespacesAndNewlines),
-                   !userNote.isEmpty {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("coach.insights.execution.saved_note")
-                            .font(AppTypography.caption(size: 11, weight: .semibold))
-                            .foregroundStyle(AppTheme.secondaryText)
-
-                        Text(coachNormalizedReadableText(userNote))
-                            .font(AppTypography.body(size: 14, weight: .medium, relativeTo: .subheadline))
-                            .foregroundStyle(AppTheme.secondaryText)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-
-                if !context.evidence.isEmpty {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("coach.insights.execution.evidence")
-                            .font(AppTypography.caption(size: 11, weight: .semibold))
-                            .foregroundStyle(AppTheme.secondaryText)
-
-                        ForEach(Array(context.evidence.enumerated()), id: \.offset) { _, item in
-                            Text("• \(coachNormalizedReadableText(item))")
-                                .font(AppTypography.caption(size: 12, weight: .medium))
-                                .foregroundStyle(AppTheme.secondaryText)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                    }
-                }
-            }
-            .padding(14)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(AppTheme.surface)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .stroke(AppTheme.border, lineWidth: 1)
-            )
         }
     }
 }
