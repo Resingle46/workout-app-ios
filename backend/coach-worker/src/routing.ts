@@ -120,9 +120,9 @@ export interface ProfileInsightsRoutingAttempt {
   provider: CoachAIProvider;
   modelRole: CoachModelRole;
   selectedModel: string;
-  contextProfile: "compact_sync_v2";
+  contextProfile: CoachContextProfile;
   promptProfile: string;
-  payloadTier: "compact";
+  payloadTier: CoachPayloadTier;
   mode: "structured" | "plain_text_fallback";
   fallbackStage:
     | "primary"
@@ -399,6 +399,7 @@ export function buildProfileInsightsRoutingDecision(
 ): RoutingDecision {
   const metadata = request.metadata;
   const provider = resolveProvider(request.provider, metadata?.provider);
+  const executionProfile = resolveProfileInsightsExecutionProfile(provider);
   const modelRole = coerceModelRole(metadata?.modelRole, "insights_fast");
   const selectedModel =
     metadata?.selectedModel ??
@@ -422,16 +423,16 @@ export function buildProfileInsightsRoutingDecision(
     useCase: coerceUseCase(metadata?.useCase, "profile_insights"),
     modelRole,
     selectedModel,
-    allowedContextProfiles: ["compact_sync_v2"],
-    payloadTier: "compact",
+    allowedContextProfiles: [executionProfile.contextProfile],
+    payloadTier: executionProfile.payloadTier,
     routingVersion,
     memoryCompatibilityKey:
       metadata?.memoryCompatibilityKey ??
       buildMemoryCompatibilityKey(
         provider,
         "insights_json_v1",
-        "profile_sync_v1",
-        "compact_sync_family",
+        executionProfile.promptFamily,
+        executionProfile.contextFamily,
         memoryProfile,
         routingVersion
       ),
@@ -440,8 +441,8 @@ export function buildProfileInsightsRoutingDecision(
       selectedModel
     ).structuredAdapter,
     outputContract: "insights_json_v1",
-    promptFamily: metadata?.promptFamily ?? "profile_sync_v1",
-    contextFamily: metadata?.contextFamily ?? "compact_sync_family",
+    promptFamily: metadata?.promptFamily ?? executionProfile.promptFamily,
+    contextFamily: metadata?.contextFamily ?? executionProfile.contextFamily,
     escalationEligible: isQualityEscalationEnabled(env),
     routingReasonTags,
   };
@@ -712,6 +713,9 @@ export function buildProfileInsightsRoutingAttempts(
 ): ProfileInsightsRoutingAttempt[] {
   const memoryCompatibilityKey =
     decision.memoryCompatibilityKey ?? "profile-insights-memory";
+  const executionProfile = resolveProfileInsightsExecutionProfile(
+    decision.provider
+  );
   const balancedModel = resolveModelForRole(
     env,
     decision.provider,
@@ -727,9 +731,9 @@ export function buildProfileInsightsRoutingAttempts(
       provider: decision.provider,
       modelRole: decision.modelRole,
       selectedModel: decision.selectedModel,
-      contextProfile: "compact_sync_v2",
-      promptProfile: "profile_compact_context_v2",
-      payloadTier: "compact",
+      contextProfile: executionProfile.contextProfile,
+      promptProfile: executionProfile.promptProfile,
+      payloadTier: executionProfile.payloadTier,
       mode: "structured",
       fallbackStage: "primary",
       structuredAdapter: decision.structuredAdapter,
@@ -744,9 +748,9 @@ export function buildProfileInsightsRoutingAttempts(
       provider: decision.provider,
       modelRole: "insights_balanced",
       selectedModel: balancedModel,
-      contextProfile: "compact_sync_v2",
-      promptProfile: "profile_compact_context_v2",
-      payloadTier: "compact",
+      contextProfile: executionProfile.contextProfile,
+      promptProfile: executionProfile.promptProfile,
+      payloadTier: executionProfile.payloadTier,
       mode: "structured",
       fallbackStage: "insights_balanced_structured",
       structuredAdapter: resolveModelCapability(
@@ -773,9 +777,9 @@ export function buildProfileInsightsRoutingAttempts(
         modelRole: "quality_escalation",
         provider: decision.provider,
         selectedModel: escalationModel,
-        contextProfile: "compact_sync_v2",
-        promptProfile: "profile_compact_context_v2",
-        payloadTier: "compact",
+        contextProfile: executionProfile.contextProfile,
+        promptProfile: executionProfile.promptProfile,
+        payloadTier: executionProfile.payloadTier,
         mode: "structured",
         fallbackStage: "quality_escalation_structured",
         structuredAdapter:
@@ -797,9 +801,9 @@ export function buildProfileInsightsRoutingAttempts(
     provider: decision.provider,
     modelRole: "sync_fallback",
     selectedModel: syncFallbackModel,
-    contextProfile: "compact_sync_v2",
-    promptProfile: "profile_compact_context_v2",
-    payloadTier: "compact",
+    contextProfile: executionProfile.contextProfile,
+    promptProfile: executionProfile.promptProfile,
+    payloadTier: executionProfile.payloadTier,
     mode: "plain_text_fallback",
     fallbackStage: "sync_fallback_plain_text",
     structuredAdapter: resolveModelCapability(
@@ -815,6 +819,34 @@ export function buildProfileInsightsRoutingAttempts(
   });
 
   return dedupeProfileInsightsAttempts(attempts);
+}
+
+export function resolveProfileInsightsExecutionProfile(
+  provider: CoachAIProvider
+): {
+  contextProfile: CoachContextProfile;
+  promptProfile: string;
+  payloadTier: CoachPayloadTier;
+  promptFamily: string;
+  contextFamily: string;
+} {
+  if (provider === "gemini") {
+    return {
+      contextProfile: "rich_async_analytics_v1",
+      promptProfile: "profile_rich_async_analytics_v1",
+      payloadTier: "full",
+      promptFamily: "profile_rich_async_analytics_v1",
+      contextFamily: "rich_async_family",
+    };
+  }
+
+  return {
+    contextProfile: "compact_sync_v2",
+    promptProfile: "profile_compact_context_v2",
+    payloadTier: "compact",
+    promptFamily: "profile_sync_v1",
+    contextFamily: "compact_sync_family",
+  };
 }
 
 export function resolvePrimaryChatExecutionProfile(

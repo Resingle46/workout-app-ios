@@ -36,6 +36,7 @@ import {
   DEFAULT_GEMINI_CHAT_BALANCED_MODEL,
   buildChatRoutingAttempts,
   buildChatRoutingDecision,
+  resolveProfileInsightsExecutionProfile,
   buildProfileInsightsRoutingAttempts,
   buildProfileInsightsRoutingDecision,
   buildWorkoutSummaryRoutingAttempts,
@@ -263,6 +264,13 @@ export class WorkersAICoachService implements CoachInferenceService {
     const operation = "profile_insights";
     const timeoutProfile = options.timeoutProfile ?? "sync";
     const routingDecision = buildProfileInsightsRoutingDecision(this.env, request);
+    const defaultProfileExecution =
+      timeoutProfile === "async_job"
+        ? {
+            contextProfile: "rich_async_analytics_v1" as const,
+            promptProfile: "profile_rich_async_analytics_v1",
+          }
+        : resolveProfileInsightsExecutionProfile(routingDecision.provider);
     const timeouts =
       timeoutProfile === "async_job"
         ? ASYNC_LONG_TIMEOUTS
@@ -273,12 +281,8 @@ export class WorkersAICoachService implements CoachInferenceService {
     const promptExecution = resolvePromptExecution(
       request,
       options,
-      timeoutProfile === "async_job"
-        ? "rich_async_analytics_v1"
-        : "compact_sync_v2",
-      timeoutProfile === "async_job"
-        ? "profile_rich_async_analytics_v1"
-        : "profile_compact_context_v2"
+      defaultProfileExecution.contextProfile,
+      defaultProfileExecution.promptProfile
     );
     const localFallback = buildNeutralProfileInsights(
       request,

@@ -14,6 +14,7 @@ import {
   coachPreferencesUpdateRequestSchema,
   coachPreferencesUpdateResponseSchema,
   coachMemoryClearRequestSchema,
+  profileInsightsResponseSchema,
   profileInsightsRequestSchema,
   stateDeleteRequestSchema,
   workoutSummaryJobCreateRequestSchema,
@@ -365,6 +366,7 @@ export function createApp(
             installID: body.installID,
             requestedProvider: body.provider,
             provider: routingDecision.provider,
+            allowDegradedCache: body.allowDegradedCache,
             contextSource: context.source,
             profileContextVariant: executionMetadata.promptProfile,
             useCase: routingDecision.useCase,
@@ -425,7 +427,10 @@ export function createApp(
             return json(reusableCachedResponse, 200);
           }
 
-          const degradedCachedResponse = !body.forceRefresh && context.cacheAllowed
+          const degradedCachedResponse =
+            !body.forceRefresh &&
+            body.allowDegradedCache !== false &&
+            context.cacheAllowed
             ? await stateRepository.getDegradedInsightsCache(
                 body.installID,
                 storageKey
@@ -496,16 +501,20 @@ export function createApp(
           const cacheSource = body.forceRefresh
             ? "bypassed_force_refresh"
             : "miss";
+          const responseBody = profileInsightsResponseSchema.parse({
+            ...result.data,
+            selectedModel: result.selectedModel ?? routingDecision.selectedModel,
+          });
 
           if (context.cacheAllowed) {
             if (
               (!result.mode || result.mode === "structured") &&
-              result.data.generationStatus === "model"
+              responseBody.generationStatus === "model"
             ) {
               await stateRepository.storeInsightsCache(
                 body.installID,
                 storageKey,
-                result.data
+                responseBody
               );
               await stateRepository.deleteDegradedInsightsCache(
                 body.installID,
@@ -515,7 +524,7 @@ export function createApp(
               await stateRepository.storeDegradedInsightsCache(
                 body.installID,
                 storageKey,
-                result.data
+                responseBody
               );
             }
           }
@@ -548,7 +557,7 @@ export function createApp(
             cacheLookupMs,
             cacheStoreMs,
             contextResolveMs,
-            insightSource: result.data.insightSource,
+            insightSource: responseBody.insightSource,
             modelInferenceExecuted: true,
             responseSource: liveResponseSource,
             cacheSource,
@@ -564,7 +573,7 @@ export function createApp(
             fallbackModelDurationMs: result.fallbackModelDurationMs,
             installAuthMode: installAuth.authMode,
           });
-          return json(result.data, 200);
+          return json(responseBody, 200);
         }
 
         if (pathname === "/v2/coach/chat-jobs" && request.method === "POST") {

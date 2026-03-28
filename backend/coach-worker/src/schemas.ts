@@ -316,6 +316,7 @@ export const profileInsightsRequestSchema = z
     capabilityScope: capabilityScopeSchema,
     providerID: providerIDSchema.optional(),
     forceRefresh: z.boolean().optional().default(false),
+    allowDegradedCache: z.boolean().optional().default(true),
   })
   .strict();
 
@@ -668,6 +669,7 @@ export const profileInsightsResponseSchema = z
     recommendations: z.array(nonEmptyStringSchema.max(280)).max(8),
     generationStatus: coachResponseGenerationStatusSchema.default("fallback"),
     insightSource: profileInsightSourceSchema.default("fallback"),
+    selectedModel: nonEmptyStringSchema.max(200).optional(),
   })
   .strict();
 

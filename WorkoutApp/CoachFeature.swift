@@ -639,7 +639,8 @@ protocol CoachAPIClient: Sendable {
         snapshotEnvelope: CoachSnapshotEnvelope,
         capabilityScope: CoachCapabilityScope,
         runtimeContextDelta: CoachRuntimeContextDelta?,
-        forceRefresh: Bool
+        forceRefresh: Bool,
+        allowDegradedCache: Bool
     ) async throws -> CoachProfileInsights
 
     func createChatJob(
@@ -760,6 +761,7 @@ struct CoachProfileInsightsRequest: Codable, Sendable {
     var runtimeContextDelta: CoachRuntimeContextDelta?
     var capabilityScope: CoachCapabilityScope
     var forceRefresh: Bool?
+    var allowDegradedCache: Bool?
     var providerID: String?
 }
 
@@ -939,6 +941,7 @@ struct CoachProfileInsights: Codable, Hashable, Sendable {
     var generationStatus: CoachResponseGenerationStatus? = nil
     var insightSource: CoachInsightsOrigin? = nil
     var provider: CoachAIProvider? = nil
+    var selectedModel: String? = nil
 
     var resolvedInsightSource: CoachInsightsOrigin {
         if let insightSource {
@@ -1397,7 +1400,8 @@ struct CoachAPIHTTPClient: CoachAPIClient {
         snapshotEnvelope: CoachSnapshotEnvelope,
         capabilityScope: CoachCapabilityScope,
         runtimeContextDelta: CoachRuntimeContextDelta?,
-        forceRefresh: Bool
+        forceRefresh: Bool,
+        allowDegradedCache: Bool
     ) async throws -> CoachProfileInsights {
         try await send(
             path: "v1/coach/profile-insights",
@@ -1413,6 +1417,7 @@ struct CoachAPIHTTPClient: CoachAPIClient {
                 runtimeContextDelta: runtimeContextDelta,
                 capabilityScope: capabilityScope,
                 forceRefresh: forceRefresh ? true : nil,
+                allowDegradedCache: allowDegradedCache ? nil : false,
                 providerID: coachDefaultProviderID
             ),
             session: profileInsightsSession,
@@ -2976,11 +2981,16 @@ final class CoachStore {
         defer { isLoadingProfileInsights = false }
 
         let fallbackInsights = CoachFallbackInsightsFactory.make(from: appStore)
+        let allowDegradedCache =
+            !forceRefresh &&
+            profileInsights != nil &&
+            profileInsightsOrigin != .fallback
         debugRecorder.log(
             category: .coach,
             message: "insights_refresh_started",
             metadata: [
                 "forceRefresh": forceRefresh ? "true" : "false",
+                "allowDegradedCache": allowDegradedCache ? "true" : "false",
                 "provider": configuration.provider.rawValue
             ]
         )
@@ -3021,7 +3031,8 @@ final class CoachStore {
                         : (preparation.canUseRemoteAIContextNow
                             ? contextBuilder.runtimeContextDelta(from: appStore)
                             : nil),
-                    forceRefresh: forceRefresh
+                    forceRefresh: forceRefresh,
+                    allowDegradedCache: allowDegradedCache
                 )
                 return (remoteInsights, snapshotPackage)
             }
@@ -3060,6 +3071,7 @@ final class CoachStore {
                 metadata: [
                     "source": remoteInsights.resolvedInsightSource.rawValue,
                     "provider": configuration.provider.rawValue,
+                    "selectedModel": remoteInsights.selectedModel ?? "",
                     "usedServerSideContext": snapshotPackage.includedInlineSnapshot ? "false" : "true",
                     "includedInlineSnapshot": snapshotPackage.includedInlineSnapshot ? "true" : "false"
                 ]
@@ -4491,6 +4503,10 @@ private struct CoachInsightsOverviewCard: View {
         origin.coachSourceKey
     }
 
+    private var visibleModelLabel: String? {
+        coachVisibleModelLabel(insights.selectedModel)
+    }
+
     var body: some View {
         AppCard {
             VStack(alignment: .leading, spacing: 16) {
@@ -4504,6 +4520,12 @@ private struct CoachInsightsOverviewCard: View {
                         Text(sourceKey)
                             .font(AppTypography.caption(size: 13, weight: .medium))
                             .foregroundStyle(AppTheme.secondaryText)
+
+                        if let visibleModelLabel {
+                            Text(visibleModelLabel)
+                                .font(AppTypography.caption(size: 11, weight: .medium))
+                                .foregroundStyle(AppTheme.secondaryText.opacity(0.85))
+                        }
                     }
 
                     Spacer(minLength: 12)
@@ -4796,18 +4818,11 @@ private struct CoachChatMessageCard: View {
     private var visibleModelLabel: String? {
         guard isAssistant,
               !message.isLoading,
-              !message.isStatus,
-              let selectedModel = message.selectedModel?
-                  .trimmingCharacters(in: .whitespacesAndNewlines),
-              !selectedModel.isEmpty else {
+              !message.isStatus else {
             return nil
         }
 
-        if selectedModel.hasPrefix("@cf/") {
-            return String(selectedModel.dropFirst(4))
-        }
-
-        return selectedModel
+        return coachVisibleModelLabel(message.selectedModel)
     }
 
     @ViewBuilder
@@ -4926,6 +4941,20 @@ private struct CoachChatMessageCard: View {
 
         return isAssistant ? AppTheme.surfaceElevated : AppTheme.surface
     }
+}
+
+private func coachVisibleModelLabel(_ selectedModel: String?) -> String? {
+    guard let selectedModel = selectedModel?
+        .trimmingCharacters(in: .whitespacesAndNewlines),
+        !selectedModel.isEmpty else {
+        return nil
+    }
+
+    if selectedModel.hasPrefix("@cf/") {
+        return String(selectedModel.dropFirst(4))
+    }
+
+    return selectedModel
 }
 
 private struct CoachGenerationStatusDot: View {

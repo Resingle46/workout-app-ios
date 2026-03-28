@@ -1165,6 +1165,78 @@ describe("coach worker app", () => {
     });
   });
 
+  it("bypasses degraded sidecar cache when allowDegradedCache is false", async () => {
+    const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
+    let inferenceCalls = 0;
+    const body = makeProfileInsightsRequestFixture();
+    const context = await repository.resolveCoachContext(body);
+    const key = storageKeyFromMetadata(
+      context.contextHash,
+      {
+        contextProfile: "compact_sync_v2",
+        contextVersion: context.contextVersion,
+        analyticsVersion: context.analyticsVersion,
+        promptProfile: "profile_compact_context_v2",
+        memoryProfile: "compact_v1",
+      },
+      "test.v1",
+      DEFAULT_AI_MODEL
+    );
+    await repository.storeDegradedInsightsCache(body.installID, key, {
+      summary: "Cached degraded summary",
+      recommendations: ["Cached degraded recommendation"],
+      generationStatus: "model",
+      insightSource: "fresh_model",
+      selectedModel: "@cf/test/degraded",
+    });
+
+    const app = createApp({
+      createInferenceService: () => ({
+        async generateProfileInsights() {
+          inferenceCalls += 1;
+          return {
+            data: {
+              summary: "Fresh live summary",
+              recommendations: ["Fresh live recommendation"],
+              generationStatus: "model",
+              insightSource: "fresh_model",
+            },
+            model: DEFAULT_AI_MODEL,
+            selectedModel: DEFAULT_AI_MODEL,
+            mode: "structured",
+          };
+        },
+        async generateWorkoutSummary() {
+          throw new Error("not used");
+        },
+        async generateChat() {
+          throw new Error("not used");
+        },
+      }),
+      createStateRepository: () => repository,
+    });
+
+    const response = await app.fetch(
+      authedRequest("https://coach.example.workers.dev/v1/coach/profile-insights", {
+        method: "POST",
+        body: JSON.stringify({
+          ...body,
+          allowDegradedCache: false,
+        }),
+      }),
+      makeEnv()
+    );
+
+    expect(response.status).toBe(200);
+    expect(inferenceCalls).toBe(1);
+    await expect(response.json()).resolves.toMatchObject({
+      summary: "Fresh live summary",
+      generationStatus: "model",
+      insightSource: "fresh_model",
+      selectedModel: DEFAULT_AI_MODEL,
+    });
+  });
+
   it("does not reuse degraded sidecar cache after the insights fingerprint changes", async () => {
     const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
     let inferenceCalls = 0;
@@ -1422,6 +1494,7 @@ describe("coach worker app", () => {
               recommendations: ["Plain text fallback recommendation"],
               generationStatus: "model",
               insightSource: "fresh_model",
+              selectedModel: "@cf/meta/llama-3.1-8b-instruct-fast",
             },
             model: "@cf/meta/llama-3.1-8b-instruct-fast",
             selectedModel: "@cf/meta/llama-3.1-8b-instruct-fast",
@@ -1453,6 +1526,7 @@ describe("coach worker app", () => {
         summary: "Plain text fallback summary",
         generationStatus: "model",
         insightSource: "fresh_model",
+        selectedModel: "@cf/meta/llama-3.1-8b-instruct-fast",
       });
       await expect(
         repository.getInsightsCache(body.installID, key)
@@ -1463,6 +1537,7 @@ describe("coach worker app", () => {
         summary: "Plain text fallback summary",
         generationStatus: "model",
         insightSource: "fresh_model",
+        selectedModel: "@cf/meta/llama-3.1-8b-instruct-fast",
       });
       expect(parseLoggedPayload(logSpy)).toMatchObject({
         responseSource: "live_fallback",
@@ -3182,6 +3257,21 @@ describe("profile insights routing", () => {
     expect(attempts.map((attempt) => attempt.fallbackHopCount)).toEqual([0, 1, 2, 3]);
   });
 
+  it("uses rich analytics context for Gemini profile insights routing", () => {
+    const env = makeEnv();
+    const decision = buildProfileInsightsRoutingDecision(env, {
+      ...makeProfileInsightsRequestFixture(),
+      provider: "gemini",
+    });
+    const attempts = buildProfileInsightsRoutingAttempts(env, decision);
+
+    expect(decision.allowedContextProfiles).toEqual(["rich_async_analytics_v1"]);
+    expect(decision.payloadTier).toBe("full");
+    expect(decision.promptFamily).toBe("profile_rich_async_analytics_v1");
+    expect(attempts.every((attempt) => attempt.contextProfile === "rich_async_analytics_v1")).toBe(true);
+    expect(attempts.every((attempt) => attempt.promptProfile === "profile_rich_async_analytics_v1")).toBe(true);
+  });
+
   it("dedupes profile insights attempts by effective model and mode", () => {
     const env = makeEnv({
       MODEL_ROUTING_ENABLED: "true",
@@ -4794,6 +4884,7 @@ function makeProfileInsightsRequestFixture(): CoachProfileInsightsRequest {
     snapshotUpdatedAt: "2026-03-25T19:00:00.000Z",
     capabilityScope: "draft_changes",
     forceRefresh: false,
+    allowDegradedCache: true,
   };
 }
 
