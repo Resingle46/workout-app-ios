@@ -1358,9 +1358,8 @@ final class AppStore {
     }
 
     func adoptRemoteBackupHash(_ backupHash: String) {
-        let normalizedBackupHash = backupHash
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .nilIfEmpty
+        let trimmedBackupHash = backupHash.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedBackupHash = trimmedBackupHash.isEmpty ? nil : trimmedBackupHash
         guard let normalizedBackupHash else {
             return
         }
@@ -1767,11 +1766,11 @@ struct PersistenceController {
 
     func overrideStoredSnapshotBackupHash(
         _ backupHash: String?,
-        modifiedAt: Date? = nil
+        modifiedAt storedModifiedAt: Date? = nil
     ) {
         persistManifest(
             StoredSnapshotMetadata(
-                modifiedAt: modifiedAt ?? modifiedAt(for: fileURL),
+                modifiedAt: storedModifiedAt ?? modifiedAt(for: fileURL),
                 backupHash: backupHash
             ),
             to: manifestURL
