@@ -649,7 +649,7 @@ private struct AppExpandedTabBar: View {
                 railSpacing: 8,
                 innerSpacing: 6,
                 railPadding: 6,
-                iconSize: 16,
+                iconSize: 17,
                 labelSize: 10,
                 labelMinScale: 0.72,
                 minHeight: 54
@@ -660,7 +660,7 @@ private struct AppExpandedTabBar: View {
             railSpacing: 6,
             innerSpacing: 2,
             railPadding: 6,
-            iconSize: 17,
+            iconSize: 18,
             labelSize: 9.5,
             labelMinScale: 0.68,
             minHeight: 62
