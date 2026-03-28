@@ -602,12 +602,24 @@ private struct WorkoutSummaryAILoadingCard: View {
 private struct WorkoutSummaryAIResultCard: View {
     let result: WorkoutSummaryJobResult
 
+    private var visibleModelLabel: String? {
+        workoutSummaryVisibleModelLabel(result.selectedModel)
+    }
+
     var body: some View {
         AppCard {
             VStack(alignment: .leading, spacing: 16) {
-                Label("workout_summary.ai_title", systemImage: "sparkles")
-                    .font(AppTypography.caption(size: 13, weight: .semibold))
-                    .foregroundStyle(AppTheme.secondaryText)
+                VStack(alignment: .leading, spacing: 6) {
+                    Label("workout_summary.ai_title", systemImage: "sparkles")
+                        .font(AppTypography.caption(size: 13, weight: .semibold))
+                        .foregroundStyle(AppTheme.secondaryText)
+
+                    if let visibleModelLabel {
+                        Text(visibleModelLabel)
+                            .font(AppTypography.caption(size: 11, weight: .medium))
+                            .foregroundStyle(AppTheme.secondaryText.opacity(0.85))
+                    }
+                }
 
                 Text(result.headline)
                     .font(AppTypography.heading(size: 23))
@@ -661,6 +673,20 @@ private struct WorkoutSummaryAIResultCard: View {
             }
         }
     }
+}
+
+private func workoutSummaryVisibleModelLabel(_ selectedModel: String?) -> String? {
+    guard let selectedModel = selectedModel?
+        .trimmingCharacters(in: .whitespacesAndNewlines),
+        !selectedModel.isEmpty else {
+        return nil
+    }
+
+    if selectedModel.hasPrefix("@cf/") {
+        return String(selectedModel.dropFirst(4))
+    }
+
+    return selectedModel
 }
 
 private struct WorkoutSummaryAIUnavailableCard: View {

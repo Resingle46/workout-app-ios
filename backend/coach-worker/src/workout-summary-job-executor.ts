@@ -157,6 +157,8 @@ export async function executeWorkoutSummaryJob(
             completedAt,
             result: {
               ...inferenceResult.data,
+              selectedModel:
+                inferenceResult.selectedModel ?? inferenceResult.model,
               inferenceMode,
               modelDurationMs:
                 inferenceResult.fallbackModelDurationMs ??

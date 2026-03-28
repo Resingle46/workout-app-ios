@@ -875,6 +875,7 @@ export const workoutSummaryJobResultSchema = z
     highlights: z.array(nonEmptyStringSchema.max(240)).min(1).max(4),
     nextWorkoutFocus: z.array(nonEmptyStringSchema.max(220)).max(3),
     generationStatus: coachResponseGenerationStatusSchema.default("fallback"),
+    selectedModel: nonEmptyStringSchema.max(200).optional(),
     inferenceMode: chatInferenceModeSchema,
     modelDurationMs: z.int().min(0).optional(),
     totalJobDurationMs: z.int().min(0).optional(),

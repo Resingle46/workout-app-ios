@@ -3096,6 +3096,7 @@ describe("coach worker app", () => {
             nextWorkoutFocus: ["Add load only if bar speed stays clean again."],
             generationStatus: "model",
           },
+          workoutSummarySelectedModel: "gemini-2.5-flash-lite",
         }),
     });
 
@@ -3117,6 +3118,7 @@ describe("coach worker app", () => {
         headline: "Bench volume held up",
         inferenceMode: "structured",
         generationStatus: "model",
+        selectedModel: "gemini-2.5-flash-lite",
       },
     });
   });
@@ -5063,6 +5065,7 @@ function makeProfileInsightsResponseFixture(
 function stubInferenceService(overrides?: {
   profileInsights?: Partial<CoachProfileInsightsResponse>;
   workoutSummary?: CoachWorkoutSummaryResponse;
+  workoutSummarySelectedModel?: string;
   chat?: CoachChatResponse;
   chatError?: Error;
   workoutSummaryError?: Error;
@@ -5086,7 +5089,8 @@ function stubInferenceService(overrides?: {
           nextWorkoutFocus: ["Add load only where the last reps stayed clean."],
           generationStatus: "model",
         },
-        model: DEFAULT_AI_MODEL,
+        model: overrides?.workoutSummarySelectedModel ?? DEFAULT_AI_MODEL,
+        selectedModel: overrides?.workoutSummarySelectedModel ?? DEFAULT_AI_MODEL,
       };
     },
     async generateChat() {

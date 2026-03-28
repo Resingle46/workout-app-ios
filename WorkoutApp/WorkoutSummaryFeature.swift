@@ -117,6 +117,7 @@ struct WorkoutSummaryJobResult: Codable, Hashable, Sendable {
     var nextWorkoutFocus: [String]
     var provider: CoachAIProvider? = nil
     var generationStatus: CoachResponseGenerationStatus? = nil
+    var selectedModel: String? = nil
     var inferenceMode: CoachChatInferenceMode
     var modelDurationMs: Int?
     var totalJobDurationMs: Int?
@@ -1311,6 +1312,7 @@ final class WorkoutSummaryStore {
            let result = response.result {
             var storedResult = result
             storedResult.provider = result.provider ?? response.metadata?.provider ?? state.activeProvider
+            storedResult.selectedModel = result.selectedModel ?? response.metadata?.selectedModel
             state.resultByFingerprint[response.fingerprint] = storedResult
             state.error = nil
             lastSummaryProvider = storedResult.provider
@@ -1456,7 +1458,7 @@ final class WorkoutSummaryStore {
 
         if let result {
             logger.notice(
-                "summary_payload_ready session=\(sessionID.uuidString, privacy: .public) fingerprint=\(fingerprint, privacy: .public) inferenceMode=\(result.inferenceMode.rawValue, privacy: .public) generationStatus=\((result.generationStatus ?? .fallback).rawValue, privacy: .public)"
+                "summary_payload_ready session=\(sessionID.uuidString, privacy: .public) fingerprint=\(fingerprint, privacy: .public) inferenceMode=\(result.inferenceMode.rawValue, privacy: .public) generationStatus=\((result.generationStatus ?? .fallback).rawValue, privacy: .public) selectedModel=\((result.selectedModel ?? "unknown"), privacy: .public)"
             )
         }
     }
