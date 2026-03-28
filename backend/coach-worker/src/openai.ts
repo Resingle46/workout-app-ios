@@ -2346,6 +2346,106 @@ function tryCoerceProfileInsightsStructuredResponse(
   };
 }
 
+function firstNonEmptyText(values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value !== "string") {
+      continue;
+    }
+    const cleaned = cleanPlainParagraph(value);
+    if (cleaned) {
+      return cleaned;
+    }
+  }
+
+  return undefined;
+}
+
+function coerceProfileInsightsExecutionContext(
+  value: unknown
+): CoachProfileInsightsContent["executionContext"] | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const mode = firstNonEmptyText([
+    value.mode,
+  ]);
+  const effectiveWeeklyFrequency = readNumericField(
+    value.effectiveWeeklyFrequency
+  );
+  const weeklyTarget = readNumericField(value.weeklyTarget);
+  const explanation = firstNonEmptyText([
+    value.explanation,
+  ]);
+
+  if (
+    !mode ||
+    !effectiveWeeklyFrequency ||
+    weeklyTarget === undefined ||
+    !explanation
+  ) {
+    return undefined;
+  }
+
+  if (
+    mode !== "rolling_rotation" &&
+    mode !== "calendar_matched" &&
+    mode !== "program_count_mismatch" &&
+    mode !== "unknown"
+  ) {
+    return undefined;
+  }
+
+  const templateRotationSemantics = firstNonEmptyText([
+    value.templateRotationSemantics,
+  ]);
+  const authoritativeSignal = firstNonEmptyText([
+    value.authoritativeSignal,
+  ]);
+
+  return {
+    mode,
+    effectiveWeeklyFrequency,
+    shouldTreatProgramCountAsMismatch:
+      value.shouldTreatProgramCountAsMismatch === true,
+    programWorkoutCount: readNumericField(value.programWorkoutCount),
+    weeklyTarget,
+    statedWeeklyFrequency: readNumericField(value.statedWeeklyFrequency),
+    observedAverageWorkoutsPerWeek: readNumericField(
+      value.observedAverageWorkoutsPerWeek
+    ),
+    templateRotationSemantics:
+      templateRotationSemantics === "rotate_through_templates" ||
+      templateRotationSemantics === "calendar_bound_templates" ||
+      templateRotationSemantics === "unresolved"
+        ? templateRotationSemantics
+        : "unresolved",
+    authoritativeSignal:
+      authoritativeSignal === "user_note" ||
+      authoritativeSignal === "program_structure" ||
+      authoritativeSignal === "weekly_target" ||
+      authoritativeSignal === "unknown"
+        ? authoritativeSignal
+        : "unknown",
+    userNote: firstNonEmptyText([value.userNote])?.slice(0, 500),
+    explanation: explanation.slice(0, 1200),
+    evidence: coerceProfileInsightStrings(value.evidence, 8),
+  };
+}
+
+function readNumericField(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed) && parsed >= 0) {
+      return parsed;
+    }
+  }
+  return undefined;
+}
+
 function coerceProfileInsightsResponseRecord(
   candidate: Record<string, unknown>
 ): CoachProfileInsightsContent | undefined {

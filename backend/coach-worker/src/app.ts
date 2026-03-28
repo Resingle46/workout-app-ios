@@ -14,7 +14,6 @@ import {
   coachPreferencesUpdateRequestSchema,
   coachPreferencesUpdateResponseSchema,
   coachMemoryClearRequestSchema,
-  normalizeAsyncProfileInsightsResult,
   profileInsightsJobCreateRequestSchema,
   profileInsightsJobCreateResponseSchema,
   profileInsightsJobStatusResponseSchema,
@@ -59,6 +58,7 @@ import {
   type CoachR2Bucket,
   type CoachStateStore,
 } from "./state";
+import { normalizeAsyncProfileInsightsResult } from "./profile-insights-normalization";
 
 interface AppDependencies {
   createInferenceService: (env: Env, provider?: CoachAIProvider) => CoachInferenceService;
@@ -1652,7 +1652,17 @@ export function createApp(
           let normalizedResult = undefined;
           if (job.result) {
             try {
-              normalizedResult = normalizeAsyncProfileInsightsResult(job.result);
+              const normalized = normalizeAsyncProfileInsightsResult(job.result);
+              // If normalization returns null, create a fallback result
+              normalizedResult = normalized ?? {
+                summary: "Profile insights processing completed with validation issues.",
+                keyObservations: [],
+                topConstraints: [],
+                recommendations: [],
+                confidenceNotes: [],
+                generationStatus: "fallback" as const,
+                insightSource: "fallback" as const,
+              };
             } catch (error) {
               console.error("Failed to normalize profile insights result:", error);
               // If normalization fails, create a fallback result
