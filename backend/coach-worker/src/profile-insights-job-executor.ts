@@ -3,7 +3,6 @@ import {
   CoachInferenceServiceError,
   DEFAULT_AI_MODEL,
   createInferenceServiceForProvider,
-  normalizeAsyncProfileInsightsResult,
   type CoachInferenceService,
   type Env,
 } from "./openai";
@@ -13,6 +12,7 @@ import {
   type CoachStateStore,
 } from "./state";
 import type { CoachChatJobError } from "./schemas";
+import { normalizeAsyncProfileInsightsResult } from "./profile-insights-normalization";
 
 const DEFAULT_WORKFLOW_STEP_CONFIG = {
   timeout: "15 minutes",

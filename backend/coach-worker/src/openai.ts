@@ -1,6 +1,7 @@
 import {
   chatResponseModelOutputSchema,
   profileInsightsModelOutputSchema,
+  profileInsightsJobResultSchema,
   type CoachAIProvider,
   type CoachChatRequest,
   type CoachChatResponse,
@@ -9,6 +10,7 @@ import {
   type CoachWorkoutSummaryJobCreateRequest,
   type CoachWorkoutSummaryResponse,
   workoutSummaryModelOutputSchema,
+  type CoachProfileInsightsJobResult,
 } from "./schemas";
 import {
   buildProfileInsightsMessages,
@@ -2502,182 +2504,9 @@ function normalizeProfileInsightStringArray(
   maxItems: number
 ): string[] {
   return dedupeText((value ?? []).map((item) => cleanPlainParagraph(item)))
-    .map((item) => item.slice(0, 320))
-    .filter(Boolean)
-    .slice(0, maxItems);
 }
 
-export function normalizeAsyncProfileInsightsResult(
-  result: any
-): CoachProfileInsightsContent {
-  if (!result || typeof result !== 'object') {
-    return result;
-  }
-
-  const normalized = { ...result };
-
-  // Normalize summary
-  if (normalized.summary && typeof normalized.summary === 'string') {
-    normalized.summary = cleanPlainParagraph(normalized.summary).slice(0, 2200);
-  }
-
-  // Normalize string arrays
-  normalized.keyObservations = normalizeProfileInsightStringArray(
-    normalized.keyObservations,
-    8
-  );
-  normalized.topConstraints = normalizeProfileInsightStringArray(
-    normalized.topConstraints,
-    6
-  );
-  normalized.recommendations = normalizeProfileInsightStringArray(
-    normalized.recommendations,
-    8
-  );
-  normalized.confidenceNotes = normalizeProfileInsightStringArray(
-    normalized.confidenceNotes,
-    6
-  );
-
-  // Normalize executionContext
-  if (normalized.executionContext && typeof normalized.executionContext === 'object') {
-    const context = normalized.executionContext;
-    
-    if (context.userNote && typeof context.userNote === 'string') {
-      context.userNote = cleanPlainParagraph(context.userNote).slice(0, 500);
-    }
-    
-    if (context.explanation && typeof context.explanation === 'string') {
-      context.explanation = cleanPlainParagraph(context.explanation).slice(0, 1200);
-    }
-    
-    if (Array.isArray(context.evidence)) {
-      context.evidence = dedupeText(
-        context.evidence
-          .filter((item: any) => typeof item === 'string')
-          .map((item: string) => cleanPlainParagraph(item).slice(0, 240))
-          .filter(Boolean)
-      ).slice(0, 8);
-    }
-  }
-
-  // Normalize selectedModel
-  if (normalized.selectedModel && typeof normalized.selectedModel === 'string') {
-    normalized.selectedModel = normalized.selectedModel.slice(0, 200);
-  }
-
-  return normalized;
-}
-
-function coerceProfileInsightsExecutionContext(
-  value: unknown
-): CoachProfileInsightsContent["executionContext"] | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-
-  const mode = firstNonEmptyText([value.mode]);
-  const effectiveWeeklyFrequency = readNumericField(
-    value.effectiveWeeklyFrequency
-  );
-  const weeklyTarget = readNumericField(value.weeklyTarget);
-  const explanation = firstNonEmptyText([value.explanation]);
-
-  if (
-    !mode ||
-    !effectiveWeeklyFrequency ||
-    weeklyTarget === undefined ||
-    !explanation
-  ) {
-    return undefined;
-  }
-
-  if (
-    mode !== "rolling_rotation" &&
-    mode !== "calendar_matched" &&
-    mode !== "program_count_mismatch" &&
-    mode !== "unknown"
-  ) {
-    return undefined;
-  }
-
-  const templateRotationSemantics = firstNonEmptyText([
-    value.templateRotationSemantics,
-  ]);
-  const authoritativeSignal = firstNonEmptyText([value.authoritativeSignal]);
-
-  return {
-    mode,
-    effectiveWeeklyFrequency,
-    shouldTreatProgramCountAsMismatch:
-      value.shouldTreatProgramCountAsMismatch === true,
-    programWorkoutCount: readNumericField(value.programWorkoutCount),
-    weeklyTarget,
-    statedWeeklyFrequency: readNumericField(value.statedWeeklyFrequency),
-    observedAverageWorkoutsPerWeek: readNumericField(
-      value.observedAverageWorkoutsPerWeek
-    ),
-    templateRotationSemantics:
-      templateRotationSemantics === "rotate_through_templates" ||
-      templateRotationSemantics === "calendar_bound_templates" ||
-      templateRotationSemantics === "unresolved"
-        ? templateRotationSemantics
-        : "unresolved",
-    authoritativeSignal:
-      authoritativeSignal === "user_note" ||
-      authoritativeSignal === "program_structure" ||
-      authoritativeSignal === "weekly_target" ||
-      authoritativeSignal === "unknown"
-        ? authoritativeSignal
-        : "unknown",
-    userNote: firstNonEmptyText([value.userNote])?.slice(0, 500),
-    explanation: explanation.slice(0, 1200),
-    evidence: coerceProfileInsightStrings(value.evidence, 8),
-  };
-}
-
-function firstNonEmptyText(values: unknown[]): string | undefined {
-  for (const value of values) {
-    if (typeof value !== "string") {
-      continue;
-    }
-    const cleaned = cleanPlainParagraph(value);
-    if (cleaned) {
-      return cleaned;
-    }
-  }
-
-  return undefined;
-}
-
-function readNumericField(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
-    return value;
-  }
-  if (typeof value === "string") {
-    const parsed = Number(value);
-    if (Number.isFinite(parsed) && parsed >= 0) {
-      return parsed;
-    }
-  }
-  return undefined;
-}
-
-function normalizeWorkoutSummaryResponse(
-  response: {
-    headline: string;
-    summary: string;
-    highlights: string[];
-    nextWorkoutFocus: string[];
-  }
-): CoachWorkoutSummaryContent {
-  return {
-    headline: response.headline.trim(),
-    summary: response.summary.trim(),
-    highlights: dedupeText(response.highlights).slice(0, 4),
-    nextWorkoutFocus: dedupeText(response.nextWorkoutFocus).slice(0, 3),
-  };
-}
+export { normalizeProfileInsightStringArray, cleanPlainParagraph, coerceProfileInsightsExecutionContext };
 
 function parsePlainProfileInsights(
   content: string

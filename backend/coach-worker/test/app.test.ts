@@ -29,10 +29,8 @@ import {
   buildProfileInsightsRoutingAttempts,
   buildProfileInsightsRoutingDecision,
   resolveModelForRole,
-} from "../src/routing";
-import {
   normalizeAsyncProfileInsightsResult,
-} from "../src/openai";
+} from "../src/profile-insights-normalization";
 import {
   buildGemini2_5FamilyBlockKey,
   writeGemini2_5FamilyBlockState,

@@ -38,7 +38,6 @@ import {
 import {
   DEFAULT_AI_MODEL,
   buildChatRoutingDecision,
-  buildProfileInsightsRoutingDecision,
   buildWorkoutSummaryRoutingDecision,
   isModelRoutingEnabled,
   resolveModelForRole,
