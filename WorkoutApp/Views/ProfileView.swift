@@ -160,10 +160,6 @@ private struct ProfileSettingsView: View {
                     }
                 }
 
-                CoachBackendSettingsCard()
-
-                BackupControlsCard()
-
                 DeveloperMenuSettingsCard()
             }
             .padding(.horizontal, 20)
@@ -177,7 +173,7 @@ private struct ProfileSettingsView: View {
 }
 
 @MainActor
-private struct CoachBackendSettingsCard: View {
+struct CoachBackendSettingsCard: View {
     @Environment(AppStore.self) private var store
     @Environment(CoachStore.self) private var coachStore
     @Environment(WorkoutSummaryStore.self) private var workoutSummaryStore
@@ -189,6 +185,7 @@ private struct CoachBackendSettingsCard: View {
     @State private var didLoadDraft = false
     @State private var statusMessage: String?
     @State private var validationMessage: String?
+    @State private var isExpanded = false
 
     private var hasDraftChanges: Bool {
         isFeatureEnabled != coachConfigurationStore.isFeatureEnabled ||
@@ -204,10 +201,74 @@ private struct CoachBackendSettingsCard: View {
         coachStore.canUseRemoteCoach ? "coach.status.remote_description" : "coach.status.fallback_description"
     }
 
+    private var canCollapse: Bool {
+        coachStore.canUseRemoteCoach
+    }
+
+    private var shouldShowCollapsedSummary: Bool {
+        canCollapse &&
+        !isExpanded &&
+        !hasDraftChanges &&
+        (validationMessage?.isEmpty ?? true) &&
+        (statusMessage?.isEmpty ?? true)
+    }
+
     var body: some View {
+        Group {
+            if shouldShowCollapsedSummary {
+                collapsedSummaryCard
+            } else {
+                expandedCard
+            }
+        }
+        .task {
+            loadDraftFromStoreIfNeeded()
+        }
+    }
+
+    private var collapsedSummaryCard: some View {
+        AppCard(padding: 14) {
+            HStack(alignment: .center, spacing: 16) {
+                VStack(alignment: .leading, spacing: 10) {
+                    AppSectionTitle(titleKey: "profile.settings.coach")
+
+                    HStack(spacing: 8) {
+                        Circle()
+                            .fill(AppTheme.success)
+                            .frame(width: 8, height: 8)
+
+                        Text(statusKey)
+                            .font(AppTypography.body(size: 14, weight: .semibold, relativeTo: .subheadline))
+                            .foregroundStyle(AppTheme.primaryText)
+                    }
+                }
+
+                Spacer(minLength: 12)
+
+                compactActionButton(titleKey: "action.edit") {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) {
+                        isExpanded = true
+                    }
+                }
+            }
+        }
+    }
+
+    private var expandedCard: some View {
         AppCard {
             VStack(alignment: .leading, spacing: 16) {
-                AppSectionTitle(titleKey: "profile.settings.coach")
+                HStack(alignment: .center, spacing: 12) {
+                    AppSectionTitle(titleKey: "profile.settings.coach")
+                    Spacer(minLength: 12)
+
+                    if canCollapse {
+                        compactActionButton(titleKey: "action.collapse") {
+                            withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) {
+                                isExpanded = false
+                            }
+                        }
+                    }
+                }
 
                 HStack(spacing: 10) {
                     Circle()
@@ -281,9 +342,6 @@ private struct CoachBackendSettingsCard: View {
                 }
             }
         }
-        .task {
-            loadDraftFromStoreIfNeeded()
-        }
     }
 
     private func loadDraftFromStoreIfNeeded() {
@@ -353,6 +411,26 @@ private struct CoachBackendSettingsCard: View {
         }
     }
 
+    @ViewBuilder
+    private func compactActionButton(
+        titleKey: LocalizedStringKey,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(titleKey, action: action)
+            .buttonStyle(.plain)
+            .font(AppTypography.body(size: 14, weight: .semibold))
+            .foregroundStyle(AppTheme.primaryText)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(
+                Capsule()
+                    .fill(AppTheme.surfaceElevated)
+            )
+            .overlay(
+                Capsule()
+                    .stroke(AppTheme.border, lineWidth: 1)
+            )
+    }
 }
 
 private struct CoachSettingsTextField: View {
@@ -1583,7 +1661,7 @@ private struct DashboardCardAccent {
 }
 
 @MainActor
-private struct BackupControlsCard: View {
+struct BackupControlsCard: View {
     private enum RemoteMaintenanceAction: String, Identifiable {
         case clearChatMemory
         case deleteBackup
@@ -1596,11 +1674,101 @@ private struct BackupControlsCard: View {
     @Environment(CloudSyncStore.self) private var cloudSyncStore
     @Environment(CoachStore.self) private var coachStore
     @State private var pendingAction: RemoteMaintenanceAction?
+    @State private var isExpanded = false
+
+    private var canCollapse: Bool {
+        guard let status = cloudSyncStore.lastBackupStatus else {
+            return false
+        }
+
+        let hasSyncError = !(cloudSyncStore.lastSyncErrorDescription?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .isEmpty ?? true)
+        return status.syncState == .remoteReady &&
+            status.contextState == .contextReady &&
+            cloudSyncStore.pendingRemoteRestore == nil &&
+            !hasSyncError
+    }
+
+    private var shouldShowCollapsedSummary: Bool {
+        canCollapse && !isExpanded
+    }
 
     var body: some View {
+        Group {
+            if shouldShowCollapsedSummary {
+                collapsedSummaryCard
+            } else {
+                expandedCard
+            }
+        }
+        .alert(
+            alertTitle,
+            isPresented: Binding(
+                get: { pendingAction != nil },
+                set: { isPresented in
+                    if !isPresented {
+                        pendingAction = nil
+                    }
+                }
+            )
+        ) {
+            Button(localized("backup.action.confirm"), role: pendingAction == .clearChatMemory ? nil : .destructive) {
+                Task {
+                    await performPendingAction()
+                }
+            }
+            Button(localized("backup.action.cancel"), role: .cancel) {
+                pendingAction = nil
+            }
+        } message: {
+            Text(alertMessage)
+        }
+    }
+
+    private var collapsedSummaryCard: some View {
+        AppCard(padding: 14) {
+            HStack(alignment: .center, spacing: 16) {
+                VStack(alignment: .leading, spacing: 10) {
+                    AppSectionTitle(titleKey: "backup.section")
+
+                    HStack(spacing: 8) {
+                        Circle()
+                            .fill(AppTheme.success)
+                            .frame(width: 8, height: 8)
+
+                        Text(remoteStatusText)
+                            .font(AppTypography.body(size: 14, weight: .semibold, relativeTo: .subheadline))
+                            .foregroundStyle(AppTheme.primaryText)
+                    }
+                }
+
+                Spacer(minLength: 12)
+
+                compactActionButton(titleKey: "action.edit") {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) {
+                        isExpanded = true
+                    }
+                }
+            }
+        }
+    }
+
+    private var expandedCard: some View {
         AppCard {
             VStack(alignment: .leading, spacing: 16) {
-                AppSectionTitle(titleKey: "backup.section")
+                HStack(alignment: .center, spacing: 12) {
+                    AppSectionTitle(titleKey: "backup.section")
+                    Spacer(minLength: 12)
+
+                    if canCollapse {
+                        compactActionButton(titleKey: "action.collapse") {
+                            withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) {
+                                isExpanded = false
+                            }
+                        }
+                    }
+                }
 
                 backupRow(
                     title: localized("backup.row.remote_status"),
@@ -1627,6 +1795,10 @@ private struct BackupControlsCard: View {
                 backupRow(
                     title: localized("backup.row.install_auth"),
                     value: installAuthText
+                )
+                backupRow(
+                    title: localized("developer.cloud.pending_restore_state"),
+                    value: pendingRestoreStateText
                 )
 
                 if let errorDescription = cloudSyncStore.lastSyncErrorDescription, !errorDescription.isEmpty {
@@ -1667,28 +1839,6 @@ private struct BackupControlsCard: View {
                 }
             }
         }
-        .alert(
-            alertTitle,
-            isPresented: Binding(
-                get: { pendingAction != nil },
-                set: { isPresented in
-                    if !isPresented {
-                        pendingAction = nil
-                    }
-                }
-            )
-        ) {
-            Button(localized("backup.action.confirm"), role: pendingAction == .clearChatMemory ? nil : .destructive) {
-                Task {
-                    await performPendingAction()
-                }
-            }
-            Button(localized("backup.action.cancel"), role: .cancel) {
-                pendingAction = nil
-            }
-        } message: {
-            Text(alertMessage)
-        }
     }
 
     private var remoteStatusText: String {
@@ -1713,6 +1863,19 @@ private struct BackupControlsCard: View {
         }
 
         return localized("backup.auth_mode.\(authMode.rawValue)")
+    }
+
+    private var pendingRestoreStateText: String {
+        guard let pendingRemoteRestore = cloudSyncStore.pendingRemoteRestore else {
+            return localized("developer.value.none")
+        }
+
+        switch pendingRemoteRestore.mode {
+        case .restore:
+            return localized("backup.action.restore")
+        case .conflict:
+            return localized("backup.sync_state.conflict")
+        }
     }
 
     private var alertTitle: String {
@@ -1789,6 +1952,27 @@ private struct BackupControlsCard: View {
 
     private func localized(_ key: String) -> String {
         Bundle.main.localizedString(forKey: key, value: nil, table: nil)
+    }
+
+    @ViewBuilder
+    private func compactActionButton(
+        titleKey: LocalizedStringKey,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(titleKey, action: action)
+            .buttonStyle(.plain)
+            .font(AppTypography.body(size: 14, weight: .semibold))
+            .foregroundStyle(AppTheme.primaryText)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(
+                Capsule()
+                    .fill(AppTheme.surfaceElevated)
+            )
+            .overlay(
+                Capsule()
+                    .stroke(AppTheme.border, lineWidth: 1)
+            )
     }
 }
 

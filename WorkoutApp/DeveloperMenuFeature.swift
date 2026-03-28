@@ -111,7 +111,8 @@ struct DeveloperMenuView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 runtimeCard
-                cloudSyncCard
+                CoachBackendSettingsCard()
+                backupCard
                 coachCard
                 networkCard
                 logsCard
@@ -222,42 +223,8 @@ struct DeveloperMenuView: View {
         }
     }
 
-    private var cloudSyncCard: some View {
-        AppCard {
-            VStack(alignment: .leading, spacing: 14) {
-                AppSectionTitle(titleKey: "developer.section.cloud_sync")
-                DeveloperMenuValueRow(
-                    titleKey: "developer.cloud.sync_state",
-                    value: debugController.report.cloudSync.syncState
-                        ?? localized("developer.value.none")
-                )
-                DeveloperMenuValueRow(
-                    titleKey: "developer.cloud.context_state",
-                    value: debugController.report.cloudSync.contextState
-                        ?? localized("developer.value.none")
-                )
-                DeveloperMenuValueRow(
-                    titleKey: "developer.cloud.remote_backup_version",
-                    value: valueOrNone(debugController.report.cloudSync.remoteBackupVersion)
-                )
-                DeveloperMenuValueRow(
-                    titleKey: "developer.cloud.install_auth_mode",
-                    value: debugController.report.cloudSync.installAuthMode
-                        ?? localized("developer.value.none")
-                )
-                DeveloperMenuValueRow(
-                    titleKey: "developer.cloud.pending_restore_state",
-                    value: debugController.report.cloudSync.pendingRemoteRestoreState
-                        ?? localized("developer.value.none")
-                )
-                DeveloperMenuValueRow(
-                    titleKey: "developer.cloud.last_sync_error",
-                    value: debugController.report.cloudSync.lastSyncError
-                        ?? localized("developer.value.none"),
-                    allowsWrap: true
-                )
-            }
-        }
+    private var backupCard: some View {
+        BackupControlsCard()
     }
 
     private var coachCard: some View {

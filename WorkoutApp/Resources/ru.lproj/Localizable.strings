@@ -43,6 +43,7 @@
 "action.create_program" = "Создать программу";
 "action.add_workout" = "Добавить тренировку";
 "action.edit" = "Изменить";
+"action.collapse" = "Свернуть";
 "action.done" = "Готово";
 
 "program.create" = "Новая программа";

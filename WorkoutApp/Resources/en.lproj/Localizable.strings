@@ -43,6 +43,7 @@
 "action.create_program" = "Create program";
 "action.add_workout" = "Add workout";
 "action.edit" = "Edit";
+"action.collapse" = "Collapse";
 "action.done" = "Done";
 
 "program.create" = "New Program";
