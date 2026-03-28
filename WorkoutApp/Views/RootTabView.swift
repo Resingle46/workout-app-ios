@@ -75,10 +75,11 @@ enum AppTypography {
 
     static func configureGlobalAppearance() {
         let segmented = UISegmentedControl.appearance()
-        let normalFont = UIFont(name: onestPostScriptName, size: 14) ?? .systemFont(ofSize: 14, weight: .medium)
-        let selectedFont = UIFont(name: onestPostScriptName, size: 14) ?? .systemFont(ofSize: 14, weight: .semibold)
+        let normalFont = UIFont(name: onestPostScriptName, size: 13) ?? .systemFont(ofSize: 13, weight: .medium)
+        let selectedFont = UIFont(name: onestPostScriptName, size: 13) ?? .systemFont(ofSize: 13, weight: .semibold)
         segmented.backgroundColor = UIColor(red: 0.08, green: 0.08, blue: 0.1, alpha: 1)
         segmented.selectedSegmentTintColor = UIColor(red: 0.11, green: 0.11, blue: 0.14, alpha: 1)
+        segmented.apportionsSegmentWidthsByContent = true
         segmented.setTitleTextAttributes(
             [
                 .font: normalFont,

@@ -5,7 +5,6 @@ import UIKit
 @MainActor
 struct ProfileView: View {
     @Environment(AppStore.self) private var store
-    @Environment(CoachStore.self) private var coachStore
     @Environment(\.appBottomRailInset) private var bottomRailInset
     @State private var showingProfileEditor = false
 
@@ -27,14 +26,6 @@ struct ProfileView: View {
 
     private var metabolismSummary: ProfileMetabolismSummary {
         store.profileMetabolismSummary()
-    }
-
-    private var profileRefreshSeed: String {
-        [
-            store.selectedLanguageCode,
-            store.localStateUpdatedAt?.timeIntervalSince1970.appNumberText ?? "none",
-            store.activeSession?.id.uuidString ?? "no-active-session"
-        ].joined(separator: "|")
     }
 
     var body: some View {
@@ -74,15 +65,6 @@ struct ProfileView: View {
 
                 ProfileMetabolismCard(summary: metabolismSummary)
 
-                ProfileCoachInsightsCard(
-                    insights: coachStore.profileInsights,
-                    origin: coachStore.profileInsightsOrigin,
-                    isLoading: coachStore.isLoadingProfileInsights,
-                    onOpenCoach: {
-                        store.selectedTab = .coach
-                    }
-                )
-
                 Button {
                     store.selectedTab = .statistics
                 } label: {
@@ -116,20 +98,6 @@ struct ProfileView: View {
             }
             .presentationDetents([.large])
             .presentationBackground(AppTheme.background)
-        }
-        .task(id: profileRefreshSeed) {
-            if store.selectedTab == .profile {
-                await coachStore.refreshProfileInsights(using: store)
-            }
-        }
-        .onChange(of: store.selectedTab, initial: true) { _, newValue in
-            guard newValue == .profile else {
-                return
-            }
-
-            Task {
-                await coachStore.refreshProfileInsights(using: store)
-            }
         }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .navigationBar)
@@ -955,76 +923,6 @@ private struct ProfileMetabolismCard: View {
                         accent: .ember
                     )
                 }
-            }
-        }
-    }
-}
-
-private struct ProfileCoachInsightsCard: View {
-    let insights: CoachProfileInsights?
-    let origin: CoachInsightsOrigin
-    let isLoading: Bool
-    let onOpenCoach: () -> Void
-
-    private var sourceKey: LocalizedStringKey {
-        origin.profileSourceKey
-    }
-
-    var body: some View {
-        ProfileAccentCard(accent: .aqua) {
-            VStack(alignment: .leading, spacing: 18) {
-                ProfileCardHeader(
-                    eyebrowKey: "profile.card.ai.eyebrow",
-                    titleKey: "profile.card.ai.title",
-                    systemImage: "sparkles",
-                    showsChevron: false
-                )
-
-                if isLoading && insights == nil {
-                    HStack(spacing: 12) {
-                        ProgressView()
-                            .tint(AppTheme.primaryText)
-                        Text("profile.card.ai.loading")
-                            .font(AppTypography.body(size: 16, weight: .medium))
-                            .foregroundStyle(DashboardCardAccent.aqua.secondaryText)
-                    }
-                } else {
-                    Text(insights?.summary ?? localizedString("profile.card.ai.empty"))
-                        .font(AppTypography.heading(size: 24))
-                        .foregroundStyle(AppTheme.primaryText)
-                        .fixedSize(horizontal: false, vertical: true)
-
-                    HStack(spacing: 8) {
-                        Circle()
-                            .fill(origin.sourceColor)
-                            .frame(width: 8, height: 8)
-
-                        Text(sourceKey)
-                            .font(AppTypography.caption(size: 13, weight: .medium))
-                            .foregroundStyle(DashboardCardAccent.aqua.secondaryText)
-                    }
-
-                    VStack(alignment: .leading, spacing: 10) {
-                        ForEach(Array((insights?.recommendations ?? []).prefix(4).enumerated()), id: \.offset) { _, recommendation in
-                            HStack(alignment: .top, spacing: 10) {
-                                Circle()
-                                    .fill(Color.white.opacity(0.82))
-                                    .frame(width: 7, height: 7)
-                                    .padding(.top, 8)
-
-                                Text(recommendation)
-                                    .font(AppTypography.body(size: 15, weight: .medium, relativeTo: .subheadline))
-                                    .foregroundStyle(AppTheme.primaryText)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                        }
-                    }
-                }
-
-                Button("profile.card.ai.open_coach") {
-                    onOpenCoach()
-                }
-                .buttonStyle(AppSecondaryButtonStyle())
             }
         }
     }
