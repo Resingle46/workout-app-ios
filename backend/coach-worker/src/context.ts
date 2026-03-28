@@ -173,12 +173,12 @@ const PROFILE_PROMPT_LIMITS: Readonly<Record<CoachContextProfile, PromptLimitPro
   },
   rich_async_analytics_v1: {
     programWorkoutLimit: 8,
-    programExerciseLimit: 10,
-    recentSessionLimit: 6,
-    recentSessionExerciseLimit: 6,
-    recentPrLimit: 8,
+    programExerciseLimit: 14,
+    recentSessionLimit: 8,
+    recentSessionExerciseLimit: 8,
+    recentPrLimit: 10,
     relativeStrengthLimit: 6,
-    recentWeeklyActivityLimit: 4,
+    recentWeeklyActivityLimit: 6,
   },
 };
 

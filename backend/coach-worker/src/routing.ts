@@ -20,6 +20,7 @@ export const DEFAULT_GEMINI_CHAT_REDUCED_MODEL = "gemini-2.5-flash-lite";
 export const DEFAULT_GEMINI_SUMMARY_MODEL = "gemini-2.5-flash";
 export const DEFAULT_GEMINI_INSIGHTS_MODEL = "gemini-2.5-flash";
 export const DEFAULT_GEMINI_SYNC_FALLBACK_MODEL = "gemini-2.5-flash-lite";
+const PROFILE_INSIGHTS_ROUTING_REVISION = "profile-insights.v2";
 
 export type CoachRoutingUseCase =
   | "simple_qna"
@@ -407,7 +408,8 @@ export function buildProfileInsightsRoutingDecision(
       allowAlternateRouting: isModelRoutingEnabled(env),
     });
   const routingVersion =
-    metadata?.routingVersion ?? resolveModelRoutingVersion(env);
+    metadata?.routingVersion ??
+    resolveProfileInsightsRoutingVersion(resolveModelRoutingVersion(env));
   const memoryProfile = metadata?.memoryProfile ?? "compact_v1";
   const routingReasonTags =
     metadata?.routingReasonTags ??
@@ -446,6 +448,10 @@ export function buildProfileInsightsRoutingDecision(
     escalationEligible: isQualityEscalationEnabled(env),
     routingReasonTags,
   };
+}
+
+function resolveProfileInsightsRoutingVersion(baseVersion: string): string {
+  return `${baseVersion}.${PROFILE_INSIGHTS_ROUTING_REVISION}`;
 }
 
 export function buildChatRoutingAttempts(
@@ -726,6 +732,13 @@ export function buildProfileInsightsRoutingAttempts(
     decision.provider,
     "sync_fallback"
   );
+  const profilePlainTextFallback =
+    decision.provider === "gemini"
+      ? resolveProfileInsightsGeminiPlainTextFallback(env, decision, balancedModel)
+      : {
+          modelRole: "sync_fallback" as const,
+          selectedModel: syncFallbackModel,
+        };
   const attempts: ProfileInsightsRoutingAttempt[] = [
     {
       provider: decision.provider,
@@ -799,8 +812,8 @@ export function buildProfileInsightsRoutingAttempts(
 
   attempts.push({
     provider: decision.provider,
-    modelRole: "sync_fallback",
-    selectedModel: syncFallbackModel,
+    modelRole: profilePlainTextFallback.modelRole,
+    selectedModel: profilePlainTextFallback.selectedModel,
     contextProfile: executionProfile.contextProfile,
     promptProfile: executionProfile.promptProfile,
     payloadTier: executionProfile.payloadTier,
@@ -819,6 +832,28 @@ export function buildProfileInsightsRoutingAttempts(
   });
 
   return dedupeProfileInsightsAttempts(attempts);
+}
+
+function resolveProfileInsightsGeminiPlainTextFallback(
+  env: EnvLike,
+  decision: RoutingDecision,
+  balancedModel: string
+): { modelRole: CoachModelRole; selectedModel: string } {
+  const qualityModel = decision.escalationEligible
+    ? resolveModelForRole(env, decision.provider, "quality_escalation")
+    : undefined;
+
+  if (qualityModel && qualityModel !== balancedModel) {
+    return {
+      modelRole: "quality_escalation",
+      selectedModel: qualityModel,
+    };
+  }
+
+  return {
+    modelRole: "insights_balanced",
+    selectedModel: balancedModel,
+  };
 }
 
 export function resolveProfileInsightsExecutionProfile(

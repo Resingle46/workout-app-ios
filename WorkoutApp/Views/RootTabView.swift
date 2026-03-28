@@ -600,21 +600,32 @@ private struct AppExpandedTabBar: View {
     let onSelect: (RootTab) -> Void
     let onToggleWorkoutTabs: () -> Void
 
+    private struct Metrics {
+        let railSpacing: CGFloat
+        let innerSpacing: CGFloat
+        let railPadding: CGFloat
+        let iconSize: CGFloat
+        let labelSize: CGFloat
+        let labelMinScale: CGFloat
+        let minHeight: CGFloat
+    }
+
     var body: some View {
         let usesCompactLayout = presentationMode == .expandedFromWorkout
+        let metrics = metrics(for: usesCompactLayout)
 
-        return HStack(spacing: usesCompactLayout ? 8 : 10) {
-            HStack(spacing: usesCompactLayout ? 6 : 8) {
+        return HStack(spacing: metrics.railSpacing) {
+            HStack(spacing: metrics.innerSpacing) {
                 ForEach(RootTab.allCases, id: \.self) { tab in
                     Button {
                         onSelect(tab)
                     } label: {
-                        tabCell(for: tab, compact: usesCompactLayout)
+                        tabCell(for: tab, metrics: metrics, compact: usesCompactLayout)
                     }
                     .buttonStyle(.plain)
                 }
             }
-            .padding(usesCompactLayout ? 6 : 8)
+            .padding(metrics.railPadding)
             .frame(maxWidth: .infinity)
             .background(tabBarBackground)
 
@@ -632,6 +643,30 @@ private struct AppExpandedTabBar: View {
         }
     }
 
+    private func metrics(for compact: Bool) -> Metrics {
+        if compact {
+            return Metrics(
+                railSpacing: 8,
+                innerSpacing: 6,
+                railPadding: 6,
+                iconSize: 16,
+                labelSize: 10,
+                labelMinScale: 0.72,
+                minHeight: 54
+            )
+        }
+
+        return Metrics(
+            railSpacing: 6,
+            innerSpacing: 2,
+            railPadding: 6,
+            iconSize: 17,
+            labelSize: 9.5,
+            labelMinScale: 0.68,
+            minHeight: 62
+        )
+    }
+
     private var tabBarBackground: some View {
         RoundedRectangle(cornerRadius: AppTheme.railCornerRadius, style: .continuous)
             .fill(AppTheme.backgroundRaised.opacity(0.98))
@@ -642,25 +677,26 @@ private struct AppExpandedTabBar: View {
             .shadow(color: AppTheme.shadowSubtle, radius: 16, y: 10)
     }
 
-    private func tabCell(for tab: RootTab, compact: Bool) -> some View {
+    private func tabCell(for tab: RootTab, metrics: Metrics, compact: Bool) -> some View {
         let isSelected = selectedTab == tab
 
-        return VStack(spacing: 6) {
+        return VStack(spacing: compact ? 5 : 4) {
             Image(systemName: tab.systemImage)
-                .font(AppTypography.icon(size: compact ? 17 : 18, weight: .semibold))
+                .font(AppTypography.icon(size: metrics.iconSize, weight: .semibold))
             if !compact {
                 Text(tab.titleKey)
-                    .font(AppTypography.label(size: 11, weight: .semibold))
+                    .font(AppTypography.label(size: metrics.labelSize, weight: .semibold))
                     .multilineTextAlignment(.center)
                     .lineLimit(1)
-                    .minimumScaleFactor(0.8)
+                    .minimumScaleFactor(metrics.labelMinScale)
+                    .allowsTightening(true)
             }
         }
         .foregroundStyle(isSelected ? AppTheme.primaryText : AppTheme.secondaryText)
         .frame(maxWidth: .infinity)
-        .frame(minHeight: compact ? 56 : nil)
-        .padding(.horizontal, compact ? 2 : 0)
-        .padding(.vertical, compact ? 12 : 12)
+        .frame(minHeight: metrics.minHeight)
+        .padding(.horizontal, compact ? 1 : 0)
+        .padding(.vertical, compact ? 10 : 9)
         .accessibilityLabel(Text(tab.titleKey))
         .background(
             Group {

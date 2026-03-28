@@ -54,6 +54,8 @@ vi.mock("cloudflare:workers", () => ({
   },
 }));
 
+const PROFILE_INSIGHTS_TEST_ROUTING_VERSION = "phase1.v1.profile-insights.v2";
+
 describe("coach worker app", () => {
   it("returns health for configured runtime", async () => {
     const app = createApp({
@@ -707,6 +709,7 @@ describe("coach worker app", () => {
         analyticsVersion: context.analyticsVersion,
         promptProfile: "profile_compact_context_v2",
         memoryProfile: "compact_v1",
+        routingVersion: PROFILE_INSIGHTS_TEST_ROUTING_VERSION,
       }, "test.v1", DEFAULT_AI_MODEL),
       {
       summary: "Cached fallback summary",
@@ -786,6 +789,7 @@ describe("coach worker app", () => {
         analyticsVersion: context.analyticsVersion,
         promptProfile: "profile_compact_context_v2",
         memoryProfile: "compact_v1",
+        routingVersion: PROFILE_INSIGHTS_TEST_ROUTING_VERSION,
       }, "test.v1", DEFAULT_AI_MODEL),
       {
       summary: "Cached remote summary",
@@ -903,6 +907,7 @@ describe("coach worker app", () => {
           analyticsVersion: context.analyticsVersion,
           promptProfile: "profile_compact_context_v2",
           memoryProfile: "compact_v1",
+          routingVersion: PROFILE_INSIGHTS_TEST_ROUTING_VERSION,
         }, "test.v1", DEFAULT_AI_MODEL)
       )
     ).resolves.toMatchObject({
@@ -983,6 +988,7 @@ describe("coach worker app", () => {
         analyticsVersion: context.analyticsVersion,
         promptProfile: "profile_compact_context_v2",
         memoryProfile: "compact_v1",
+        routingVersion: PROFILE_INSIGHTS_TEST_ROUTING_VERSION,
       },
       "test.v1",
       DEFAULT_AI_MODEL
@@ -1036,6 +1042,7 @@ describe("coach worker app", () => {
         analyticsVersion: context.analyticsVersion,
         promptProfile: "profile_compact_context_v2",
         memoryProfile: "compact_v1",
+        routingVersion: PROFILE_INSIGHTS_TEST_ROUTING_VERSION,
       },
       "test.v1",
       DEFAULT_AI_MODEL
@@ -1178,6 +1185,7 @@ describe("coach worker app", () => {
         analyticsVersion: context.analyticsVersion,
         promptProfile: "profile_compact_context_v2",
         memoryProfile: "compact_v1",
+        routingVersion: PROFILE_INSIGHTS_TEST_ROUTING_VERSION,
       },
       "test.v1",
       DEFAULT_AI_MODEL
@@ -1329,6 +1337,7 @@ describe("coach worker app", () => {
         analyticsVersion: context.analyticsVersion,
         promptProfile: "profile_compact_context_v2",
         memoryProfile: "compact_v1",
+        routingVersion: PROFILE_INSIGHTS_TEST_ROUTING_VERSION,
       },
       "test.v1",
       DEFAULT_AI_MODEL
@@ -1410,6 +1419,7 @@ describe("coach worker app", () => {
         analyticsVersion: context.analyticsVersion,
         promptProfile: "profile_compact_context_v2",
         memoryProfile: "compact_v1",
+        routingVersion: PROFILE_INSIGHTS_TEST_ROUTING_VERSION,
       },
       "test.v1",
       DEFAULT_AI_MODEL
@@ -1481,6 +1491,7 @@ describe("coach worker app", () => {
         analyticsVersion: context.analyticsVersion,
         promptProfile: "profile_compact_context_v2",
         memoryProfile: "compact_v1",
+        routingVersion: PROFILE_INSIGHTS_TEST_ROUTING_VERSION,
       },
       "test.v1",
       DEFAULT_AI_MODEL
@@ -3272,6 +3283,29 @@ describe("profile insights routing", () => {
     expect(attempts.every((attempt) => attempt.promptProfile === "profile_rich_async_analytics_v1")).toBe(true);
   });
 
+  it("keeps Gemini profile insights plain-text fallback on a quality model instead of flash-lite", () => {
+    const env = makeEnv({
+      MODEL_ROUTING_ENABLED: "true",
+      QUALITY_ESCALATION_ENABLED: "true",
+      GEMINI_INSIGHTS_FAST_MODEL: "gemini-test-fast",
+      GEMINI_INSIGHTS_BALANCED_MODEL: "gemini-test-balanced",
+      GEMINI_QUALITY_ESCALATION_MODEL: "gemini-test-quality",
+      GEMINI_SYNC_FALLBACK_MODEL: "gemini-test-lite",
+    });
+    const decision = buildProfileInsightsRoutingDecision(env, {
+      ...makeProfileInsightsRequestFixture(),
+      provider: "gemini",
+    });
+    const attempts = buildProfileInsightsRoutingAttempts(env, decision);
+    const fallbackAttempt = attempts.at(-1);
+
+    expect(fallbackAttempt).toMatchObject({
+      modelRole: "quality_escalation",
+      mode: "plain_text_fallback",
+      selectedModel: "gemini-test-quality",
+    });
+  });
+
   it("dedupes profile insights attempts by effective model and mode", () => {
     const env = makeEnv({
       MODEL_ROUTING_ENABLED: "true",
@@ -3469,7 +3503,10 @@ describe("WorkersAICoachService", () => {
     expect(promptText).toContain(
       "Focus guidance: treat rolling rotation and template count versus weekly target as already-resolved context"
     );
-    expect(promptText).not.toContain("Preferred program summary JSON:");
+    expect(promptText).toContain("Preferred program summary JSON:");
+    expect(promptText).toContain(
+      "Do not ask the user to verify whether a workout, exercise, or muscle group is included unless the program summary explicitly shows a real gap."
+    );
     expect(promptText).not.toContain("Sanitized coach context JSON:");
     expect(promptText).not.toContain("Coach analysis settings JSON:");
     expect(promptText).not.toContain("Selected program for analysis JSON:");
@@ -3630,7 +3667,7 @@ describe("WorkersAICoachService", () => {
     expect(result.data.recommendations).toEqual(["Keep bench progression steady."]);
   });
 
-  it("keeps the full rolling-rotation note in compact profile insights prompts and de-emphasizes structure", () => {
+  it("keeps the full rolling-rotation note in compact profile insights prompts, preserves program coverage, and de-emphasizes structure", () => {
     const request = makeProfileInsightsRequestFixture();
     const snapshot = request.snapshot!;
     request.snapshot = {
@@ -3659,7 +3696,10 @@ describe("WorkersAICoachService", () => {
     expect(userPrompt).toContain(
       "Focus guidance: treat rolling rotation and template count versus weekly target as already-resolved context"
     );
-    expect(userPrompt).not.toContain("Preferred program summary JSON:");
+    expect(userPrompt).toContain("Preferred program summary JSON:");
+    expect(userPrompt).toContain(
+      "Program coverage guidance: treat the preferred program summary as authoritative proof of which workouts and exercises are already included."
+    );
   });
 
   it("filters conflicting frequency and structure guidance from chat", async () => {
@@ -3682,6 +3722,27 @@ describe("WorkersAICoachService", () => {
     expect(result.data.answerMarkdown).toContain(
       "Keep load the same next week and add one rep"
     );
+  });
+
+  it("filters unsupported program-coverage guesses from profile insights", async () => {
+    const aiRun = vi.fn().mockResolvedValue({
+      response: {
+        summary: "Тренировки идут стабильно.",
+        recommendations: [
+          "Убедитесь, что руки, спина и ноги включены в ваши тренировочные шаблоны.",
+          "Сохраняйте текущую прогрессию и повышайте нагрузку только на повторяемых сетах.",
+        ],
+      },
+    });
+
+    const service = new WorkersAICoachService(makeEnv({ AI: { run: aiRun } }));
+    const result = await service.generateProfileInsights(
+      makeProfileInsightsRequestFixture()
+    );
+
+    expect(result.data.recommendations).toEqual([
+      "Сохраняйте текущую прогрессию и повышайте нагрузку только на повторяемых сетах.",
+    ]);
   });
 
   it("parses plain-text profile insights", async () => {

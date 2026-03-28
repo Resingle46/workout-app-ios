@@ -2682,9 +2682,21 @@ function shouldBlockUnsupportedClaimText(
   const laggingPatterns = [
     /\blagging\b/i,
     /\bundertrained\b/i,
+    /\bunderloaded\b/i,
+    /\binsufficient\b.*\b(?:stimulus|volume|load)\b/i,
+    /\bnot\s+getting\s+enough\s+(?:work|stimulus|volume|load)\b/i,
     /\bimbalanc(?:e|ed)\b/i,
+    /не\s+получа\w*\s+достаточн\w*\s+нагрузк/i,
     /отстающ/i,
     /дисбаланс/i,
+  ];
+  const programCoveragePatterns = [
+    /\bmake\s+sure\b.*\b(?:included|covered|part of)\b.*\b(?:program|template|split|workout)s?\b/i,
+    /\bcheck\b.*\b(?:included|covered)\b.*\b(?:program|template|split|workout)s?\b/i,
+    /\bverify\b.*\b(?:included|covered)\b.*\b(?:program|template|split|workout)s?\b/i,
+    /убедитесь,\s*что.*включен/i,
+    /проверьте,\s*что.*включен/i,
+    /включен\w*\s+в\s+ваш\w*\s+тренировочн\w*\s+шаблон/i,
   ];
 
   if (
@@ -2704,6 +2716,13 @@ function shouldBlockUnsupportedClaimText(
   if (
     !derivedAnalytics.supportedClaims.laggingCandidates &&
     laggingPatterns.some((pattern) => pattern.test(normalized))
+  ) {
+    return true;
+  }
+
+  if (
+    !derivedAnalytics.supportedClaims.muscleExposure &&
+    programCoveragePatterns.some((pattern) => pattern.test(normalized))
   ) {
     return true;
   }

@@ -220,6 +220,21 @@ function profileInsightsContextLines(
     );
   }
 
+  if (promptContext.preferredProgram) {
+    lines.push(
+      "Program coverage guidance: treat the preferred program summary as authoritative proof of which workouts and exercises are already included."
+    );
+    lines.push(
+      "Do not ask the user to verify whether a workout, exercise, or muscle group is included unless the program summary explicitly shows a real gap."
+    );
+  }
+
+  if (promptContext.derived && !promptContext.derived.supportedClaims.muscleExposure) {
+    lines.push(
+      "Unsupported-claim guardrail: do not infer undertrained, missing, or underloaded muscle groups from exercise names alone."
+    );
+  }
+
   lines.push("Goal summary JSON:");
   lines.push(JSON.stringify(promptContext.goal));
   lines.push("Consistency summary JSON:");
@@ -252,7 +267,7 @@ function profileInsightsContextLines(
     lines.push(JSON.stringify(promptContext.recentFinishedSessions));
   }
 
-  if (promptContext.preferredProgram && !avoidStructureFocus) {
+  if (promptContext.preferredProgram) {
     lines.push("Preferred program summary JSON:");
     lines.push(JSON.stringify(promptContext.preferredProgram));
   }
@@ -305,6 +320,12 @@ export function buildProfileInsightsMessages(
           : "Task: analyze the user's current training state and return a compact coach summary with concrete recommendations.",
         "Prefer high-signal observations over generic motivation.",
         "Do not mention missing data unless it materially limits the advice.",
+        promptContext?.preferredProgram
+          ? "Treat the provided preferred-program summary as authoritative. Do not tell the user to verify whether workouts, exercises, or muscle groups are included unless the summary itself shows a real gap."
+          : undefined,
+        promptContext?.derived && !promptContext.derived.supportedClaims.muscleExposure
+          ? "Do not claim that specific muscle groups are undertrained, missing, or not covered unless derived analytics explicitly support that claim."
+          : undefined,
         avoidStructureFocus
           ? "Do not spend the response on workout-template count, split mismatch, or weekly-target mismatch. Treat rolling rotation as intentional and focus on progression, adherence, recovery, and concrete next-step coaching."
           : undefined,
@@ -376,6 +397,13 @@ export function buildFallbackProfileInsightsMessages(
   request: CoachProfileInsightsRequest,
   options: PromptBuildOptions = {}
 ): PromptMessage[] {
+  const contextProfile = options.contextProfile ?? "compact_sync_v2";
+  const promptContext = request.snapshot
+    ? buildProfileInsightsPromptContext(request.snapshot, {
+        contextProfile,
+        derivedAnalytics: resolveDerivedAnalytics(request.snapshot, options),
+      })
+    : undefined;
   return [
     {
       role: "system",
@@ -386,7 +414,16 @@ export function buildFallbackProfileInsightsMessages(
         "Write one short summary paragraph first.",
         "Then write up to 4 compact bullet recommendations.",
         "If you propose changes, write them as plain recommendations only.",
-      ].join("\n\n"),
+        promptContext?.preferredProgram
+          ? "Treat the provided preferred-program summary as authoritative. Do not tell the user to verify whether workouts, exercises, or muscle groups are included unless the summary itself shows a real gap."
+          : undefined,
+        promptContext?.derived && !promptContext.derived.supportedClaims.muscleExposure
+          ? "Do not claim that specific muscle groups are undertrained, missing, or not covered unless derived analytics explicitly support that claim."
+          : undefined,
+        "Prefer concrete progression, recovery, adherence, and plan-execution advice over generic coverage checks.",
+      ]
+        .filter((value): value is string => Boolean(value))
+        .join("\n\n"),
     },
     {
       role: "user",
