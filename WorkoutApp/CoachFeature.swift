@@ -311,8 +311,11 @@ final class CoachLocalStateStore {
         self.storageNamespace = storageNamespace
         self.debugRecorder = debugRecorder
 
-        let installIDKey = keychainKey(suffix: "install_id")
-        let installSecretKey = keychainKey(suffix: "install_secret")
+        let installIDKey = Self.keychainKey(storageNamespace: storageNamespace, suffix: "install_id")
+        let installSecretKey = Self.keychainKey(
+            storageNamespace: storageNamespace,
+            suffix: "install_secret"
+        )
         let keychainInstallID = identityVault.readValue(forKey: installIDKey)
         let keychainInstallSecret = identityVault.readValue(forKey: installSecretKey)
         let defaultsInstallID = defaults.string(forKey: PreferenceKey.installID)?
@@ -373,7 +376,7 @@ final class CoachLocalStateStore {
         defaults.bool(forKey: PreferenceKey.identityKeychainReady)
     }
 
-    private func keychainKey(suffix: String) -> String {
+    private static func keychainKey(storageNamespace: String, suffix: String) -> String {
         "\(storageNamespace).coach.\(suffix)"
     }
 

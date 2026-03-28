@@ -2901,7 +2901,7 @@ describe("coach worker app", () => {
     }
   });
 
-  it("returns 404 for the removed sync chat endpoint", async () => {
+  it("validates malformed sync chat requests", async () => {
     const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
     const app = createApp({
       createInferenceService: () => stubInferenceService(),
@@ -2916,7 +2916,12 @@ describe("coach worker app", () => {
       makeEnv()
     );
 
-    expect(response.status).toBe(404);
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: {
+        code: "invalid_request",
+      },
+    });
   });
 });
 
