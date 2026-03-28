@@ -2810,11 +2810,7 @@ function applyProfileInsightsGuardrails(
     blockedClaims: [],
     fullSummaryReplacement: false,
   };
-  const enriched = enrichProfileInsightsResponse(
-    request,
-    response,
-    derivedAnalytics
-  );
+  const enriched = enrichProfileInsightsResponse(response, derivedAnalytics);
 
   const summaryRewrite = softenProfileInsightsText(
     enriched.summary,
@@ -2942,91 +2938,16 @@ function rewriteProfileInsightList(
 }
 
 function enrichProfileInsightsResponse(
-  request: CoachProfileInsightsRequest,
   response: CoachProfileInsightsResponse,
   derivedAnalytics?: CoachDerivedAnalytics
 ): CoachProfileInsightsResponse {
-  const executionContext = response.executionContext ?? derivedAnalytics?.splitExecution;
-  const keyObservations = [...(response.keyObservations ?? [])];
-  const topConstraints = [...(response.topConstraints ?? [])];
-  const confidenceNotes = [...(response.confidenceNotes ?? [])];
-
-  if (keyObservations.length === 0 && derivedAnalytics) {
-    if (derivedAnalytics.splitExecution.mode === "rolling_rotation") {
-      keyObservations.push(
-        "Your saved note indicates a rolling rotation, so template count should be read as part of that rotation rather than as a weekly mismatch."
-      );
-    }
-    if (derivedAnalytics.progressionSummary.recentPersonalRecordCount > 0) {
-      keyObservations.push(
-        `Recent PR activity is still present, led most recently by ${derivedAnalytics.progressionSummary.topRecentPersonalRecordExercise ?? "recent training wins"}.`
-      );
-    }
-    if ((derivedAnalytics.adherenceSummary.consistencyGap ?? 0) > 0) {
-      keyObservations.push(
-        `Recent adherence is trailing the weekly target by about ${formatLoad(derivedAnalytics.adherenceSummary.consistencyGap ?? 0)} session(s) per week.`
-      );
-    }
-  }
-
-  if (topConstraints.length === 0 && executionContext?.mode === "rolling_rotation") {
-    topConstraints.push(
-      executionContext.explanation
-    );
-  }
-  if (
-    topConstraints.length < 3 &&
-    (derivedAnalytics?.adherenceSummary.consistencyGap ?? 0) > 0
-  ) {
-    topConstraints.push(
-      `Observed recent consistency is below the saved weekly target of ${derivedAnalytics?.adherenceSummary.weeklyTarget ?? 0}.`
-    );
-  }
-  if (
-    topConstraints.length < 3 &&
-    request.snapshot?.coachAnalysisSettings.programComment.trim()
-  ) {
-    topConstraints.push(
-      `Saved execution note: ${request.snapshot.coachAnalysisSettings.programComment.trim()}`
-    );
-  }
-
-  confidenceNotes.push(...buildConfidenceNotesFromDerived(derivedAnalytics));
-
   return {
     ...response,
-    keyObservations: dedupeText(keyObservations).slice(0, 8),
-    topConstraints: dedupeText(topConstraints).slice(0, 6),
-    confidenceNotes: dedupeText(confidenceNotes).slice(0, 6),
-    executionContext,
+    keyObservations: dedupeText(response.keyObservations ?? []).slice(0, 8),
+    topConstraints: dedupeText(response.topConstraints ?? []).slice(0, 6),
+    confidenceNotes: dedupeText(response.confidenceNotes ?? []).slice(0, 6),
+    executionContext: response.executionContext ?? derivedAnalytics?.splitExecution,
   };
-}
-
-function buildConfidenceNotesFromDerived(
-  derivedAnalytics?: CoachDerivedAnalytics
-): string[] {
-  if (!derivedAnalytics) {
-    return [];
-  }
-
-  const notes: string[] = [];
-  if (derivedAnalytics.claimConfidence.muscleExposure !== "supported") {
-    notes.push(
-      "Muscle exposure reasoning is cautious because it is based on recent execution patterns, not on a full physiology audit."
-    );
-  }
-  if (derivedAnalytics.claimConfidence.laggingCandidates === "weakly_supported") {
-    notes.push(
-      "Lagging-area candidates are phrased cautiously because the signal comes from execution coverage and staleness, not direct performance testing."
-    );
-  }
-  if (derivedAnalytics.claimConfidence.imbalanceCandidates === "weakly_supported") {
-    notes.push(
-      "Imbalance notes reflect concentration in recent completed work, so treat them as directional rather than absolute."
-    );
-  }
-
-  return notes;
 }
 
 function softenProfileInsightsText(

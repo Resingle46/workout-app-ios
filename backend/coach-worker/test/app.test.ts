@@ -4087,6 +4087,37 @@ describe("WorkersAICoachService", () => {
     ]);
   });
 
+  it("does not append hardcoded confidence notes to model-generated profile insights", async () => {
+    const aiRun = vi.fn().mockResolvedValue({
+      response: {
+        summary: "Прогресс по программе есть, но пока важнее удержать регулярность.",
+        keyObservations: ["Нагрузка по основным движениям пока держится стабильно."],
+        topConstraints: ["Низкая общая частота тренировок ограничивает скорость прогресса."],
+        recommendations: ["Сохраняйте текущую прогрессию и повышайте нагрузку только на повторяемых сетах."],
+        confidenceNotes: [
+          "Данные о мышечной экспозиции и отстающих группах основаны на недавних тренировках и могут быть неполными из-за низкой общей активности.",
+          "Прогноз срока достижения цели является ориентировочным и сильно зависит от повышения регулярности тренировок.",
+        ],
+      },
+    });
+
+    const service = new WorkersAICoachService(makeEnv({ AI: { run: aiRun } }));
+    const result = await service.generateProfileInsights(
+      makeProfileInsightsRequestFixture()
+    );
+
+    expect(result.data.keyObservations).toEqual([
+      "Нагрузка по основным движениям пока держится стабильно.",
+    ]);
+    expect(result.data.topConstraints).toEqual([
+      "Низкая общая частота тренировок ограничивает скорость прогресса.",
+    ]);
+    expect(result.data.confidenceNotes).toEqual([
+      "Данные о мышечной экспозиции и отстающих группах основаны на недавних тренировках и могут быть неполными из-за низкой общей активности.",
+      "Прогноз срока достижения цели является ориентировочным и сильно зависит от повышения регулярности тренировок.",
+    ]);
+  });
+
   it("parses plain-text profile insights", async () => {
     const aiRun = vi
       .fn()
