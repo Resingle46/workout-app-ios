@@ -3,6 +3,7 @@ import {
   CoachInferenceServiceError,
   DEFAULT_AI_MODEL,
   createInferenceServiceForProvider,
+  normalizeAsyncProfileInsightsResult,
   type CoachInferenceService,
   type Env,
 } from "./openai";
@@ -153,7 +154,7 @@ export async function executeProfileInsightsJob(
 
           await stateRepository.completeProfileInsightsJob(jobID, {
             completedAt,
-            result: {
+            result: normalizeAsyncProfileInsightsResult({
               summary: inferenceResult.data.summary,
               keyObservations: inferenceResult.data.keyObservations ?? [],
               topConstraints: inferenceResult.data.topConstraints ?? [],
@@ -169,7 +170,7 @@ export async function executeProfileInsightsJob(
                 inferenceResult.fallbackModelDurationMs ??
                 inferenceResult.modelDurationMs,
               totalJobDurationMs,
-            },
+            }),
             promptBytes: inferenceResult.promptBytes,
             fallbackPromptBytes: inferenceResult.fallbackPromptBytes,
             modelDurationMs:

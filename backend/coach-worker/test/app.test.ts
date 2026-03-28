@@ -31,6 +31,9 @@ import {
   resolveModelForRole,
 } from "../src/routing";
 import {
+  normalizeAsyncProfileInsightsResult,
+} from "../src/openai";
+import {
   buildGemini2_5FamilyBlockKey,
   writeGemini2_5FamilyBlockState,
 } from "../src/gemini-quota";
@@ -5125,6 +5128,7 @@ function makeEnv(overrides: Partial<Env> = {}): Env {
     APP_META_DB: {} as Env["APP_META_DB"],
     COACH_CHAT_WORKFLOW: makeWorkflowBinding(vi.fn()),
     WORKOUT_SUMMARY_WORKFLOW: makeWorkflowBinding(vi.fn()),
+    PROFILE_INSIGHTS_WORKFLOW: makeWorkflowBinding(vi.fn()),
     COACH_INTERNAL_TOKEN: "internal-token",
     AI_MODEL: DEFAULT_AI_MODEL,
     COACH_PROMPT_VERSION: "test.v1",
@@ -5431,12 +5435,12 @@ function normalizeLegacyDBQuery(query: string): string {
   return query.replace(/\s+/g, " ").trim().toLowerCase();
 }
 
-function makeWorkflowBinding(create: unknown): NonNullable<Env["COACH_CHAT_WORKFLOW"]> {
+function makeWorkflowBinding(create: unknown): any {
   return {
-    create: create as NonNullable<Env["COACH_CHAT_WORKFLOW"]>["create"],
+    create: create,
     get: vi.fn().mockResolvedValue(
       makeWorkflowInstanceStub()
-    ) as NonNullable<Env["COACH_CHAT_WORKFLOW"]>["get"],
+    ),
   };
 }
 
@@ -5704,4 +5708,112 @@ function withStrictCommentConstraints(
     },
   };
 }
+
+describe("async profile insights job normalization", () => {
+  it("normalizes oversized topConstraints items", async () => {
+    const oversizedResult = {
+      summary: "Test summary",
+      keyObservations: ["Observation 1"],
+      topConstraints: [
+        "This constraint is way too long and exceeds the 320 character limit that is defined in the schema for profile insights responses and should be truncated during normalization to prevent validation errors. This is additional text to make it really long and ensure it gets truncated properly by the normalization function when processing async profile insights job results. ".repeat(3)
+      ],
+      recommendations: ["Recommendation 1"],
+      confidenceNotes: [],
+      generationStatus: "model" as const,
+      insightSource: "fresh_model" as const,
+    };
+
+    const normalized = normalizeAsyncProfileInsightsResult(oversizedResult);
+    
+    expect(normalized.topConstraints[0].length).toBeLessThanOrEqual(320);
+    expect(normalized.topConstraints[0].length).toBeGreaterThan(0);
+  });
+
+  it("normalizes oversized executionContext evidence items", async () => {
+    const oversizedResult = {
+      summary: "Test summary",
+      keyObservations: ["Observation 1"],
+      topConstraints: ["Constraint 1"],
+      recommendations: ["Recommendation 1"],
+      confidenceNotes: [],
+      executionContext: {
+        mode: "rolling_rotation" as const,
+        effectiveWeeklyFrequency: 3,
+        shouldTreatProgramCountAsMismatch: false,
+        weeklyTarget: 3,
+        templateRotationSemantics: "rotate_through_templates" as const,
+        authoritativeSignal: "user_note" as const,
+        explanation: "Test explanation",
+        evidence: [
+          "This evidence item is far too long and exceeds the 240 character limit for execution context evidence fields in the profile insights schema and must be truncated during normalization. This is additional text to make it really long and ensure it gets truncated properly by the normalization function when processing async profile insights job results. ".repeat(3)
+        ],
+      },
+      generationStatus: "model" as const,
+      insightSource: "fresh_model" as const,
+    };
+
+    const normalized = normalizeAsyncProfileInsightsResult(oversizedResult);
+    
+    expect(normalized.executionContext?.evidence[0].length).toBeLessThanOrEqual(240);
+    expect(normalized.executionContext?.evidence[0].length).toBeGreaterThan(0);
+  });
+
+  it("normalizes oversized summary and userNote fields", async () => {
+    const oversizedResult = {
+      summary: "This summary is way too long and exceeds the 2200 character limit that is defined in the schema for profile insights responses. It should be truncated during normalization to prevent validation errors when the async job completes and the result is stored or retrieved. ".repeat(30),
+      keyObservations: ["Observation 1"],
+      topConstraints: ["Constraint 1"],
+      recommendations: ["Recommendation 1"],
+      confidenceNotes: [],
+      executionContext: {
+        mode: "rolling_rotation" as const,
+        effectiveWeeklyFrequency: 3,
+        shouldTreatProgramCountAsMismatch: false,
+        weeklyTarget: 3,
+        templateRotationSemantics: "rotate_through_templates" as const,
+        authoritativeSignal: "user_note" as const,
+        explanation: "Test explanation",
+        userNote: "This user note is far too long and exceeds the 500 character limit for the userNote field in execution context and should be truncated during normalization to prevent validation errors. ".repeat(5),
+        evidence: ["Evidence 1"],
+      },
+      generationStatus: "model" as const,
+      insightSource: "fresh_model" as const,
+    };
+
+    const normalized = normalizeAsyncProfileInsightsResult(oversizedResult);
+    
+    expect(normalized.summary).toHaveLength(2200);
+    expect(normalized.executionContext?.userNote).toHaveLength(500);
+  });
+
+  it("handles null/undefined input gracefully", async () => {
+    expect(normalizeAsyncProfileInsightsResult(null)).toBe(null);
+    expect(normalizeAsyncProfileInsightsResult(undefined)).toBe(undefined);
+    expect(normalizeAsyncProfileInsightsResult("not an object")).toBe("not an object");
+  });
+
+  it("normalizes all string arrays with correct limits", async () => {
+    const oversizedResult = {
+      summary: "Test summary",
+      keyObservations: Array(10).fill("This observation is way too long and exceeds the 320 character limit"),
+      topConstraints: Array(8).fill("This constraint is way too long and exceeds the 320 character limit"),
+      recommendations: Array(10).fill("This recommendation is way too long and exceeds the 320 character limit"),
+      confidenceNotes: Array(8).fill("This confidence note is way too long and exceeds the 320 character limit"),
+      generationStatus: "model" as const,
+      insightSource: "fresh_model" as const,
+    };
+
+    const normalized = normalizeAsyncProfileInsightsResult(oversizedResult);
+    
+    expect(normalized.keyObservations.length).toBeLessThanOrEqual(8); // max 8
+    expect(normalized.topConstraints.length).toBeLessThanOrEqual(6); // max 6
+    expect(normalized.recommendations.length).toBeLessThanOrEqual(8); // max 8
+    expect(normalized.confidenceNotes.length).toBeLessThanOrEqual(6); // max 6
+    
+    expect(normalized.keyObservations[0].length).toBeLessThanOrEqual(320);
+    expect(normalized.topConstraints[0].length).toBeLessThanOrEqual(320);
+    expect(normalized.recommendations[0].length).toBeLessThanOrEqual(320);
+    expect(normalized.confidenceNotes[0].length).toBeLessThanOrEqual(320);
+  });
+});
 

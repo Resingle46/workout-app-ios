@@ -2507,6 +2507,68 @@ function normalizeProfileInsightStringArray(
     .slice(0, maxItems);
 }
 
+export function normalizeAsyncProfileInsightsResult(
+  result: any
+): CoachProfileInsightsContent {
+  if (!result || typeof result !== 'object') {
+    return result;
+  }
+
+  const normalized = { ...result };
+
+  // Normalize summary
+  if (normalized.summary && typeof normalized.summary === 'string') {
+    normalized.summary = cleanPlainParagraph(normalized.summary).slice(0, 2200);
+  }
+
+  // Normalize string arrays
+  normalized.keyObservations = normalizeProfileInsightStringArray(
+    normalized.keyObservations,
+    8
+  );
+  normalized.topConstraints = normalizeProfileInsightStringArray(
+    normalized.topConstraints,
+    6
+  );
+  normalized.recommendations = normalizeProfileInsightStringArray(
+    normalized.recommendations,
+    8
+  );
+  normalized.confidenceNotes = normalizeProfileInsightStringArray(
+    normalized.confidenceNotes,
+    6
+  );
+
+  // Normalize executionContext
+  if (normalized.executionContext && typeof normalized.executionContext === 'object') {
+    const context = normalized.executionContext;
+    
+    if (context.userNote && typeof context.userNote === 'string') {
+      context.userNote = cleanPlainParagraph(context.userNote).slice(0, 500);
+    }
+    
+    if (context.explanation && typeof context.explanation === 'string') {
+      context.explanation = cleanPlainParagraph(context.explanation).slice(0, 1200);
+    }
+    
+    if (Array.isArray(context.evidence)) {
+      context.evidence = dedupeText(
+        context.evidence
+          .filter((item: any) => typeof item === 'string')
+          .map((item: string) => cleanPlainParagraph(item).slice(0, 240))
+          .filter(Boolean)
+      ).slice(0, 8);
+    }
+  }
+
+  // Normalize selectedModel
+  if (normalized.selectedModel && typeof normalized.selectedModel === 'string') {
+    normalized.selectedModel = normalized.selectedModel.slice(0, 200);
+  }
+
+  return normalized;
+}
+
 function coerceProfileInsightsExecutionContext(
   value: unknown
 ): CoachProfileInsightsContent["executionContext"] | undefined {

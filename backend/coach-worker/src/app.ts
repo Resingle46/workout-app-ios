@@ -14,6 +14,7 @@ import {
   coachPreferencesUpdateRequestSchema,
   coachPreferencesUpdateResponseSchema,
   coachMemoryClearRequestSchema,
+  normalizeAsyncProfileInsightsResult,
   profileInsightsJobCreateRequestSchema,
   profileInsightsJobCreateResponseSchema,
   profileInsightsJobStatusResponseSchema,
@@ -1649,13 +1650,32 @@ export function createApp(
             );
           }
 
+          let normalizedResult = undefined;
+          if (job.result) {
+            try {
+              normalizedResult = normalizeAsyncProfileInsightsResult(job.result);
+            } catch (error) {
+              console.error("Failed to normalize profile insights result:", error);
+              // If normalization fails, create a fallback result
+              normalizedResult = {
+                summary: "Profile insights processing completed with validation issues.",
+                keyObservations: [],
+                topConstraints: [],
+                recommendations: [],
+                confidenceNotes: [],
+                generationStatus: "fallback" as const,
+                insightSource: "fallback" as const,
+              };
+            }
+          }
+
           const response = profileInsightsJobStatusResponseSchema.parse({
             jobID: job.jobID,
             status: job.status,
             createdAt: job.createdAt,
             startedAt: job.startedAt,
             completedAt: job.completedAt,
-            result: job.result,
+            result: normalizedResult,
             error: job.error,
             metadata: publicJobMetadata(job.preparedRequest.metadata),
           });
