@@ -4981,6 +4981,7 @@ private struct CoachInsightsOverviewCard: View {
     var body: some View {
         AppCard {
             VStack(alignment: .leading, spacing: 16) {
+                // Header - остается снаружи скролла
                 HStack(alignment: .firstTextBaseline, spacing: 12) {
                     VStack(alignment: .leading, spacing: 6) {
                         HStack(spacing: 8) {
@@ -5006,40 +5007,47 @@ private struct CoachInsightsOverviewCard: View {
                     }
                     .buttonStyle(CoachPromptButtonStyle())
                 }
+                
+                // Scrollable content area
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 16) {
+                        Text(coachNormalizedReadableText(insights.summary))
+                            .font(AppTypography.body(size: 19, weight: .semibold, relativeTo: .title3))
+                            .foregroundStyle(AppTheme.primaryText)
+                            .lineSpacing(2)
+                            .fixedSize(horizontal: false, vertical: true)
 
-                Text(coachNormalizedReadableText(insights.summary))
-                    .font(AppTypography.body(size: 19, weight: .semibold, relativeTo: .title3))
-                    .foregroundStyle(AppTheme.primaryText)
-                    .lineSpacing(2)
-                    .fixedSize(horizontal: false, vertical: true)
+                        if let executionContext = insights.executionContext {
+                            executionContextSection(executionContext)
+                        }
 
-                if let executionContext = insights.executionContext {
-                    executionContextSection(executionContext)
+                        insightsSection(
+                            titleKey: "coach.insights.section.observations",
+                            items: insights.keyObservations,
+                            bulletColor: AppTheme.primaryText.opacity(0.8)
+                        )
+
+                        insightsSection(
+                            titleKey: "coach.insights.section.constraints",
+                            items: insights.topConstraints,
+                            bulletColor: AppTheme.warning
+                        )
+
+                        insightsSection(
+                            titleKey: "coach.insights.section.recommendations",
+                            items: insights.recommendations,
+                            bulletColor: AppTheme.accent
+                        )
+
+                        insightsSection(
+                            titleKey: "coach.insights.section.confidence",
+                            items: insights.confidenceNotes,
+                            bulletColor: AppTheme.secondaryText.opacity(0.75)
+                        )
+                    }
+                    .padding(.bottom, 8) // Добавим небольшой отступ снизу
                 }
-
-                insightsSection(
-                    titleKey: "coach.insights.section.observations",
-                    items: insights.keyObservations,
-                    bulletColor: AppTheme.primaryText.opacity(0.8)
-                )
-
-                insightsSection(
-                    titleKey: "coach.insights.section.constraints",
-                    items: insights.topConstraints,
-                    bulletColor: AppTheme.warning
-                )
-
-                insightsSection(
-                    titleKey: "coach.insights.section.recommendations",
-                    items: insights.recommendations,
-                    bulletColor: AppTheme.accent
-                )
-
-                insightsSection(
-                    titleKey: "coach.insights.section.confidence",
-                    items: insights.confidenceNotes,
-                    bulletColor: AppTheme.secondaryText.opacity(0.75)
-                )
+                .frame(maxHeight: 400) // Разумный лимит высоты для скролла
             }
         }
     }
@@ -5056,7 +5064,7 @@ private struct CoachInsightsOverviewCard: View {
                     .font(AppTypography.caption(size: 12, weight: .semibold))
                     .foregroundStyle(AppTheme.secondaryText)
 
-                ForEach(Array(items.prefix(6).enumerated()), id: \.offset) { _, item in
+                ForEach(Array(items.enumerated()), id: \.offset) { _, item in
                     HStack(alignment: .top, spacing: 10) {
                         Circle()
                             .fill(bulletColor)
@@ -5109,7 +5117,7 @@ private struct CoachInsightsOverviewCard: View {
                             .font(AppTypography.caption(size: 11, weight: .semibold))
                             .foregroundStyle(AppTheme.secondaryText)
 
-                        ForEach(Array(context.evidence.prefix(3).enumerated()), id: \.offset) { _, item in
+                        ForEach(Array(context.evidence.enumerated()), id: \.offset) { _, item in
                             Text("• \(coachNormalizedReadableText(item))")
                                 .font(AppTypography.caption(size: 12, weight: .medium))
                                 .foregroundStyle(AppTheme.secondaryText)
