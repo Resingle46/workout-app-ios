@@ -495,9 +495,16 @@ export function createApp(
             body.forceRefresh,
             context.cacheAllowed
           );
-          const liveResponseSource = resolveProfileInsightsResponseSource(result.mode);
+          const liveResponseSource = resolveProfileInsightsResponseSource(
+            result.mode,
+            result.emergencyFallbackUsed
+          );
           const fallbackSource =
-            result.mode === "local_fallback" ? "local_fallback" : "none";
+            result.mode === "local_fallback"
+              ? "local_fallback"
+              : result.emergencyFallbackUsed
+                ? "emergency_model_fallback"
+                : "none";
           const cacheSource = body.forceRefresh
             ? "bypassed_force_refresh"
             : "miss";
@@ -508,6 +515,7 @@ export function createApp(
 
           if (context.cacheAllowed) {
             if (
+              !result.emergencyFallbackUsed &&
               (!result.mode || result.mode === "structured") &&
               responseBody.generationStatus === "model"
             ) {
@@ -520,7 +528,10 @@ export function createApp(
                 body.installID,
                 storageKey
               );
-            } else if (isLiveProfileInsightsFallbackMode(result.mode)) {
+            } else if (
+              result.emergencyFallbackUsed ||
+              isLiveProfileInsightsFallbackMode(result.mode)
+            ) {
               await stateRepository.storeDegradedInsightsCache(
                 body.installID,
                 storageKey,
@@ -571,6 +582,7 @@ export function createApp(
             modelDurationMs,
             fallbackPromptBytes: result.fallbackPromptBytes,
             fallbackModelDurationMs: result.fallbackModelDurationMs,
+            ...buildInferenceDiagnosticsLogFields(result),
             installAuthMode: installAuth.authMode,
           });
           return json(responseBody, 200);
@@ -1017,6 +1029,9 @@ export function createApp(
             questionChars,
             promptBytes: result.promptBytes,
             modelDurationMs,
+            fallbackPromptBytes: result.fallbackPromptBytes,
+            fallbackModelDurationMs: result.fallbackModelDurationMs,
+            ...buildInferenceDiagnosticsLogFields(result),
             installAuthMode: installAuth.authMode,
           });
           return json(result.data, 200);
@@ -1929,7 +1944,9 @@ function mapError(
       body: {
         error: {
           code: error.code,
-          message: "Coach upstream request failed.",
+          message: shouldExposeInferenceErrorMessage(error.code)
+            ? error.message
+            : "Coach upstream request failed.",
           requestID,
         },
       },
@@ -2435,12 +2452,13 @@ function normalizeReusableDegradedProfileInsightsCacheEntry(
 }
 
 function resolveProfileInsightsResponseSource(
-  mode: string | undefined
+  mode: string | undefined,
+  emergencyFallbackUsed = false
 ): "live_model" | "live_fallback" | "local_fallback" {
   if (mode === "local_fallback") {
     return "local_fallback";
   }
-  if (mode === "plain_text_fallback") {
+  if (mode === "plain_text_fallback" || emergencyFallbackUsed) {
     return "live_fallback";
   }
   return "live_model";
@@ -2448,4 +2466,44 @@ function resolveProfileInsightsResponseSource(
 
 function isLiveProfileInsightsFallbackMode(mode: string | undefined): boolean {
   return mode === "plain_text_fallback" || mode === "local_fallback";
+}
+
+function buildInferenceDiagnosticsLogFields(result: {
+  requestedModel?: string;
+  attemptedModels?: string[];
+  fallbackModelUsed?: string;
+  providerQuotaExhausted?: boolean;
+  geminiDailyQuotaExhausted?: boolean;
+  providerFamilyBlocked?: boolean;
+  blockedUntil?: string;
+  quotaClassificationKind?: string;
+  requestPath?: string;
+  sourceProviderErrorStatus?: number;
+  sourceProviderErrorCode?: string;
+  providerFamily?: string;
+  emergencyFallbackUsed?: boolean;
+}): Record<string, unknown> {
+  return {
+    requestedModel: result.requestedModel,
+    attemptedModels: result.attemptedModels,
+    fallbackModelUsed: result.fallbackModelUsed,
+    providerQuotaExhausted: result.providerQuotaExhausted,
+    geminiDailyQuotaExhausted: result.geminiDailyQuotaExhausted,
+    providerFamilyBlocked: result.providerFamilyBlocked,
+    blockedUntil: result.blockedUntil,
+    quotaClassificationKind: result.quotaClassificationKind,
+    requestPath: result.requestPath,
+    sourceProviderErrorStatus: result.sourceProviderErrorStatus,
+    sourceProviderErrorCode: result.sourceProviderErrorCode,
+    providerFamily: result.providerFamily,
+    emergencyFallbackUsed: result.emergencyFallbackUsed,
+  };
+}
+
+function shouldExposeInferenceErrorMessage(code: string): boolean {
+  return (
+    code === "provider_quota_exhausted" ||
+    code === "gemini_daily_quota_exhausted" ||
+    code === "provider_family_blocked"
+  );
 }

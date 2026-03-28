@@ -50,6 +50,25 @@ import {
   type StructuredAdapter,
   type WorkoutSummaryRoutingAttempt,
 } from "./routing";
+import {
+  GEMINI_2_5_BLOCK_SCOPE,
+  GEMINI_2_5_PROVIDER_FAMILY,
+  classifyGeminiHttpError,
+  classifyGeminiServiceFailure,
+  isGemini2_5FamilyModel,
+  isGemini2_5FlashLiteModel,
+  isGemini2_5FlashModel,
+  isGemini2_5QuotaBlockEnabled,
+  isGeminiEmergencyFallbackEnabled,
+  readGemini2_5FamilyBlockState,
+  resolveGemini2_5BlockScope,
+  resolveGeminiEmergencyFallbackModel,
+  writeGemini2_5FamilyBlockState,
+  type GeminiProviderFamilyBlockState,
+  type GeminiQuotaClassification,
+  type GeminiQuotaClassificationKind,
+  type GeminiQuotaStateEnvLike,
+} from "./gemini-quota";
 
 export { DEFAULT_AI_MODEL } from "./routing";
 const PROFILE_INSIGHTS_STRUCTURED_MAX_TOKENS = 550;
@@ -148,6 +167,10 @@ export interface Env {
   GEMINI_INSIGHTS_FAST_MODEL?: string;
   GEMINI_SYNC_FALLBACK_MODEL?: string;
   GEMINI_QUALITY_ESCALATION_MODEL?: string;
+  GEMINI_2_5_QUOTA_BLOCK_ENABLED?: string;
+  GEMINI_2_5_FAMILY_BLOCK_SCOPE?: string;
+  GEMINI_EMERGENCY_FALLBACK_ENABLED?: string;
+  GEMINI_EMERGENCY_FALLBACK_MODEL?: string;
 }
 
 export interface InferenceResult<T> {
@@ -171,6 +194,36 @@ export interface InferenceResult<T> {
   fallbackPromptBytes?: number;
   modelDurationMs?: number;
   fallbackModelDurationMs?: number;
+  requestedModel?: string;
+  attemptedModels?: string[];
+  fallbackModelUsed?: string;
+  providerQuotaExhausted?: boolean;
+  geminiDailyQuotaExhausted?: boolean;
+  providerFamilyBlocked?: boolean;
+  blockedUntil?: string;
+  quotaClassificationKind?: GeminiQuotaClassificationKind;
+  requestPath?: string;
+  sourceProviderErrorStatus?: number;
+  sourceProviderErrorCode?: string;
+  providerFamily?: string;
+  emergencyFallbackUsed?: boolean;
+}
+
+interface ProviderExecutionMetadata {
+  requestedModel: string;
+  effectiveModel: string;
+  attemptedModels: string[];
+  fallbackModelUsed?: string;
+  providerQuotaExhausted?: boolean;
+  geminiDailyQuotaExhausted?: boolean;
+  providerFamilyBlocked?: boolean;
+  blockedUntil?: string;
+  quotaClassificationKind?: GeminiQuotaClassificationKind;
+  requestPath?: string;
+  sourceProviderErrorStatus?: number;
+  sourceProviderErrorCode?: string;
+  providerFamily?: string;
+  emergencyFallbackUsed?: boolean;
 }
 
 type CoachProfileInsightsContent = Omit<
@@ -415,9 +468,13 @@ export class WorkersAICoachService implements CoachInferenceService {
             invocation.rawResponse,
             {
               operation,
-              model: attempt.selectedModel,
+              model:
+                invocation.providerExecution?.effectiveModel ??
+                attempt.selectedModel,
             }
           );
+          const effectiveModel =
+            invocation.providerExecution?.effectiveModel ?? attempt.selectedModel;
           const guardedResponse = applyProfileInsightsGuardrails(
             request,
             {
@@ -438,7 +495,7 @@ export class WorkersAICoachService implements CoachInferenceService {
           logInferenceAttempt("coach_profile_attempt_succeeded", {
             operation,
             provider: attempt.provider,
-            selectedModel: attempt.selectedModel,
+            selectedModel: effectiveModel,
             modelRole: attempt.modelRole,
             useCase: attempt.useCase,
             routingVersion: attempt.routingVersion,
@@ -452,13 +509,14 @@ export class WorkersAICoachService implements CoachInferenceService {
             structuredParseMode: parsed.parseMode,
             modelDurationMs: invocation.modelDurationMs,
             promptBytes: invocation.promptBytes,
+            ...mergeProviderExecutionDetails({}, invocation.providerExecution),
           });
 
           return {
             data: guardedResponse,
             provider: attempt.provider,
-            model: attempt.selectedModel,
-            selectedModel: attempt.selectedModel,
+            model: effectiveModel,
+            selectedModel: effectiveModel,
             modelRole: attempt.modelRole,
             useCase: attempt.useCase,
             routingVersion: attempt.routingVersion,
@@ -472,6 +530,27 @@ export class WorkersAICoachService implements CoachInferenceService {
             usage: extractUsage(invocation.rawResponse),
             promptBytes: stats.structuredPromptBytes,
             modelDurationMs: stats.structuredModelDurationMs,
+            requestedModel:
+              invocation.providerExecution?.requestedModel ?? attempt.selectedModel,
+            attemptedModels: invocation.providerExecution?.attemptedModels,
+            fallbackModelUsed: invocation.providerExecution?.fallbackModelUsed,
+            providerQuotaExhausted:
+              invocation.providerExecution?.providerQuotaExhausted,
+            geminiDailyQuotaExhausted:
+              invocation.providerExecution?.geminiDailyQuotaExhausted,
+            providerFamilyBlocked:
+              invocation.providerExecution?.providerFamilyBlocked,
+            blockedUntil: invocation.providerExecution?.blockedUntil,
+            quotaClassificationKind:
+              invocation.providerExecution?.quotaClassificationKind,
+            requestPath: invocation.providerExecution?.requestPath,
+            sourceProviderErrorStatus:
+              invocation.providerExecution?.sourceProviderErrorStatus,
+            sourceProviderErrorCode:
+              invocation.providerExecution?.sourceProviderErrorCode,
+            providerFamily: invocation.providerExecution?.providerFamily,
+            emergencyFallbackUsed:
+              invocation.providerExecution?.emergencyFallbackUsed,
           };
         }
 
@@ -492,6 +571,9 @@ export class WorkersAICoachService implements CoachInferenceService {
             fallbackTrigger: errors.at(-1)?.code,
           },
         });
+        const effectiveModel =
+          fallbackInvocation.providerExecution?.effectiveModel ??
+          attempt.selectedModel;
         stats.fallbackPromptBytes = fallbackInvocation.promptBytes;
         stats.fallbackModelDurationMs = fallbackInvocation.modelDurationMs;
         const guardedResponse = applyProfileInsightsGuardrails(
@@ -516,7 +598,7 @@ export class WorkersAICoachService implements CoachInferenceService {
         logInferenceAttempt("coach_profile_attempt_succeeded", {
           operation,
           provider: attempt.provider,
-          selectedModel: attempt.selectedModel,
+          selectedModel: effectiveModel,
           modelRole: attempt.modelRole,
           useCase: attempt.useCase,
           routingVersion: attempt.routingVersion,
@@ -529,13 +611,17 @@ export class WorkersAICoachService implements CoachInferenceService {
           mode: attempt.mode,
           modelDurationMs: fallbackInvocation.modelDurationMs,
           promptBytes: fallbackInvocation.promptBytes,
+          ...mergeProviderExecutionDetails(
+            {},
+            fallbackInvocation.providerExecution
+          ),
         });
 
         return {
           data: guardedResponse,
           provider: attempt.provider,
-          model: attempt.selectedModel,
-          selectedModel: attempt.selectedModel,
+          model: effectiveModel,
+          selectedModel: effectiveModel,
           modelRole: attempt.modelRole,
           useCase: attempt.useCase,
           routingVersion: attempt.routingVersion,
@@ -551,6 +637,29 @@ export class WorkersAICoachService implements CoachInferenceService {
           fallbackPromptBytes: stats.fallbackPromptBytes,
           modelDurationMs: stats.structuredModelDurationMs || undefined,
           fallbackModelDurationMs: stats.fallbackModelDurationMs,
+          requestedModel:
+            fallbackInvocation.providerExecution?.requestedModel ??
+            attempt.selectedModel,
+          attemptedModels: fallbackInvocation.providerExecution?.attemptedModels,
+          fallbackModelUsed:
+            fallbackInvocation.providerExecution?.fallbackModelUsed,
+          providerQuotaExhausted:
+            fallbackInvocation.providerExecution?.providerQuotaExhausted,
+          geminiDailyQuotaExhausted:
+            fallbackInvocation.providerExecution?.geminiDailyQuotaExhausted,
+          providerFamilyBlocked:
+            fallbackInvocation.providerExecution?.providerFamilyBlocked,
+          blockedUntil: fallbackInvocation.providerExecution?.blockedUntil,
+          quotaClassificationKind:
+            fallbackInvocation.providerExecution?.quotaClassificationKind,
+          requestPath: fallbackInvocation.providerExecution?.requestPath,
+          sourceProviderErrorStatus:
+            fallbackInvocation.providerExecution?.sourceProviderErrorStatus,
+          sourceProviderErrorCode:
+            fallbackInvocation.providerExecution?.sourceProviderErrorCode,
+          providerFamily: fallbackInvocation.providerExecution?.providerFamily,
+          emergencyFallbackUsed:
+            fallbackInvocation.providerExecution?.emergencyFallbackUsed,
         };
       } catch (error) {
         if (!(error instanceof CoachInferenceServiceError)) {
@@ -597,6 +706,10 @@ export class WorkersAICoachService implements CoachInferenceService {
         );
 
         errors.push(error);
+
+        if (shouldSurfaceProviderQuotaFailure(attempt.provider, error)) {
+          throw error;
+        }
 
         if (!shouldAttemptProfileModelFallback(error)) {
           degradedReason = fallbackReason;
@@ -775,17 +888,21 @@ export class WorkersAICoachService implements CoachInferenceService {
               "workout summary",
               {
                 operation,
-                model: attempt.selectedModel,
+                model:
+                  invocation.providerExecution?.effectiveModel ??
+                  attempt.selectedModel,
                 sessionID: request.sessionID,
                 fingerprint: request.fingerprint,
               }
             )
           );
+          const effectiveModel =
+            invocation.providerExecution?.effectiveModel ?? attempt.selectedModel;
 
           logInferenceAttempt("coach_workout_summary_attempt_succeeded", {
             operation,
             provider: attempt.provider,
-            selectedModel: attempt.selectedModel,
+            selectedModel: effectiveModel,
             modelRole: attempt.modelRole,
             useCase: attempt.useCase,
             routingVersion: attempt.routingVersion,
@@ -801,6 +918,7 @@ export class WorkersAICoachService implements CoachInferenceService {
             mode: attempt.mode,
             modelDurationMs: invocation.modelDurationMs,
             promptBytes: invocation.promptBytes,
+            ...mergeProviderExecutionDetails({}, invocation.providerExecution),
           });
 
           return {
@@ -809,8 +927,8 @@ export class WorkersAICoachService implements CoachInferenceService {
               generationStatus: "model",
             },
             provider: attempt.provider,
-            model: attempt.selectedModel,
-            selectedModel: attempt.selectedModel,
+            model: effectiveModel,
+            selectedModel: effectiveModel,
             modelRole: attempt.modelRole,
             useCase: attempt.useCase,
             routingVersion: attempt.routingVersion,
@@ -826,6 +944,27 @@ export class WorkersAICoachService implements CoachInferenceService {
             usage: extractUsage(invocation.rawResponse),
             promptBytes: stats.structuredPromptBytes,
             modelDurationMs: stats.structuredModelDurationMs,
+            requestedModel:
+              invocation.providerExecution?.requestedModel ?? attempt.selectedModel,
+            attemptedModels: invocation.providerExecution?.attemptedModels,
+            fallbackModelUsed: invocation.providerExecution?.fallbackModelUsed,
+            providerQuotaExhausted:
+              invocation.providerExecution?.providerQuotaExhausted,
+            geminiDailyQuotaExhausted:
+              invocation.providerExecution?.geminiDailyQuotaExhausted,
+            providerFamilyBlocked:
+              invocation.providerExecution?.providerFamilyBlocked,
+            blockedUntil: invocation.providerExecution?.blockedUntil,
+            quotaClassificationKind:
+              invocation.providerExecution?.quotaClassificationKind,
+            requestPath: invocation.providerExecution?.requestPath,
+            sourceProviderErrorStatus:
+              invocation.providerExecution?.sourceProviderErrorStatus,
+            sourceProviderErrorCode:
+              invocation.providerExecution?.sourceProviderErrorCode,
+            providerFamily: invocation.providerExecution?.providerFamily,
+            emergencyFallbackUsed:
+              invocation.providerExecution?.emergencyFallbackUsed,
           };
         }
 
@@ -842,6 +981,9 @@ export class WorkersAICoachService implements CoachInferenceService {
             remainingBudgetMs
           ),
         });
+        const effectiveModel =
+          fallbackInvocation.providerExecution?.effectiveModel ??
+          attempt.selectedModel;
         stats.fallbackPromptBytes = fallbackInvocation.promptBytes;
         stats.fallbackModelDurationMs = fallbackInvocation.modelDurationMs;
         const fallbackReason =
@@ -852,7 +994,7 @@ export class WorkersAICoachService implements CoachInferenceService {
         logInferenceAttempt("coach_workout_summary_attempt_succeeded", {
           operation,
           provider: attempt.provider,
-          selectedModel: attempt.selectedModel,
+          selectedModel: effectiveModel,
           modelRole: attempt.modelRole,
           useCase: attempt.useCase,
           routingVersion: attempt.routingVersion,
@@ -865,6 +1007,10 @@ export class WorkersAICoachService implements CoachInferenceService {
           mode: attempt.mode,
           modelDurationMs: fallbackInvocation.modelDurationMs,
           promptBytes: fallbackInvocation.promptBytes,
+          ...mergeProviderExecutionDetails(
+            {},
+            fallbackInvocation.providerExecution
+          ),
         });
 
         return {
@@ -878,8 +1024,8 @@ export class WorkersAICoachService implements CoachInferenceService {
             generationStatus: "model",
           },
           provider: attempt.provider,
-          model: attempt.selectedModel,
-          selectedModel: attempt.selectedModel,
+          model: effectiveModel,
+          selectedModel: effectiveModel,
           modelRole: attempt.modelRole,
           useCase: attempt.useCase,
           routingVersion: attempt.routingVersion,
@@ -894,6 +1040,29 @@ export class WorkersAICoachService implements CoachInferenceService {
           fallbackPromptBytes: stats.fallbackPromptBytes,
           modelDurationMs: stats.structuredModelDurationMs || undefined,
           fallbackModelDurationMs: stats.fallbackModelDurationMs,
+          requestedModel:
+            fallbackInvocation.providerExecution?.requestedModel ??
+            attempt.selectedModel,
+          attemptedModels: fallbackInvocation.providerExecution?.attemptedModels,
+          fallbackModelUsed:
+            fallbackInvocation.providerExecution?.fallbackModelUsed,
+          providerQuotaExhausted:
+            fallbackInvocation.providerExecution?.providerQuotaExhausted,
+          geminiDailyQuotaExhausted:
+            fallbackInvocation.providerExecution?.geminiDailyQuotaExhausted,
+          providerFamilyBlocked:
+            fallbackInvocation.providerExecution?.providerFamilyBlocked,
+          blockedUntil: fallbackInvocation.providerExecution?.blockedUntil,
+          quotaClassificationKind:
+            fallbackInvocation.providerExecution?.quotaClassificationKind,
+          requestPath: fallbackInvocation.providerExecution?.requestPath,
+          sourceProviderErrorStatus:
+            fallbackInvocation.providerExecution?.sourceProviderErrorStatus,
+          sourceProviderErrorCode:
+            fallbackInvocation.providerExecution?.sourceProviderErrorCode,
+          providerFamily: fallbackInvocation.providerExecution?.providerFamily,
+          emergencyFallbackUsed:
+            fallbackInvocation.providerExecution?.emergencyFallbackUsed,
         };
       } catch (error) {
         if (!(error instanceof CoachInferenceServiceError)) {
@@ -904,6 +1073,10 @@ export class WorkersAICoachService implements CoachInferenceService {
         stats.structuredPromptBytes += resolvePromptBytes(error.details) ?? 0;
         stats.structuredModelDurationMs +=
           resolveModelDurationMs(error.details) ?? 0;
+
+        if (shouldSurfaceProviderQuotaFailure(attempt.provider, error)) {
+          throw error;
+        }
 
         console.warn(
           JSON.stringify({
@@ -1050,11 +1223,15 @@ export class WorkersAICoachService implements CoachInferenceService {
               "chat",
               {
                 operation,
-                model: attempt.selectedModel,
+                model:
+                  rawResponse.providerExecution?.effectiveModel ??
+                  attempt.selectedModel,
                 turnID,
               }
             )
           );
+          const effectiveModel =
+            rawResponse.providerExecution?.effectiveModel ?? attempt.selectedModel;
           const fallbackReason =
             attempt.fallbackHopCount > 0
               ? resolveGenericFallbackReasonFromError(errors.at(-1))
@@ -1063,7 +1240,7 @@ export class WorkersAICoachService implements CoachInferenceService {
           logInferenceAttempt("coach_chat_attempt_succeeded", {
             operation,
             provider: attempt.provider,
-            selectedModel: attempt.selectedModel,
+            selectedModel: effectiveModel,
             modelRole: attempt.modelRole,
             useCase: attempt.useCase,
             routingVersion: attempt.routingVersion,
@@ -1077,6 +1254,7 @@ export class WorkersAICoachService implements CoachInferenceService {
             turnID,
             modelDurationMs: rawResponse.modelDurationMs,
             promptBytes: rawResponse.promptBytes,
+            ...mergeProviderExecutionDetails({}, rawResponse.providerExecution),
           });
 
           return {
@@ -1093,8 +1271,8 @@ export class WorkersAICoachService implements CoachInferenceService {
             },
             provider: attempt.provider,
             responseId: turnID,
-            model: attempt.selectedModel,
-            selectedModel: attempt.selectedModel,
+            model: effectiveModel,
+            selectedModel: effectiveModel,
             modelRole: attempt.modelRole,
             useCase: attempt.useCase,
             routingVersion: attempt.routingVersion,
@@ -1108,6 +1286,27 @@ export class WorkersAICoachService implements CoachInferenceService {
             usage: extractUsage(rawResponse.rawResponse),
             promptBytes: stats.structuredPromptBytes,
             modelDurationMs: stats.structuredModelDurationMs,
+            requestedModel:
+              rawResponse.providerExecution?.requestedModel ?? attempt.selectedModel,
+            attemptedModels: rawResponse.providerExecution?.attemptedModels,
+            fallbackModelUsed: rawResponse.providerExecution?.fallbackModelUsed,
+            providerQuotaExhausted:
+              rawResponse.providerExecution?.providerQuotaExhausted,
+            geminiDailyQuotaExhausted:
+              rawResponse.providerExecution?.geminiDailyQuotaExhausted,
+            providerFamilyBlocked:
+              rawResponse.providerExecution?.providerFamilyBlocked,
+            blockedUntil: rawResponse.providerExecution?.blockedUntil,
+            quotaClassificationKind:
+              rawResponse.providerExecution?.quotaClassificationKind,
+            requestPath: rawResponse.providerExecution?.requestPath,
+            sourceProviderErrorStatus:
+              rawResponse.providerExecution?.sourceProviderErrorStatus,
+            sourceProviderErrorCode:
+              rawResponse.providerExecution?.sourceProviderErrorCode,
+            providerFamily: rawResponse.providerExecution?.providerFamily,
+            emergencyFallbackUsed:
+              rawResponse.providerExecution?.emergencyFallbackUsed,
           };
         }
 
@@ -1128,6 +1327,9 @@ export class WorkersAICoachService implements CoachInferenceService {
           fallbackResponse.rawResponse,
           "chat fallback"
         );
+        const effectiveModel =
+          fallbackResponse.providerExecution?.effectiveModel ??
+          attempt.selectedModel;
         stats.fallbackPromptBytes = fallbackResponse.promptBytes;
         stats.fallbackModelDurationMs = fallbackResponse.modelDurationMs;
         const fallbackReason =
@@ -1138,7 +1340,7 @@ export class WorkersAICoachService implements CoachInferenceService {
         logInferenceAttempt("coach_chat_attempt_succeeded", {
           operation,
           provider: attempt.provider,
-          selectedModel: attempt.selectedModel,
+          selectedModel: effectiveModel,
           modelRole: attempt.modelRole,
           useCase: attempt.useCase,
           routingVersion: attempt.routingVersion,
@@ -1152,6 +1354,7 @@ export class WorkersAICoachService implements CoachInferenceService {
           turnID,
           modelDurationMs: fallbackResponse.modelDurationMs,
           promptBytes: fallbackResponse.promptBytes,
+          ...mergeProviderExecutionDetails({}, fallbackResponse.providerExecution),
         });
 
         return {
@@ -1169,8 +1372,8 @@ export class WorkersAICoachService implements CoachInferenceService {
           },
           provider: attempt.provider,
           responseId: turnID,
-          model: attempt.selectedModel,
-          selectedModel: attempt.selectedModel,
+          model: effectiveModel,
+          selectedModel: effectiveModel,
           modelRole: attempt.modelRole,
           useCase: attempt.useCase,
           routingVersion: attempt.routingVersion,
@@ -1186,6 +1389,29 @@ export class WorkersAICoachService implements CoachInferenceService {
           fallbackPromptBytes: stats.fallbackPromptBytes,
           modelDurationMs: stats.structuredModelDurationMs || undefined,
           fallbackModelDurationMs: stats.fallbackModelDurationMs,
+          requestedModel:
+            fallbackResponse.providerExecution?.requestedModel ??
+            attempt.selectedModel,
+          attemptedModels: fallbackResponse.providerExecution?.attemptedModels,
+          fallbackModelUsed:
+            fallbackResponse.providerExecution?.fallbackModelUsed,
+          providerQuotaExhausted:
+            fallbackResponse.providerExecution?.providerQuotaExhausted,
+          geminiDailyQuotaExhausted:
+            fallbackResponse.providerExecution?.geminiDailyQuotaExhausted,
+          providerFamilyBlocked:
+            fallbackResponse.providerExecution?.providerFamilyBlocked,
+          blockedUntil: fallbackResponse.providerExecution?.blockedUntil,
+          quotaClassificationKind:
+            fallbackResponse.providerExecution?.quotaClassificationKind,
+          requestPath: fallbackResponse.providerExecution?.requestPath,
+          sourceProviderErrorStatus:
+            fallbackResponse.providerExecution?.sourceProviderErrorStatus,
+          sourceProviderErrorCode:
+            fallbackResponse.providerExecution?.sourceProviderErrorCode,
+          providerFamily: fallbackResponse.providerExecution?.providerFamily,
+          emergencyFallbackUsed:
+            fallbackResponse.providerExecution?.emergencyFallbackUsed,
         };
       } catch (error) {
         if (!(error instanceof CoachInferenceServiceError)) {
@@ -1195,6 +1421,10 @@ export class WorkersAICoachService implements CoachInferenceService {
         stats.structuredPromptBytes += resolvePromptBytes(error.details) ?? 0;
         stats.structuredModelDurationMs +=
           resolveModelDurationMs(error.details) ?? 0;
+
+        if (shouldSurfaceProviderQuotaFailure(attempt.provider, error)) {
+          throw error;
+        }
 
         console.warn(
           JSON.stringify({
@@ -1338,16 +1568,26 @@ export class WorkersAICoachService implements CoachInferenceService {
     const timeoutMs = parseTimeoutMs(details.timeoutMs);
     const startedAt = Date.now();
     const promptBytes = byteLength(payload.messages);
+    const runtimePayload = isGeminiModel(selectedModel)
+      ? {
+          ...payload,
+          __coach_request_path: details.operation,
+        }
+      : payload;
 
     try {
       const rawResponse = await withTimeout(
-        this.env.AI.run(selectedModel, payload),
+        this.env.AI.run(selectedModel, runtimePayload),
         timeoutMs
       );
       return {
         rawResponse,
         promptBytes,
         modelDurationMs: Date.now() - startedAt,
+        providerExecution: readProviderExecutionMetadata(
+          rawResponse,
+          selectedModel
+        ),
       };
     } catch (error) {
       throw normalizeWorkersAIError(error, {
@@ -1364,6 +1604,7 @@ interface ModelInvocationResult {
   rawResponse: unknown;
   promptBytes: number;
   modelDurationMs: number;
+  providerExecution?: ProviderExecutionMetadata;
 }
 
 interface AttemptAccumulator {
@@ -1371,6 +1612,151 @@ interface AttemptAccumulator {
   fallbackPromptBytes?: number;
   structuredModelDurationMs: number;
   fallbackModelDurationMs?: number;
+}
+
+function isGeminiModel(model: string): boolean {
+  return model.trim().toLowerCase().startsWith("gemini-");
+}
+
+function readGeminiRequestPath(
+  inputs: Record<string, unknown>
+): string | undefined {
+  return readNonEmptyString(inputs.__coach_request_path);
+}
+
+function readNonEmptyString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function readFiniteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function readGeminiQuotaClassificationKind(
+  value: unknown
+): GeminiQuotaClassificationKind | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  switch (value.trim()) {
+    case "daily_quota":
+    case "project_quota":
+    case "transient_429":
+    case "timeout":
+    case "canceled":
+    case "malformed_provider_response":
+    case "structured_output_failure":
+    case "internal_provider_error":
+    case "provider_unavailable":
+    case "provider_auth_failed":
+      return value.trim() as GeminiQuotaClassificationKind;
+    default:
+      return undefined;
+  }
+}
+
+function isQuotaOrFamilyBlockedInferenceErrorCode(code: string): boolean {
+  return (
+    code === "provider_quota_exhausted" ||
+    code === "gemini_daily_quota_exhausted" ||
+    code === "provider_family_blocked"
+  );
+}
+
+function shouldSurfaceProviderQuotaFailure(
+  provider: CoachAIProvider,
+  error: CoachInferenceServiceError
+): boolean {
+  if (provider !== "gemini") {
+    return false;
+  }
+
+  return (
+    isQuotaOrFamilyBlockedInferenceErrorCode(error.code) ||
+    error.details?.providerQuotaExhausted === true ||
+    error.details?.providerFamilyBlocked === true
+  );
+}
+
+function readProviderExecutionMetadata(
+  rawResponse: unknown,
+  requestedModel: string
+): ProviderExecutionMetadata | undefined {
+  if (!isRecord(rawResponse) || !isRecord(rawResponse.providerExecution)) {
+    return undefined;
+  }
+
+  const attemptedModels = Array.isArray(rawResponse.providerExecution.attemptedModels)
+    ? rawResponse.providerExecution.attemptedModels
+        .filter((value): value is string => typeof value === "string")
+        .map((value) => value.trim())
+        .filter(Boolean)
+    : [];
+  const effectiveModel =
+    readNonEmptyString(rawResponse.providerExecution.effectiveModel) ??
+    requestedModel;
+
+  return {
+    requestedModel,
+    effectiveModel,
+    attemptedModels:
+      attemptedModels.length > 0 ? attemptedModels : [effectiveModel],
+    fallbackModelUsed: readNonEmptyString(
+      rawResponse.providerExecution.fallbackModelUsed
+    ),
+    providerQuotaExhausted:
+      rawResponse.providerExecution.providerQuotaExhausted === true,
+    geminiDailyQuotaExhausted:
+      rawResponse.providerExecution.geminiDailyQuotaExhausted === true,
+    providerFamilyBlocked:
+      rawResponse.providerExecution.providerFamilyBlocked === true,
+    blockedUntil: readNonEmptyString(rawResponse.providerExecution.blockedUntil),
+    quotaClassificationKind: readGeminiQuotaClassificationKind(
+      rawResponse.providerExecution.quotaClassificationKind
+    ),
+    requestPath: readNonEmptyString(rawResponse.providerExecution.requestPath),
+    sourceProviderErrorStatus: readFiniteNumber(
+      rawResponse.providerExecution.sourceProviderErrorStatus
+    ),
+    sourceProviderErrorCode: readNonEmptyString(
+      rawResponse.providerExecution.sourceProviderErrorCode
+    ),
+    providerFamily: readNonEmptyString(rawResponse.providerExecution.providerFamily),
+    emergencyFallbackUsed:
+      rawResponse.providerExecution.emergencyFallbackUsed === true,
+  };
+}
+
+function mergeProviderExecutionDetails(
+  target: Record<string, unknown>,
+  providerExecution: ProviderExecutionMetadata | undefined
+): Record<string, unknown> {
+  if (!providerExecution) {
+    return target;
+  }
+
+  return {
+    ...target,
+    requestedModel: providerExecution.requestedModel,
+    attemptedModels: providerExecution.attemptedModels,
+    fallbackModelUsed: providerExecution.fallbackModelUsed,
+    providerQuotaExhausted: providerExecution.providerQuotaExhausted,
+    geminiDailyQuotaExhausted: providerExecution.geminiDailyQuotaExhausted,
+    providerFamilyBlocked: providerExecution.providerFamilyBlocked,
+    blockedUntil: providerExecution.blockedUntil,
+    quotaClassificationKind: providerExecution.quotaClassificationKind,
+    requestPath: providerExecution.requestPath,
+    sourceProviderErrorStatus: providerExecution.sourceProviderErrorStatus,
+    sourceProviderErrorCode: providerExecution.sourceProviderErrorCode,
+    providerFamily: providerExecution.providerFamily,
+    emergencyFallbackUsed: providerExecution.emergencyFallbackUsed,
+  };
 }
 
 type ProfileInsightsStructuredParseResult = {
@@ -2891,7 +3277,15 @@ function normalizeWorkersAIError(
   details: Record<string, unknown>
 ): CoachInferenceServiceError {
   if (error instanceof CoachInferenceServiceError) {
-    return error;
+    return new CoachInferenceServiceError(
+      error.status,
+      error.code,
+      error.message,
+      {
+        ...(error.details ?? {}),
+        ...details,
+      }
+    );
   }
   const message =
     error instanceof Error ? error.message : "Unknown Workers AI error";
@@ -2940,82 +3334,729 @@ function createGeminiAIAdapter(env: Env): WorkersAI {
       const baseURL =
         env.GEMINI_API_BASE_URL?.trim() ||
         "https://generativelanguage.googleapis.com/v1beta";
-      const payload = buildGeminiRequestPayload(inputs);
-      for (let attempt = 0; attempt <= GEMINI_MAX_RATE_LIMIT_RETRIES; attempt += 1) {
-        const response = await fetch(
-          `${baseURL}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`,
-          {
-            method: "POST",
-            headers: {
-              "content-type": "application/json",
-            },
-            body: JSON.stringify(payload),
-          }
+      const requestPath = readGeminiRequestPath(inputs);
+      const attemptedModels: string[] = [];
+      const providerFamily = isGemini2_5FamilyModel(model)
+        ? GEMINI_2_5_PROVIDER_FAMILY
+        : undefined;
+      const blockScope = resolveGemini2_5BlockScope(env);
+      const activeBlock =
+        providerFamily && isGemini2_5QuotaBlockEnabled(env)
+          ? await readGemini2_5FamilyBlockState(env.COACH_STATE_KV, {
+              scope: blockScope,
+            })
+          : null;
+
+      if (activeBlock) {
+        console.warn(
+          JSON.stringify({
+            event: "gemini_family_block_active",
+            provider: "gemini",
+            requestedModel: model,
+            blockedUntil: activeBlock.blockedUntil,
+            requestPath,
+            providerFamily: GEMINI_2_5_PROVIDER_FAMILY,
+          })
         );
 
-        const responseText = await response.text();
-        const responseJSON = responseText ? safeJSONParse(responseText) : undefined;
-        if (!response.ok) {
-          const retryDelayMs = resolveGeminiRetryDelayMs(responseJSON);
-          if (response.status === 429 && attempt < GEMINI_MAX_RATE_LIMIT_RETRIES) {
-            const backoffMs = Math.min(
-              retryDelayMs ?? GEMINI_BASE_RETRY_DELAY_MS * (attempt + 1),
-              GEMINI_MAX_RETRY_DELAY_MS
-            );
-            console.warn(
-              JSON.stringify({
-                event: "coach_gemini_retry_scheduled",
-                provider: "gemini",
-                model,
-                status: response.status,
-                retryAttempt: attempt + 1,
-                retryDelayMs: backoffMs,
-              })
-            );
-            await sleep(backoffMs);
-            continue;
-          }
-
-          throw normalizeGeminiHTTPError(response.status, responseJSON, {
-            provider: "gemini",
-            model,
-            retryAttemptCount: attempt,
-            retryDelayMs,
+        if (isGeminiEmergencyFallbackEnabled(env)) {
+          return runGeminiEmergencyFallback({
+            env,
+            apiKey,
+            baseURL,
+            inputs,
+            requestedModel: model,
+            requestPath,
+            attemptedModels,
+            blockState: activeBlock,
+            familyBlocked: true,
           });
         }
 
-        const candidateText = extractGeminiText(responseJSON);
-        if (!candidateText) {
-          throw new CoachInferenceServiceError(
-            502,
-            "upstream_empty_output",
-            "Gemini returned empty output",
-            {
-              provider: "gemini",
-              model,
-              responseShape: describeResponseShape(responseJSON),
-            }
-          );
-        }
-
-        return {
-          response: candidateText,
-          usage: isRecord(responseJSON) ? responseJSON.usageMetadata : undefined,
-          response_id:
-            isRecord(responseJSON) && typeof responseJSON.responseId === "string"
-              ? responseJSON.responseId
-              : undefined,
-          provider: "gemini",
-        };
+        throw buildGeminiFamilyBlockedError({
+          requestedModel: model,
+          attemptedModels,
+          requestPath,
+          blockState: activeBlock,
+        });
       }
 
-      throw new CoachInferenceServiceError(
-        503,
-        "provider_unavailable",
-        "Gemini provider is unavailable",
-        { provider: "gemini", model }
-      );
+      try {
+        const primaryResponse = await callGeminiModel({
+          env,
+          apiKey,
+          baseURL,
+          model,
+          inputs,
+          attemptedModels,
+          requestedModel: model,
+          requestPath,
+        });
+        return buildGeminiAdapterSuccess(primaryResponse, {
+          requestedModel: model,
+          effectiveModel: model,
+          attemptedModels,
+          requestPath,
+          providerFamily,
+        });
+      } catch (error) {
+        if (!(error instanceof CoachInferenceServiceError)) {
+          throw error;
+        }
+
+        const primaryError = withGeminiErrorDetails(error, {
+          requestedModel: model,
+          attemptedModels: attemptedModels.slice(),
+          requestPath,
+          providerFamily,
+        });
+        const primaryClassification = classifyGeminiServiceFailure(primaryError);
+
+        if (!isGemini2_5FlashModel(model) || !primaryClassification.isQuotaExhausted) {
+          throw primaryError;
+        }
+
+        console.warn(
+          JSON.stringify({
+            event: "gemini_quota_exhausted_detected",
+            provider: "gemini",
+            requestedModel: model,
+            failedModel: model,
+            attemptedModels: attemptedModels.slice(),
+            quotaClassificationKind: primaryClassification.kind,
+            requestPath,
+            sourceProviderErrorStatus:
+              primaryClassification.sourceProviderErrorStatus,
+            sourceProviderErrorCode: primaryClassification.sourceProviderErrorCode,
+          })
+        );
+
+        const fallbackModel = "gemini-2.5-flash-lite";
+        console.log(
+          JSON.stringify({
+            event: "gemini_model_fallback_started",
+            provider: "gemini",
+            requestedModel: model,
+            fallbackModel,
+            attemptedModels: attemptedModels.slice(),
+            quotaClassificationKind: primaryClassification.kind,
+            requestPath,
+          })
+        );
+
+        try {
+          const fallbackResponse = await callGeminiModel({
+            env,
+            apiKey,
+            baseURL,
+            model: fallbackModel,
+            inputs,
+            attemptedModels,
+            requestedModel: model,
+            requestPath,
+          });
+          console.log(
+            JSON.stringify({
+              event: "gemini_model_fallback_succeeded",
+              provider: "gemini",
+              requestedModel: model,
+              fallbackModel,
+              attemptedModels: attemptedModels.slice(),
+              quotaClassificationKind: primaryClassification.kind,
+              requestPath,
+            })
+          );
+          return buildGeminiAdapterSuccess(fallbackResponse, {
+            requestedModel: model,
+            effectiveModel: fallbackModel,
+            attemptedModels,
+            fallbackModelUsed: fallbackModel,
+            providerQuotaExhausted: true,
+            geminiDailyQuotaExhausted: primaryClassification.isDailyQuota,
+            quotaClassificationKind: primaryClassification.kind,
+            requestPath,
+            providerFamily: GEMINI_2_5_PROVIDER_FAMILY,
+          });
+        } catch (fallbackError) {
+          if (!(fallbackError instanceof CoachInferenceServiceError)) {
+            throw fallbackError;
+          }
+
+          const normalizedFallbackError = withGeminiErrorDetails(fallbackError, {
+            requestedModel: model,
+            attemptedModels: attemptedModels.slice(),
+            fallbackModelUsed: fallbackModel,
+            requestPath,
+            providerFamily: GEMINI_2_5_PROVIDER_FAMILY,
+          });
+          const fallbackClassification =
+            classifyGeminiServiceFailure(normalizedFallbackError);
+
+          console.warn(
+            JSON.stringify({
+              event: "gemini_model_fallback_failed",
+              provider: "gemini",
+              requestedModel: model,
+              fallbackModel,
+              attemptedModels: attemptedModels.slice(),
+              quotaClassificationKind: fallbackClassification.kind,
+              requestPath,
+              sourceProviderErrorStatus:
+                fallbackClassification.sourceProviderErrorStatus,
+              sourceProviderErrorCode:
+                fallbackClassification.sourceProviderErrorCode,
+            })
+          );
+
+          if (fallbackClassification.isQuotaExhausted) {
+            const publicQuotaClassification = resolveGeminiPublicQuotaClassification(
+              primaryClassification,
+              fallbackClassification
+            );
+            const shouldPersistBlock = isGemini2_5QuotaBlockEnabled(env);
+            const blockState = shouldPersistBlock
+              ? await writeGemini2_5FamilyBlockState(env.COACH_STATE_KV, {
+                  scope: blockScope,
+                  reason: resolveGeminiQuotaBlockReason(
+                    primaryClassification,
+                    fallbackClassification
+                  ),
+                  sourceModel: fallbackModel,
+                  sourcePath: requestPath ?? "unknown",
+                  providerStatus:
+                    fallbackClassification.sourceProviderErrorStatus ??
+                    primaryClassification.sourceProviderErrorStatus,
+                  providerCode:
+                    fallbackClassification.sourceProviderErrorCode ??
+                    primaryClassification.sourceProviderErrorCode,
+                })
+              : null;
+
+            if (blockState) {
+              console.warn(
+                JSON.stringify({
+                  event: "gemini_family_block_set",
+                  provider: "gemini",
+                  requestedModel: model,
+                  attemptedModels: attemptedModels.slice(),
+                  blockedUntil: blockState.blockedUntil,
+                  quotaClassificationKind: blockState.rawCategory,
+                  requestPath,
+                })
+              );
+            }
+
+            if (isGeminiEmergencyFallbackEnabled(env)) {
+              return runGeminiEmergencyFallback({
+                env,
+                apiKey,
+                baseURL,
+                inputs,
+                requestedModel: model,
+                requestPath,
+                attemptedModels,
+                blockState,
+                familyBlocked: Boolean(blockState),
+                quotaClassification: publicQuotaClassification,
+              });
+            }
+
+            if (blockState) {
+              throw buildGeminiFamilyBlockedError({
+                requestedModel: model,
+                attemptedModels,
+                fallbackModelUsed: fallbackModel,
+                requestPath,
+                blockState,
+              });
+            }
+
+            throw buildGeminiPublicQuotaError(publicQuotaClassification, {
+              requestedModel: model,
+              attemptedModels,
+              fallbackModelUsed: fallbackModel,
+              requestPath,
+              providerFamily: GEMINI_2_5_PROVIDER_FAMILY,
+            });
+          }
+
+          throw buildGeminiPublicQuotaError(primaryClassification, {
+            requestedModel: model,
+            attemptedModels,
+            fallbackModelUsed: fallbackModel,
+            requestPath,
+            providerFamily: GEMINI_2_5_PROVIDER_FAMILY,
+          });
+        }
+      }
     },
+  };
+}
+
+async function callGeminiModel(input: {
+  env: GeminiQuotaStateEnvLike;
+  apiKey: string;
+  baseURL: string;
+  model: string;
+  inputs: Record<string, unknown>;
+  attemptedModels: string[];
+  requestedModel: string;
+  requestPath?: string;
+}): Promise<{
+  candidateText: string;
+  usage?: unknown;
+  responseId?: string;
+}> {
+  if (input.attemptedModels.at(-1) !== input.model) {
+    input.attemptedModels.push(input.model);
+  }
+
+  console.log(
+    JSON.stringify({
+      event: "gemini_request_started",
+      provider: "gemini",
+      requestedModel: input.requestedModel,
+      model: input.model,
+      attemptedModels: input.attemptedModels.slice(),
+      requestPath: input.requestPath,
+      providerFamily: isGemini2_5FamilyModel(input.requestedModel)
+        ? GEMINI_2_5_PROVIDER_FAMILY
+        : undefined,
+    })
+  );
+
+  const payload = buildGeminiRequestPayload(input.inputs);
+
+  for (let attempt = 0; attempt <= GEMINI_MAX_RATE_LIMIT_RETRIES; attempt += 1) {
+    const response = await fetch(
+      `${input.baseURL}/models/${encodeURIComponent(input.model)}:generateContent?key=${encodeURIComponent(input.apiKey)}`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      }
+    );
+
+    const responseText = await response.text();
+    const responseJSON = responseText ? safeJSONParse(responseText) : undefined;
+    if (!response.ok) {
+      const classification = classifyGeminiHttpError(response.status, responseJSON);
+      const retryDelayMs = resolveGeminiRetryDelayMs(responseJSON);
+      if (
+        classification.isTransient429 &&
+        attempt < GEMINI_MAX_RATE_LIMIT_RETRIES
+      ) {
+        const backoffMs = Math.min(
+          retryDelayMs ?? GEMINI_BASE_RETRY_DELAY_MS * (attempt + 1),
+          GEMINI_MAX_RETRY_DELAY_MS
+        );
+        console.warn(
+          JSON.stringify({
+            event: "coach_gemini_retry_scheduled",
+            provider: "gemini",
+            model: input.model,
+            requestedModel: input.requestedModel,
+            status: response.status,
+            retryAttempt: attempt + 1,
+            retryDelayMs: backoffMs,
+            requestPath: input.requestPath,
+            attemptedModels: input.attemptedModels.slice(),
+          })
+        );
+        await sleep(backoffMs);
+        continue;
+      }
+
+      throw withGeminiErrorDetails(
+        normalizeGeminiHTTPError(
+          response.status,
+          responseJSON,
+          {
+            provider: "gemini",
+            model: input.model,
+            retryAttemptCount: attempt,
+            retryDelayMs,
+          }
+        ),
+        {
+          requestedModel: input.requestedModel,
+          attemptedModels: input.attemptedModels.slice(),
+          requestPath: input.requestPath,
+          providerFamily: isGemini2_5FamilyModel(input.requestedModel)
+            ? GEMINI_2_5_PROVIDER_FAMILY
+            : undefined,
+        }
+      );
+    }
+
+    const candidateText = extractGeminiText(responseJSON);
+    if (!candidateText) {
+      throw new CoachInferenceServiceError(
+        502,
+        "upstream_empty_output",
+        "Gemini returned empty output",
+        {
+          provider: "gemini",
+          model: input.model,
+          requestedModel: input.requestedModel,
+          attemptedModels: input.attemptedModels.slice(),
+          requestPath: input.requestPath,
+          providerFamily: isGemini2_5FamilyModel(input.requestedModel)
+            ? GEMINI_2_5_PROVIDER_FAMILY
+            : undefined,
+          quotaClassificationKind: "malformed_provider_response",
+          responseShape: describeResponseShape(responseJSON),
+        }
+      );
+    }
+
+    return {
+      candidateText,
+      usage: isRecord(responseJSON) ? responseJSON.usageMetadata : undefined,
+      responseId:
+        isRecord(responseJSON) && typeof responseJSON.responseId === "string"
+          ? responseJSON.responseId
+          : undefined,
+    };
+  }
+
+  throw new CoachInferenceServiceError(
+    503,
+    "provider_unavailable",
+    "Gemini provider is unavailable",
+    {
+      provider: "gemini",
+      model: input.model,
+      requestedModel: input.requestedModel,
+      attemptedModels: input.attemptedModels.slice(),
+      requestPath: input.requestPath,
+      providerFamily: isGemini2_5FamilyModel(input.requestedModel)
+        ? GEMINI_2_5_PROVIDER_FAMILY
+        : undefined,
+      quotaClassificationKind: "provider_unavailable",
+    }
+  );
+}
+
+async function runGeminiEmergencyFallback(input: {
+  env: Env;
+  apiKey: string;
+  baseURL: string;
+  inputs: Record<string, unknown>;
+  requestedModel: string;
+  requestPath?: string;
+  attemptedModels: string[];
+  blockState?: GeminiProviderFamilyBlockState | null;
+  familyBlocked: boolean;
+  quotaClassification?: GeminiQuotaClassification;
+}): Promise<unknown> {
+  const emergencyModel = resolveGeminiEmergencyFallbackModel(input.env);
+  console.warn(
+    JSON.stringify({
+      event: "gemini_emergency_fallback_to_3_1_started",
+      provider: "gemini",
+      requestedModel: input.requestedModel,
+      fallbackModel: emergencyModel,
+      attemptedModels: [...input.attemptedModels, emergencyModel],
+      blockedUntil: input.blockState?.blockedUntil,
+      requestPath: input.requestPath,
+      providerFamily: GEMINI_2_5_PROVIDER_FAMILY,
+      providerFamilyBlocked: input.familyBlocked,
+    })
+  );
+
+  try {
+    const emergencyResponse = await callGeminiModel({
+      env: input.env,
+      apiKey: input.apiKey,
+      baseURL: input.baseURL,
+      model: emergencyModel,
+      inputs: input.inputs,
+      attemptedModels: input.attemptedModels,
+      requestedModel: input.requestedModel,
+      requestPath: input.requestPath,
+    });
+    console.log(
+      JSON.stringify({
+        event: "gemini_emergency_fallback_to_3_1_succeeded",
+        provider: "gemini",
+        requestedModel: input.requestedModel,
+        fallbackModel: emergencyModel,
+        attemptedModels: input.attemptedModels.slice(),
+        blockedUntil: input.blockState?.blockedUntil,
+        requestPath: input.requestPath,
+        providerFamily: GEMINI_2_5_PROVIDER_FAMILY,
+        providerFamilyBlocked: input.familyBlocked,
+      })
+    );
+    return buildGeminiAdapterSuccess(emergencyResponse, {
+      requestedModel: input.requestedModel,
+      effectiveModel: emergencyModel,
+      attemptedModels: input.attemptedModels,
+      fallbackModelUsed: emergencyModel,
+      providerQuotaExhausted: true,
+      geminiDailyQuotaExhausted:
+        input.quotaClassification?.isDailyQuota ??
+        input.blockState?.rawCategory === "daily_quota",
+      providerFamilyBlocked: input.familyBlocked,
+      blockedUntil: input.blockState?.blockedUntil,
+      quotaClassificationKind:
+        input.quotaClassification?.kind ?? input.blockState?.rawCategory,
+      requestPath: input.requestPath,
+      sourceProviderErrorStatus:
+        input.quotaClassification?.sourceProviderErrorStatus ??
+        input.blockState?.providerStatus,
+      sourceProviderErrorCode:
+        input.quotaClassification?.sourceProviderErrorCode ??
+        input.blockState?.providerCode,
+      providerFamily: GEMINI_2_5_PROVIDER_FAMILY,
+      emergencyFallbackUsed: true,
+    });
+  } catch (error) {
+    if (!(error instanceof CoachInferenceServiceError)) {
+      throw error;
+    }
+
+    const normalizedError = withGeminiErrorDetails(error, {
+      requestedModel: input.requestedModel,
+      attemptedModels: input.attemptedModels.slice(),
+      fallbackModelUsed: emergencyModel,
+      requestPath: input.requestPath,
+      providerFamily: GEMINI_2_5_PROVIDER_FAMILY,
+      providerFamilyBlocked: input.familyBlocked,
+      blockedUntil: input.blockState?.blockedUntil,
+      emergencyFallbackUsed: true,
+    });
+    const classification = classifyGeminiServiceFailure(normalizedError);
+
+    console.warn(
+      JSON.stringify({
+        event: "gemini_emergency_fallback_to_3_1_failed",
+        provider: "gemini",
+        requestedModel: input.requestedModel,
+        fallbackModel: emergencyModel,
+        attemptedModels: input.attemptedModels.slice(),
+        blockedUntil: input.blockState?.blockedUntil,
+        quotaClassificationKind: classification.kind,
+        requestPath: input.requestPath,
+        sourceProviderErrorStatus: classification.sourceProviderErrorStatus,
+        sourceProviderErrorCode: classification.sourceProviderErrorCode,
+        providerFamily: GEMINI_2_5_PROVIDER_FAMILY,
+        providerFamilyBlocked: input.familyBlocked,
+      })
+    );
+
+    if (classification.isQuotaExhausted) {
+      throw buildGeminiPublicQuotaError(classification, {
+        requestedModel: input.requestedModel,
+        attemptedModels: input.attemptedModels,
+        fallbackModelUsed: emergencyModel,
+        requestPath: input.requestPath,
+        providerFamily: GEMINI_2_5_PROVIDER_FAMILY,
+        providerFamilyBlocked: input.familyBlocked,
+        blockedUntil: input.blockState?.blockedUntil,
+      });
+    }
+
+    if (!input.familyBlocked) {
+      throw buildGeminiPublicQuotaError(
+        input.quotaClassification ?? {
+          kind: "project_quota",
+          isQuotaExhausted: true,
+          isDailyQuota: false,
+          isTransient429: false,
+        },
+        {
+          requestedModel: input.requestedModel,
+          attemptedModels: input.attemptedModels,
+          fallbackModelUsed: emergencyModel,
+          requestPath: input.requestPath,
+          providerFamily: GEMINI_2_5_PROVIDER_FAMILY,
+        }
+      );
+    }
+
+    throw buildGeminiFamilyBlockedError({
+      requestedModel: input.requestedModel,
+      attemptedModels: input.attemptedModels,
+      fallbackModelUsed: emergencyModel,
+      requestPath: input.requestPath,
+      blockState: input.blockState ?? buildGeminiEphemeralBlockState({
+        requestPath: input.requestPath,
+        sourceModel: emergencyModel,
+        classification:
+          input.quotaClassification ?? {
+            kind: "project_quota",
+            isQuotaExhausted: true,
+            isDailyQuota: false,
+            isTransient429: false,
+          },
+      }),
+      sourceProviderErrorStatus: classification.sourceProviderErrorStatus,
+      sourceProviderErrorCode: classification.sourceProviderErrorCode,
+      providerMessage: classification.providerMessage,
+    });
+  }
+}
+
+function buildGeminiAdapterSuccess(
+  response: {
+    candidateText: string;
+    usage?: unknown;
+    responseId?: string;
+  },
+  providerExecution: ProviderExecutionMetadata
+): Record<string, unknown> {
+  return {
+    response: response.candidateText,
+    usage: response.usage,
+    response_id: response.responseId,
+    provider: "gemini",
+    providerExecution: {
+      ...providerExecution,
+      attemptedModels: providerExecution.attemptedModels.slice(),
+    },
+  };
+}
+
+function buildGeminiPublicQuotaError(
+  classification: GeminiQuotaClassification,
+  input: {
+    requestedModel: string;
+    attemptedModels: string[];
+    fallbackModelUsed?: string;
+    requestPath?: string;
+    providerFamily?: string;
+    providerFamilyBlocked?: boolean;
+    blockedUntil?: string;
+  }
+): CoachInferenceServiceError {
+  const code = classification.isDailyQuota
+    ? "gemini_daily_quota_exhausted"
+    : "provider_quota_exhausted";
+  const message = classification.isDailyQuota
+    ? "Gemini daily quota is exhausted. Please try again after the next Pacific reset."
+    : "Gemini quota is exhausted. Please try again later.";
+  return new CoachInferenceServiceError(429, code, message, {
+    requestedModel: input.requestedModel,
+    attemptedModels: input.attemptedModels.slice(),
+    fallbackModelUsed: input.fallbackModelUsed,
+    providerQuotaExhausted: true,
+    geminiDailyQuotaExhausted: classification.isDailyQuota,
+    providerFamilyBlocked: input.providerFamilyBlocked === true,
+    blockedUntil: input.blockedUntil,
+    quotaClassificationKind: classification.kind,
+    requestPath: input.requestPath,
+    sourceProviderErrorStatus: classification.sourceProviderErrorStatus,
+    sourceProviderErrorCode: classification.sourceProviderErrorCode,
+    providerFamily: input.providerFamily,
+    providerMessage: classification.providerMessage,
+  });
+}
+
+function buildGeminiFamilyBlockedError(input: {
+  requestedModel: string;
+  attemptedModels: string[];
+  fallbackModelUsed?: string;
+  requestPath?: string;
+  blockState: GeminiProviderFamilyBlockState;
+  sourceProviderErrorStatus?: number;
+  sourceProviderErrorCode?: string;
+  providerMessage?: string;
+}): CoachInferenceServiceError {
+  return new CoachInferenceServiceError(
+    429,
+    "provider_family_blocked",
+    "Gemini 2.5 models are temporarily blocked after quota exhaustion. Please try again after the next Pacific reset.",
+    {
+      requestedModel: input.requestedModel,
+      attemptedModels: input.attemptedModels.slice(),
+      fallbackModelUsed: input.fallbackModelUsed,
+      providerQuotaExhausted: true,
+      geminiDailyQuotaExhausted: input.blockState.rawCategory === "daily_quota",
+      providerFamilyBlocked: true,
+      blockedUntil: input.blockState.blockedUntil,
+      quotaClassificationKind: input.blockState.rawCategory,
+      requestPath: input.requestPath,
+      sourceProviderErrorStatus:
+        input.sourceProviderErrorStatus ?? input.blockState.providerStatus,
+      sourceProviderErrorCode:
+        input.sourceProviderErrorCode ?? input.blockState.providerCode,
+      providerFamily: GEMINI_2_5_PROVIDER_FAMILY,
+      providerMessage: input.providerMessage,
+    }
+  );
+}
+
+function withGeminiErrorDetails(
+  error: CoachInferenceServiceError,
+  details: Record<string, unknown>
+): CoachInferenceServiceError {
+  return new CoachInferenceServiceError(
+    error.status,
+    error.code,
+    error.message,
+    {
+      ...(error.details ?? {}),
+      ...details,
+    }
+  );
+}
+
+function resolveGeminiQuotaBlockReason(
+  primary: GeminiQuotaClassification,
+  fallback: GeminiQuotaClassification
+): "daily_quota" | "project_quota" {
+  return primary.isDailyQuota || fallback.isDailyQuota
+    ? "daily_quota"
+    : "project_quota";
+}
+
+function resolveGeminiPublicQuotaClassification(
+  primary: GeminiQuotaClassification,
+  fallback?: GeminiQuotaClassification
+): GeminiQuotaClassification {
+  if (!fallback) {
+    return primary;
+  }
+
+  const isDailyQuota = primary.isDailyQuota || fallback.isDailyQuota;
+  return {
+    kind: isDailyQuota ? "daily_quota" : "project_quota",
+    isQuotaExhausted: true,
+    isDailyQuota,
+    isTransient429: false,
+    sourceProviderErrorStatus:
+      fallback.sourceProviderErrorStatus ?? primary.sourceProviderErrorStatus,
+    sourceProviderErrorCode:
+      fallback.sourceProviderErrorCode ?? primary.sourceProviderErrorCode,
+    providerMessage: fallback.providerMessage ?? primary.providerMessage,
+  };
+}
+
+function buildGeminiEphemeralBlockState(input: {
+  requestPath?: string;
+  sourceModel: string;
+  classification: GeminiQuotaClassification;
+}): GeminiProviderFamilyBlockState {
+  const now = new Date();
+  const reason = input.classification.isDailyQuota
+    ? "daily_quota"
+    : "project_quota";
+  return {
+    scope: GEMINI_2_5_BLOCK_SCOPE,
+    providerFamily: GEMINI_2_5_PROVIDER_FAMILY,
+    blockedUntil: new Date(now.getTime() + 60_000).toISOString(),
+    firstSeenAt: now.toISOString(),
+    updatedAt: now.toISOString(),
+    reason,
+    sourceModel: input.sourceModel,
+    sourcePath: input.requestPath ?? "unknown",
+    providerStatus: input.classification.sourceProviderErrorStatus,
+    providerCode: input.classification.sourceProviderErrorCode,
+    rawCategory: reason,
   };
 }
 
@@ -3080,46 +4121,60 @@ function normalizeGeminiHTTPError(
   payload: unknown,
   details: Record<string, unknown>
 ): CoachInferenceServiceError {
-  const errorPayload = isRecord(payload) && isRecord(payload.error) ? payload.error : undefined;
-  const providerMessage =
-    errorPayload && typeof errorPayload.message === "string"
-      ? errorPayload.message.slice(0, 300)
-      : `Gemini request failed with status ${status}`;
-  const providerStatus =
-    errorPayload && typeof errorPayload.status === "string"
-      ? errorPayload.status
-      : undefined;
+  const classification = classifyGeminiHttpError(status, payload);
+  const errorDetails = {
+    ...details,
+    providerMessage: classification.providerMessage,
+    sourceProviderErrorStatus: classification.sourceProviderErrorStatus,
+    sourceProviderErrorCode: classification.sourceProviderErrorCode,
+    quotaClassificationKind: classification.kind,
+    providerQuotaExhausted: classification.isQuotaExhausted,
+    geminiDailyQuotaExhausted: classification.isDailyQuota,
+  };
 
-  if (status === 401 || status === 403) {
+  if (classification.kind === "provider_auth_failed") {
     return new CoachInferenceServiceError(
       503,
       "provider_auth_failed",
       "Gemini authentication failed",
-      { ...details, providerMessage, providerStatus }
+      errorDetails
     );
   }
-  if (status === 429) {
+
+  if (classification.isQuotaExhausted) {
+    const code = classification.isDailyQuota
+      ? "gemini_daily_quota_exhausted"
+      : "provider_quota_exhausted";
+    const message = classification.isDailyQuota
+      ? "Gemini daily quota is exhausted. Please try again after the next Pacific reset."
+      : "Gemini quota is exhausted. Please try again later.";
+    return new CoachInferenceServiceError(429, code, message, errorDetails);
+  }
+
+  if (classification.kind === "transient_429") {
     return new CoachInferenceServiceError(
       429,
       "provider_rate_limited",
-      "Gemini quota or rate limit exceeded",
-      { ...details, providerMessage, providerStatus }
+      "Gemini rate limit exceeded",
+      errorDetails
     );
   }
+
   if (status === 400 || status === 404) {
     return new CoachInferenceServiceError(
       502,
       "provider_unsupported_request",
       "Gemini rejected the request",
-      { ...details, providerMessage, providerStatus }
+      errorDetails
     );
   }
-  if (status >= 500) {
+
+  if (classification.kind === "provider_unavailable") {
     return new CoachInferenceServiceError(
       503,
       "provider_unavailable",
       "Gemini provider is unavailable",
-      { ...details, providerMessage, providerStatus }
+      errorDetails
     );
   }
 
@@ -3127,7 +4182,7 @@ function normalizeGeminiHTTPError(
     502,
     "upstream_request_failed",
     "Gemini request failed",
-    { ...details, providerMessage, providerStatus }
+    errorDetails
   );
 }
 

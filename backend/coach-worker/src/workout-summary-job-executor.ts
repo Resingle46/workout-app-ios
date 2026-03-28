@@ -186,6 +186,19 @@ export async function executeWorkoutSummaryJob(
             now() - Date.parse(latestJob.createdAt),
             0
           );
+          console.error(
+            JSON.stringify({
+              event: "workout_summary_job_failure_diagnostics",
+              jobID,
+              installID: latestJob.installID,
+              sessionID: latestJob.sessionID,
+              clientRequestID: latestJob.clientRequestID,
+              errorCode: failure.code,
+              errorMessage:
+                error instanceof Error ? error.message.slice(0, 300) : "Unknown error",
+              ...extractInferenceErrorDiagnostics(error),
+            })
+          );
           await stateRepository.failWorkoutSummaryJob(jobID, {
             completedAt: failedAt,
             error: failure,
@@ -226,6 +239,19 @@ export async function executeWorkoutSummaryJob(
       0
     );
     const failure = normalizeWorkoutSummaryJobExecutionError(error);
+    console.error(
+      JSON.stringify({
+        event: "workout_summary_job_failure_diagnostics",
+        jobID,
+        installID: currentJob.installID,
+        sessionID: currentJob.sessionID,
+        clientRequestID: currentJob.clientRequestID,
+        errorCode: failure.code,
+        errorMessage:
+          error instanceof Error ? error.message.slice(0, 300) : "Unknown error",
+        ...extractInferenceErrorDiagnostics(error),
+      })
+    );
     const failedJob = await stateRepository.failWorkoutSummaryJob(jobID, {
       completedAt: failedAt,
       error: failure,
@@ -340,7 +366,9 @@ function normalizeWorkoutSummaryJobExecutionError(
   if (error instanceof CoachInferenceServiceError) {
     return {
       code: error.code,
-      message: "Coach upstream request failed.",
+      message: shouldExposeInferenceErrorMessage(error.code)
+        ? error.message
+        : "Coach upstream request failed.",
       retryable: isRetryableInferenceErrorCode(error.code),
     };
   }
@@ -353,11 +381,47 @@ function normalizeWorkoutSummaryJobExecutionError(
 }
 
 function isRetryableInferenceErrorCode(code: string): boolean {
+  if (shouldExposeInferenceErrorMessage(code)) {
+    return false;
+  }
+
   return (
     code.startsWith("upstream_") ||
     code === "provider_rate_limited" ||
     code === "provider_unavailable"
   );
+}
+
+function shouldExposeInferenceErrorMessage(code: string): boolean {
+  return (
+    code === "provider_quota_exhausted" ||
+    code === "gemini_daily_quota_exhausted" ||
+    code === "provider_family_blocked"
+  );
+}
+
+function extractInferenceErrorDiagnostics(
+  error: unknown
+): Record<string, unknown> {
+  if (!(error instanceof CoachInferenceServiceError)) {
+    return {};
+  }
+
+  return {
+    requestedModel: error.details?.requestedModel,
+    attemptedModels: error.details?.attemptedModels,
+    fallbackModelUsed: error.details?.fallbackModelUsed,
+    providerQuotaExhausted: error.details?.providerQuotaExhausted,
+    geminiDailyQuotaExhausted: error.details?.geminiDailyQuotaExhausted,
+    providerFamilyBlocked: error.details?.providerFamilyBlocked,
+    blockedUntil: error.details?.blockedUntil,
+    quotaClassificationKind: error.details?.quotaClassificationKind,
+    requestPath: error.details?.requestPath,
+    sourceProviderErrorStatus: error.details?.sourceProviderErrorStatus,
+    sourceProviderErrorCode: error.details?.sourceProviderErrorCode,
+    providerFamily: error.details?.providerFamily,
+    emergencyFallbackUsed: error.details?.emergencyFallbackUsed,
+  };
 }
 
 function extractNumericErrorDetail(

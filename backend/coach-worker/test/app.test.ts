@@ -30,6 +30,10 @@ import {
   buildProfileInsightsRoutingDecision,
   resolveModelForRole,
 } from "../src/routing";
+import {
+  buildGemini2_5FamilyBlockKey,
+  writeGemini2_5FamilyBlockState,
+} from "../src/gemini-quota";
 import type {
   AppSnapshotPayload,
   BackupUploadRequest,
@@ -1245,6 +1249,145 @@ describe("coach worker app", () => {
     });
   });
 
+  it("keeps emergency Gemini fallback results in degraded sidecar cache without overwriting canonical cache", async () => {
+    const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
+    const body = makeProfileInsightsRequestFixture();
+    const context = await repository.resolveCoachContext(body);
+    const key = storageKeyFromMetadata(
+      context.contextHash,
+      {
+        contextProfile: "compact_sync_v2",
+        contextVersion: context.contextVersion,
+        analyticsVersion: context.analyticsVersion,
+        promptProfile: "profile_compact_context_v2",
+        memoryProfile: "compact_v1",
+        routingVersion: PROFILE_INSIGHTS_TEST_ROUTING_VERSION,
+      },
+      "test.v1",
+      DEFAULT_AI_MODEL
+    );
+    await repository.storeInsightsCache(body.installID, key, {
+      summary: "Canonical cached summary",
+      recommendations: ["Canonical cached recommendation"],
+      generationStatus: "model",
+      insightSource: "fresh_model",
+    });
+
+    const app = createApp({
+      createInferenceService: () => ({
+        async generateProfileInsights() {
+          return {
+            data: {
+              summary: "Emergency Gemini fallback summary",
+              recommendations: ["Use degraded sidecar semantics only."],
+              generationStatus: "model",
+              insightSource: "fresh_model",
+            },
+            model: "gemini-3.1-flash-lite-preview",
+            mode: "structured",
+            requestedModel: "gemini-2.5-flash",
+            attemptedModels: [
+              "gemini-2.5-flash",
+              "gemini-2.5-flash-lite",
+              "gemini-3.1-flash-lite-preview",
+            ],
+            fallbackModelUsed: "gemini-3.1-flash-lite-preview",
+            providerQuotaExhausted: true,
+            geminiDailyQuotaExhausted: true,
+            providerFamilyBlocked: true,
+            blockedUntil: "2026-03-29T07:00:00.000Z",
+            quotaClassificationKind: "daily_quota",
+            requestPath: "profile_insights",
+            sourceProviderErrorStatus: 429,
+            sourceProviderErrorCode: "RESOURCE_EXHAUSTED",
+            providerFamily: "gemini-2.5",
+            emergencyFallbackUsed: true,
+          };
+        },
+        async generateWorkoutSummary() {
+          throw new Error("not used");
+        },
+        async generateChat() {
+          throw new Error("not used");
+        },
+      }),
+      createStateRepository: () => repository,
+    });
+
+    const response = await app.fetch(
+      authedRequest("https://coach.example.workers.dev/v1/coach/profile-insights", {
+        method: "POST",
+        body: JSON.stringify({
+          ...body,
+          forceRefresh: true,
+        }),
+      }),
+      makeEnv()
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      summary: "Emergency Gemini fallback summary",
+      generationStatus: "model",
+    });
+    await expect(repository.getInsightsCache(body.installID, key)).resolves.toMatchObject({
+      summary: "Canonical cached summary",
+      generationStatus: "model",
+    });
+    await expect(
+      repository.getDegradedInsightsCache(body.installID, key)
+    ).resolves.toMatchObject({
+      summary: "Emergency Gemini fallback summary",
+      generationStatus: "model",
+    });
+  });
+
+  it("returns provider_family_blocked when Gemini family block is active and emergency fallback is disabled", async () => {
+    const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
+    const kv = makeMemoryKV();
+    await writeGemini2_5FamilyBlockState(kv, {
+      reason: "daily_quota",
+      sourceModel: "gemini-2.5-flash-lite",
+      sourcePath: "profile_insights",
+      providerStatus: 429,
+      providerCode: "RESOURCE_EXHAUSTED",
+    });
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+
+    try {
+      const app = createApp({
+        createStateRepository: () => repository,
+      });
+      const response = await app.fetch(
+        authedRequest("https://coach.example.workers.dev/v1/coach/profile-insights", {
+          method: "POST",
+          body: JSON.stringify({
+            ...makeProfileInsightsRequestFixture(),
+            provider: "gemini",
+          }),
+        }),
+        makeEnv({
+          COACH_STATE_KV: kv,
+          GEMINI_API_KEY: "test-gemini-key",
+          GEMINI_2_5_QUOTA_BLOCK_ENABLED: "true",
+          GEMINI_EMERGENCY_FALLBACK_ENABLED: "false",
+        })
+      );
+
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(response.status).toBe(429);
+      await expect(response.json()).resolves.toMatchObject({
+        error: {
+          code: "provider_family_blocked",
+          message:
+            "Gemini 2.5 models are temporarily blocked after quota exhaustion. Please try again after the next Pacific reset.",
+        },
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
   it("does not reuse degraded sidecar cache after the insights fingerprint changes", async () => {
     const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
     let inferenceCalls = 0;
@@ -2435,6 +2578,81 @@ describe("coach worker app", () => {
     }
   });
 
+  it("keeps Gemini family block chat job failures explicit and non-retryable", async () => {
+    const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
+    const workflowCreate = vi.fn().mockResolvedValue(makeWorkflowInstanceStub());
+    const app = createApp({
+      createInferenceService: () => stubInferenceService(),
+      createStateRepository: () => repository,
+    });
+    const env = makeEnv({
+      COACH_CHAT_WORKFLOW: makeWorkflowBinding(workflowCreate),
+    });
+    const createRequest = makeChatJobCreateRequestFixture();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      const createResponse = await app.fetch(
+        authedRequest("https://coach.example.workers.dev/v2/coach/chat-jobs", {
+          method: "POST",
+          body: JSON.stringify(createRequest),
+        }),
+        env
+      );
+      const created = await createResponse.json();
+
+      const failed = await executeChatJob(created.jobID, env, {
+        createStateRepository: () => repository,
+        createInferenceService: () =>
+          stubInferenceService({
+            chatError: new CoachInferenceServiceError(
+              429,
+              "provider_family_blocked",
+              "Gemini 2.5 models are temporarily blocked after quota exhaustion. Please try again after the next Pacific reset.",
+              {
+                requestedModel: "gemini-2.5-flash",
+                attemptedModels: ["gemini-3.1-flash-lite-preview"],
+                fallbackModelUsed: "gemini-3.1-flash-lite-preview",
+                providerQuotaExhausted: true,
+                providerFamilyBlocked: true,
+                blockedUntil: "2026-03-29T07:00:00.000Z",
+                quotaClassificationKind: "daily_quota",
+                requestPath: "chat",
+                sourceProviderErrorStatus: 429,
+                sourceProviderErrorCode: "RESOURCE_EXHAUSTED",
+                providerFamily: "gemini-2.5",
+                emergencyFallbackUsed: true,
+              }
+            ),
+          }),
+      });
+
+      expect(failed?.status).toBe("failed");
+      expect(failed?.error).toMatchObject({
+        code: "provider_family_blocked",
+        message:
+          "Gemini 2.5 models are temporarily blocked after quota exhaustion. Please try again after the next Pacific reset.",
+        retryable: false,
+      });
+
+      const diagnosticsLog = parseLoggedPayloads(errorSpy).find(
+        (payload) => payload.event === "coach_chat_job_failure_diagnostics"
+      );
+      expect(diagnosticsLog).toMatchObject({
+        phase: "inference",
+        failureOrigin: "inference",
+        errorCode: "provider_family_blocked",
+        providerQuotaExhausted: true,
+        providerFamilyBlocked: true,
+        blockedUntil: "2026-03-29T07:00:00.000Z",
+        quotaClassificationKind: "daily_quota",
+        attemptedModels: ["gemini-3.1-flash-lite-preview"],
+      });
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
   it("normalizes cancellation-like inference errors to workflow_canceled", async () => {
     const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
     const workflowCreate = vi.fn().mockResolvedValue(makeWorkflowInstanceStub());
@@ -2861,6 +3079,84 @@ describe("coach worker app", () => {
         generationStatus: "model",
       },
     });
+  });
+
+  it("keeps Gemini quota workout summary failures explicit and non-retryable", async () => {
+    const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
+    const workflowCreate = vi.fn().mockResolvedValue(makeWorkflowInstanceStub());
+    const app = createApp({
+      createInferenceService: () => stubInferenceService(),
+      createStateRepository: () => repository,
+    });
+    const env = makeEnv({
+      WORKOUT_SUMMARY_WORKFLOW: makeWorkflowBinding(workflowCreate),
+    });
+    const request = makeWorkoutSummaryJobCreateRequestFixture();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      const createResponse = await app.fetch(
+        authedRequest("https://coach.example.workers.dev/v2/coach/workout-summary-jobs", {
+          method: "POST",
+          body: JSON.stringify(request),
+        }),
+        env
+      );
+      const created = await createResponse.json();
+
+      const failed = await executeWorkoutSummaryJob(created.jobID, env, {
+        createStateRepository: () => repository,
+        createInferenceService: () =>
+          stubInferenceService({
+            workoutSummaryError: new CoachInferenceServiceError(
+              429,
+              "provider_quota_exhausted",
+              "Gemini quota is exhausted. Please try again later.",
+              {
+                requestedModel: "gemini-2.5-flash",
+                attemptedModels: [
+                  "gemini-2.5-flash",
+                  "gemini-2.5-flash-lite",
+                  "gemini-3.1-flash-lite-preview",
+                ],
+                fallbackModelUsed: "gemini-3.1-flash-lite-preview",
+                providerQuotaExhausted: true,
+                providerFamilyBlocked: false,
+                quotaClassificationKind: "project_quota",
+                requestPath: "workout_summary",
+                sourceProviderErrorStatus: 429,
+                sourceProviderErrorCode: "RESOURCE_EXHAUSTED",
+                providerFamily: "gemini-2.5",
+                emergencyFallbackUsed: true,
+              }
+            ),
+          }),
+      });
+
+      expect(failed?.status).toBe("failed");
+      expect(failed?.error).toMatchObject({
+        code: "provider_quota_exhausted",
+        message: "Gemini quota is exhausted. Please try again later.",
+        retryable: false,
+      });
+
+      const diagnosticsLog = parseLoggedPayloads(errorSpy).find(
+        (payload) => payload.event === "workout_summary_job_failure_diagnostics"
+      );
+      expect(diagnosticsLog).toMatchObject({
+        errorCode: "provider_quota_exhausted",
+        providerQuotaExhausted: true,
+        quotaClassificationKind: "project_quota",
+        attemptedModels: [
+          "gemini-2.5-flash",
+          "gemini-2.5-flash-lite",
+          "gemini-3.1-flash-lite-preview",
+        ],
+        emergencyFallbackUsed: true,
+      });
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 
   it("allows a workout summary job while a chat job is already active", async () => {
@@ -3971,6 +4267,7 @@ describe("WorkersAICoachService", () => {
   });
 
   it("retries Gemini profile insights after a rate limit response", async () => {
+    const kv = makeMemoryKV();
     const fetchSpy = vi
       .fn()
       .mockResolvedValueOnce({
@@ -3979,8 +4276,8 @@ describe("WorkersAICoachService", () => {
         text: async () =>
           JSON.stringify({
             error: {
-              message: "Rate limit exceeded.",
-              status: "RESOURCE_EXHAUSTED",
+              message: "Too many requests right now.",
+              status: "UNAVAILABLE",
               details: [
                 {
                   retryDelay: "0.001s",
@@ -4017,6 +4314,8 @@ describe("WorkersAICoachService", () => {
       const service = createInferenceServiceForProvider(
         makeEnv({
           GEMINI_API_KEY: "test-gemini-key",
+          COACH_STATE_KV: kv,
+          GEMINI_2_5_QUOTA_BLOCK_ENABLED: "true",
         }),
         "gemini"
       );
@@ -4028,6 +4327,9 @@ describe("WorkersAICoachService", () => {
       expect(fetchSpy).toHaveBeenCalledTimes(2);
       expect(result.mode).toBe("structured");
       expect(result.data.summary).toBe("Retried Gemini summary.");
+      await expect(
+        kv.get(buildGemini2_5FamilyBlockKey(), "json")
+      ).resolves.toBeNull();
       expect(parseLoggedPayloads(warnSpy)).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
@@ -4039,6 +4341,269 @@ describe("WorkersAICoachService", () => {
       );
     } finally {
       warnSpy.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("silently retries Gemini 2.5 flash quota exhaustion on flash-lite", async () => {
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 429,
+        text: async () =>
+          JSON.stringify({
+            error: {
+              message: "Quota exceeded for Gemini 2.5 Flash.",
+              status: "RESOURCE_EXHAUSTED",
+            },
+          }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            candidates: [
+              {
+                content: {
+                  parts: [
+                    {
+                      text: JSON.stringify({
+                        summary: "Flash-lite carried the request.",
+                        recommendations: ["Keep the current load progression."],
+                      }),
+                    },
+                  ],
+                },
+              },
+            ],
+          }),
+      });
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.stubGlobal("fetch", fetchSpy);
+
+    try {
+      const service = createInferenceServiceForProvider(
+        makeEnv({
+          GEMINI_API_KEY: "test-gemini-key",
+        }),
+        "gemini"
+      );
+      const result = await service.generateProfileInsights({
+        ...makeProfileInsightsRequestFixture(),
+        provider: "gemini",
+      });
+
+      expect(fetchSpy.mock.calls.map(([url]) => String(url))).toEqual([
+        expect.stringContaining("/models/gemini-2.5-flash:generateContent"),
+        expect.stringContaining("/models/gemini-2.5-flash-lite:generateContent"),
+      ]);
+      expect(result.data.summary).toBe("Flash-lite carried the request.");
+      expect(result.model).toBe("gemini-2.5-flash-lite");
+      expect(result.selectedModel).toBe("gemini-2.5-flash-lite");
+      expect(result.requestedModel).toBe("gemini-2.5-flash");
+      expect(result.attemptedModels).toEqual([
+        "gemini-2.5-flash",
+        "gemini-2.5-flash-lite",
+      ]);
+      expect(result.fallbackModelUsed).toBe("gemini-2.5-flash-lite");
+      expect(result.providerQuotaExhausted).toBe(true);
+      expect(result.emergencyFallbackUsed).toBe(false);
+      expect(parseLoggedPayloads(warnSpy)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            event: "gemini_quota_exhausted_detected",
+            requestedModel: "gemini-2.5-flash",
+            failedModel: "gemini-2.5-flash",
+          }),
+        ])
+      );
+      expect(parseLoggedPayloads(logSpy)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            event: "gemini_model_fallback_succeeded",
+            requestedModel: "gemini-2.5-flash",
+            fallbackModel: "gemini-2.5-flash-lite",
+          }),
+        ])
+      );
+    } finally {
+      logSpy.mockRestore();
+      warnSpy.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("sets a Gemini 2.5 family block and uses emergency fallback after both 2.5 models exhaust quota", async () => {
+    const kv = makeMemoryKV();
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 429,
+        text: async () =>
+          JSON.stringify({
+            error: {
+              message: "Daily quota exceeded. Requests per day exhausted.",
+              status: "RESOURCE_EXHAUSTED",
+            },
+          }),
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 429,
+        text: async () =>
+          JSON.stringify({
+            error: {
+              message: "Daily quota exceeded again. RPD exhausted.",
+              status: "RESOURCE_EXHAUSTED",
+            },
+          }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            candidates: [
+              {
+                content: {
+                  parts: [
+                    {
+                      text: JSON.stringify({
+                        summary: "Emergency Gemini 3.1 summary.",
+                        recommendations: ["Stay conservative until quota resets."],
+                      }),
+                    },
+                  ],
+                },
+              },
+            ],
+          }),
+      });
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.stubGlobal("fetch", fetchSpy);
+
+    try {
+      const service = createInferenceServiceForProvider(
+        makeEnv({
+          GEMINI_API_KEY: "test-gemini-key",
+          COACH_STATE_KV: kv,
+          GEMINI_2_5_QUOTA_BLOCK_ENABLED: "true",
+          GEMINI_EMERGENCY_FALLBACK_ENABLED: "true",
+          GEMINI_EMERGENCY_FALLBACK_MODEL: "gemini-3.1-flash-lite-preview",
+        }),
+        "gemini"
+      );
+      const result = await service.generateProfileInsights({
+        ...makeProfileInsightsRequestFixture(),
+        provider: "gemini",
+      });
+
+      expect(fetchSpy.mock.calls.map(([url]) => String(url))).toEqual([
+        expect.stringContaining("/models/gemini-2.5-flash:generateContent"),
+        expect.stringContaining("/models/gemini-2.5-flash-lite:generateContent"),
+        expect.stringContaining(
+          "/models/gemini-3.1-flash-lite-preview:generateContent"
+        ),
+      ]);
+      expect(result.model).toBe("gemini-3.1-flash-lite-preview");
+      expect(result.attemptedModels).toEqual([
+        "gemini-2.5-flash",
+        "gemini-2.5-flash-lite",
+        "gemini-3.1-flash-lite-preview",
+      ]);
+      expect(result.fallbackModelUsed).toBe("gemini-3.1-flash-lite-preview");
+      expect(result.providerQuotaExhausted).toBe(true);
+      expect(result.geminiDailyQuotaExhausted).toBe(true);
+      expect(result.providerFamilyBlocked).toBe(true);
+      expect(result.emergencyFallbackUsed).toBe(true);
+      expect(result.blockedUntil).toEqual(expect.any(String));
+      await expect(
+        kv.get(buildGemini2_5FamilyBlockKey(), "json")
+      ).resolves.toMatchObject({
+        providerFamily: "gemini-2.5",
+        scope: "family",
+        rawCategory: "daily_quota",
+      });
+      expect(parseLoggedPayloads(warnSpy)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            event: "gemini_family_block_set",
+            requestedModel: "gemini-2.5-flash",
+          }),
+          expect.objectContaining({
+            event: "gemini_emergency_fallback_to_3_1_started",
+            requestedModel: "gemini-2.5-flash",
+            fallbackModel: "gemini-3.1-flash-lite-preview",
+          }),
+        ])
+      );
+    } finally {
+      warnSpy.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("skips Gemini 2.5 models entirely when the family block is already active", async () => {
+    const kv = makeMemoryKV();
+    await writeGemini2_5FamilyBlockState(kv, {
+      reason: "daily_quota",
+      sourceModel: "gemini-2.5-flash-lite",
+      sourcePath: "profile_insights",
+      providerStatus: 429,
+      providerCode: "RESOURCE_EXHAUSTED",
+    });
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () =>
+        JSON.stringify({
+          candidates: [
+            {
+              content: {
+                parts: [
+                  {
+                    text: JSON.stringify({
+                      summary: "Emergency path served immediately.",
+                      recommendations: ["Wait for the Pacific reset window."],
+                    }),
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    try {
+      const service = createInferenceServiceForProvider(
+        makeEnv({
+          GEMINI_API_KEY: "test-gemini-key",
+          COACH_STATE_KV: kv,
+          GEMINI_2_5_QUOTA_BLOCK_ENABLED: "true",
+          GEMINI_EMERGENCY_FALLBACK_ENABLED: "true",
+          GEMINI_EMERGENCY_FALLBACK_MODEL: "gemini-3.1-flash-lite-preview",
+        }),
+        "gemini"
+      );
+      const result = await service.generateProfileInsights({
+        ...makeProfileInsightsRequestFixture(),
+        provider: "gemini",
+      });
+
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(String(fetchSpy.mock.calls[0]?.[0])).toContain(
+        "/models/gemini-3.1-flash-lite-preview:generateContent"
+      );
+      expect(result.requestedModel).toBe("gemini-2.5-flash");
+      expect(result.attemptedModels).toEqual(["gemini-3.1-flash-lite-preview"]);
+      expect(result.providerFamilyBlocked).toBe(true);
+      expect(result.emergencyFallbackUsed).toBe(true);
+    } finally {
       vi.unstubAllGlobals();
     }
   });
@@ -4506,7 +5071,7 @@ function makeEnv(overrides: Partial<Env> = {}): Env {
     AI: {
       run: vi.fn(),
     },
-    COACH_STATE_KV: {} as Env["COACH_STATE_KV"],
+    COACH_STATE_KV: makeNoopKV(),
     BACKUPS_R2: {} as Env["BACKUPS_R2"],
     APP_META_DB: {} as Env["APP_META_DB"],
     COACH_CHAT_WORKFLOW: makeWorkflowBinding(vi.fn()),
@@ -4536,6 +5101,31 @@ function makeNoopKV(): CoachKVNamespace {
     },
     async put() {},
     async delete() {},
+  };
+}
+
+function makeMemoryKV(): CoachKVNamespace {
+  const storage = new Map<string, string>();
+  const get: CoachKVNamespace["get"] = (async (
+    key: string,
+    type: "text" | "json"
+  ) => {
+    const value = storage.get(key);
+    if (value === undefined) {
+      return null;
+    }
+
+    return type === "json" ? JSON.parse(value) : value;
+  }) as CoachKVNamespace["get"];
+
+  return {
+    get,
+    async put(key, value) {
+      storage.set(key, value);
+    },
+    async delete(key) {
+      storage.delete(key);
+    },
   };
 }
 

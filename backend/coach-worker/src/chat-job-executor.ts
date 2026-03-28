@@ -332,6 +332,7 @@ export async function executeChatJob(
         clientRequestID: currentJob.clientRequestID,
         errorCode: failure.code,
         ...summarizeExecutionError(error),
+        ...extractInferenceErrorDiagnostics(error),
       })
     );
     const failedJob = await persistFailedStateSafely(
@@ -540,7 +541,9 @@ function normalizeChatJobExecutionError(error: unknown): CoachChatJobError {
   if (cause instanceof CoachInferenceServiceError) {
     return {
       code: cause.code,
-      message: "Coach upstream request failed.",
+      message: shouldExposeInferenceErrorMessage(cause.code)
+        ? cause.message
+        : "Coach upstream request failed.",
       retryable: isRetryableInferenceErrorCode(cause.code),
     };
   }
@@ -569,10 +572,22 @@ function normalizeChatJobExecutionError(error: unknown): CoachChatJobError {
 }
 
 function isRetryableInferenceErrorCode(code: string): boolean {
+  if (shouldExposeInferenceErrorMessage(code)) {
+    return false;
+  }
+
   return (
     code.startsWith("upstream_") ||
     code === "provider_rate_limited" ||
     code === "provider_unavailable"
+  );
+}
+
+function shouldExposeInferenceErrorMessage(code: string): boolean {
+  return (
+    code === "provider_quota_exhausted" ||
+    code === "gemini_daily_quota_exhausted" ||
+    code === "provider_family_blocked"
   );
 }
 
@@ -638,6 +653,21 @@ function logChatCompletionPersistenceEvent(
     modelDurationMs: generated.inferenceResult.modelDurationMs,
     fallbackModelDurationMs: generated.inferenceResult.fallbackModelDurationMs,
     totalJobDurationMs: generated.totalJobDurationMs,
+    requestedModel: generated.inferenceResult.requestedModel,
+    attemptedModels: generated.inferenceResult.attemptedModels,
+    fallbackModelUsed: generated.inferenceResult.fallbackModelUsed,
+    providerQuotaExhausted: generated.inferenceResult.providerQuotaExhausted,
+    geminiDailyQuotaExhausted:
+      generated.inferenceResult.geminiDailyQuotaExhausted,
+    providerFamilyBlocked: generated.inferenceResult.providerFamilyBlocked,
+    blockedUntil: generated.inferenceResult.blockedUntil,
+    quotaClassificationKind: generated.inferenceResult.quotaClassificationKind,
+    requestPath: generated.inferenceResult.requestPath,
+    sourceProviderErrorStatus:
+      generated.inferenceResult.sourceProviderErrorStatus,
+    sourceProviderErrorCode: generated.inferenceResult.sourceProviderErrorCode,
+    providerFamily: generated.inferenceResult.providerFamily,
+    emergencyFallbackUsed: generated.inferenceResult.emergencyFallbackUsed,
     ...extra,
   });
 
@@ -688,6 +718,31 @@ function summarizeExecutionError(error: unknown): ChatJobExecutionDiagnostics {
     wasRecognizedAsInferenceError: recognizedInferenceError,
     wasRecognizedAsPersistenceError: recognizedPersistenceError,
     inferredCancellation: isRuntimeCancellationError(cause),
+  };
+}
+
+function extractInferenceErrorDiagnostics(
+  error: unknown
+): Record<string, unknown> {
+  const cause = unwrapExecutionError(error);
+  if (!(cause instanceof CoachInferenceServiceError)) {
+    return {};
+  }
+
+  return {
+    requestedModel: cause.details?.requestedModel,
+    attemptedModels: cause.details?.attemptedModels,
+    fallbackModelUsed: cause.details?.fallbackModelUsed,
+    providerQuotaExhausted: cause.details?.providerQuotaExhausted,
+    geminiDailyQuotaExhausted: cause.details?.geminiDailyQuotaExhausted,
+    providerFamilyBlocked: cause.details?.providerFamilyBlocked,
+    blockedUntil: cause.details?.blockedUntil,
+    quotaClassificationKind: cause.details?.quotaClassificationKind,
+    requestPath: cause.details?.requestPath,
+    sourceProviderErrorStatus: cause.details?.sourceProviderErrorStatus,
+    sourceProviderErrorCode: cause.details?.sourceProviderErrorCode,
+    providerFamily: cause.details?.providerFamily,
+    emergencyFallbackUsed: cause.details?.emergencyFallbackUsed,
   };
 }
 
