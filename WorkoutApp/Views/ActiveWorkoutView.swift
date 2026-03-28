@@ -63,6 +63,9 @@ struct ActiveWorkoutView: View {
                         presentedSummary = nil
                         store.selectedTab = .statistics
                     },
+                    onDone: {
+                        presentedSummary = nil
+                    },
                     onCancel: {
                         let activeSessionID = store.activeSession?.id
                         presentedSummary = nil
@@ -72,9 +75,6 @@ struct ActiveWorkoutView: View {
                         if let activeSessionID {
                             workoutSummaryStore.discardSummary(for: activeSessionID)
                         }
-                    },
-                    onDone: {
-                        presentedSummary = nil
                     }
                 )
             }
