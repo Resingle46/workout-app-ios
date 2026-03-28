@@ -604,18 +604,20 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
         }
   ): Promise<ResolvedCoachContext> {
     const remoteState = await this.getCurrentInstallState(request.installID);
+    const remoteHashMismatch =
+      Boolean(remoteState?.current_backup_hash) &&
+      Boolean(request.localBackupHash) &&
+      request.localBackupHash !== remoteState?.current_backup_hash;
     if (remoteState?.current_backup_version && remoteState.current_backup_hash) {
-      if (
-        request.localBackupHash &&
-        request.localBackupHash !== remoteState.current_backup_hash &&
-        !request.snapshot
-      ) {
+      if (remoteHashMismatch && !request.snapshot) {
         throw new StaleRemoteStateError(remoteState.current_backup_version);
       }
-      const backup = await this.readBackupRecord(
-        request.installID,
-        remoteState.current_backup_version
-      );
+      const backup = remoteHashMismatch
+        ? null
+        : await this.readBackupRecord(
+            request.installID,
+            remoteState.current_backup_version
+          );
       if (backup) {
         const snapshot = overlayCoachAnalysisSettings(backup.envelope.snapshot, {
           selectedProgramID: remoteState.selected_program_id,
@@ -2429,15 +2431,17 @@ export class InMemoryCoachStateRepository implements CoachStateStore {
         }
   ): Promise<ResolvedCoachContext> {
     const remote = this.backupHeads.get(request.installID);
+    const remoteHashMismatch =
+      Boolean(remote?.backupHash) &&
+      Boolean(request.localBackupHash) &&
+      request.localBackupHash !== remote?.backupHash;
     if (remote) {
-      if (
-        request.localBackupHash &&
-        request.localBackupHash !== remote.backupHash &&
-        !request.snapshot
-      ) {
+      if (remoteHashMismatch && !request.snapshot) {
         throw new StaleRemoteStateError(remote.backupVersion);
       }
-      const backup = this.backups.get(request.installID)?.get(remote.backupVersion);
+      const backup = remoteHashMismatch
+        ? undefined
+        : this.backups.get(request.installID)?.get(remote.backupVersion);
       if (backup) {
         const snapshot = overlayCoachAnalysisSettings(backup.snapshot, {
           selectedProgramID: remote.selectedProgramID,

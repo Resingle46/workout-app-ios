@@ -263,6 +263,66 @@ describe("coach worker app", () => {
     });
   });
 
+  it("uses inline snapshot fallback when the local hash mismatches the remote head", async () => {
+    const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
+    let capturedSnapshot: CompactCoachSnapshot | undefined;
+    const app = createApp({
+      createInferenceService: () => ({
+        async generateProfileInsights(request) {
+          capturedSnapshot = request.snapshot;
+          return {
+            data: {
+              summary: "Summary",
+              recommendations: ["Recommendation"],
+              generationStatus: "model",
+              insightSource: "fresh_model",
+            },
+            model: DEFAULT_AI_MODEL,
+          };
+        },
+        async generateWorkoutSummary() {
+          throw new Error("not used");
+        },
+        async generateChat() {
+          throw new Error("not used");
+        },
+      }),
+      createStateRepository: () => repository,
+    });
+    const upload = makeBackupUploadRequestFixture();
+    upload.installID = "install_inline_fallback";
+
+    await app.fetch(
+      authedRequest("https://coach.example.workers.dev/v1/backup", {
+        method: "PUT",
+        body: JSON.stringify(upload),
+      }),
+      makeEnv()
+    );
+
+    const body = makeProfileInsightsRequestFixture();
+    body.installID = upload.installID;
+    body.localBackupHash = "different-local-hash";
+    body.snapshot = {
+      ...body.snapshot!,
+      profile: {
+        ...body.snapshot!.profile,
+        age: 57,
+      },
+    };
+
+    const response = await app.fetch(
+      authedRequest("https://coach.example.workers.dev/v1/coach/profile-insights", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+      makeEnv()
+    );
+
+    expect(response.status).toBe(200);
+    expect(capturedSnapshot?.profile.age).toBe(57);
+  });
+
   it("enrolls install secret and rejects invalid proof afterwards", async () => {
     const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
     const app = createApp({

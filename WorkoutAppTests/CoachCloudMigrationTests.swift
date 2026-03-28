@@ -59,6 +59,104 @@ final class CoachCloudMigrationTests: XCTestCase {
     }
 
     @MainActor
+    func testCloudSyncStoreAdoptsRemoteBackupHashAfterSuccessfulUpload() async {
+        let suiteName = "CoachCloudMigrationTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        let persistence = PersistenceController()
+        persistence.clearStoredSnapshot()
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+            persistence.clearStoredSnapshot()
+        }
+
+        let appStore = AppStore()
+        appStore.apply(snapshot: AppSnapshot(
+            programs: [],
+            exercises: [],
+            history: [],
+            profile: UserProfile(
+                sex: "M",
+                age: 31,
+                weight: 90,
+                height: 182,
+                appLanguageCode: "en"
+            )
+        ))
+        let initialHash = appStore.localBackupHash
+        let localStateStore = CoachLocalStateStore(
+            defaults: defaults,
+            generatedInstallID: "install-upload-adoption",
+            generatedInstallSecret: "install-secret",
+            identityVault: InMemoryCoachIdentityVault()
+        )
+        let statusRemote = CloudBackupHead(
+            installID: localStateStore.installID,
+            backupVersion: 1,
+            backupHash: "remote-before-upload",
+            r2Key: "installs/\(localStateStore.installID)/backups/v000001-remote-before-upload.json.gz",
+            uploadedAt: Date(timeIntervalSince1970: 10),
+            clientSourceModifiedAt: Date(timeIntervalSince1970: 10),
+            selectedProgramID: nil,
+            programComment: "",
+            coachStateVersion: 1,
+            schemaVersion: 2,
+            compression: "gzip",
+            sizeBytes: 512
+        )
+        let uploadedRemote = CloudBackupHead(
+            installID: localStateStore.installID,
+            backupVersion: 2,
+            backupHash: "server-normalized-hash",
+            r2Key: "installs/\(localStateStore.installID)/backups/v000002-server-normalized-hash.json.gz",
+            uploadedAt: Date(timeIntervalSince1970: 20),
+            clientSourceModifiedAt: Date(timeIntervalSince1970: 20),
+            selectedProgramID: nil,
+            programComment: "",
+            coachStateVersion: 1,
+            schemaVersion: 2,
+            compression: "gzip",
+            sizeBytes: 640
+        )
+        let client = StubCoachSyncClient(
+            statusResponse: CloudBackupStatusResponse(
+                syncState: .uploadRequired,
+                contextState: .contextStale,
+                reasonCodes: ["local_dirty_since_remote"],
+                actions: CloudBackupStatusActions(
+                    canUseRemoteAIContextNow: false,
+                    shouldUpload: true,
+                    shouldOfferRestore: false,
+                    shouldBuildInlineFallback: true,
+                    shouldPromptUser: false
+                ),
+                authMode: .secretValid,
+                remote: statusRemote
+            ),
+            uploadResponse: uploadedRemote
+        )
+        let cloudSyncStore = CloudSyncStore(
+            client: client,
+            configuration: CoachRuntimeConfiguration(
+                isFeatureEnabled: true,
+                backendBaseURL: URL(string: "https://example.com"),
+                internalBearerToken: "token"
+            ),
+            installID: localStateStore.installID,
+            installSecretProvider: { localStateStore.installSecret },
+            localStateStore: CloudSyncLocalStateStore(defaults: defaults)
+        )
+
+        let preparation = await cloudSyncStore.syncIfNeeded(using: appStore, allowUserPrompt: false)
+        let reloadedStore = AppStore()
+
+        XCTAssertNotEqual(initialHash, uploadedRemote.backupHash)
+        XCTAssertEqual(appStore.localBackupHash, uploadedRemote.backupHash)
+        XCTAssertEqual(preparation.localBackupHash, uploadedRemote.backupHash)
+        XCTAssertTrue(preparation.canUseRemoteAIContextNow)
+        XCTAssertEqual(reloadedStore.localBackupHash, uploadedRemote.backupHash)
+    }
+
+    @MainActor
     func testAppStoreCreatesRollbackCheckpointBeforeApplyingRemoteRestore() {
         let persistence = PersistenceController()
         persistence.clearRollbackCheckpoint()
@@ -300,6 +398,100 @@ private actor RecordingCoachRemoteMaintenanceClient: CoachAPIClient {
     func deleteRemoteBackup(installID: String) async throws {
         throw CoachClientError.invalidResponse
     }
+
+    func updateCoachPreferences(
+        _ request: CloudCoachPreferencesUpdateRequest
+    ) async throws -> CloudCoachPreferencesUpdateResponse {
+        throw CoachClientError.invalidResponse
+    }
+
+    func fetchProfileInsights(
+        locale: String,
+        snapshotEnvelope: CoachSnapshotEnvelope,
+        capabilityScope: CoachCapabilityScope,
+        runtimeContextDelta: CoachRuntimeContextDelta?,
+        forceRefresh: Bool
+    ) async throws -> CoachProfileInsights {
+        throw CoachClientError.invalidResponse
+    }
+
+    func createChatJob(
+        locale: String,
+        question: String,
+        clientRequestID: String,
+        clientRecentTurns: [CoachConversationMessage],
+        snapshotEnvelope: CoachSnapshotEnvelope,
+        capabilityScope: CoachCapabilityScope,
+        runtimeContextDelta: CoachRuntimeContextDelta?
+    ) async throws -> CoachChatJobCreateResponse {
+        throw CoachClientError.invalidResponse
+    }
+
+    func getChatJob(
+        jobID: String,
+        installID: String
+    ) async throws -> CoachChatJobStatusResponse {
+        throw CoachClientError.invalidResponse
+    }
+
+    func createWorkoutSummaryJob(
+        _ request: WorkoutSummaryJobCreateRequest
+    ) async throws -> WorkoutSummaryJobCreateResponse {
+        throw CoachClientError.invalidResponse
+    }
+
+    func getWorkoutSummaryJob(
+        jobID: String,
+        installID: String
+    ) async throws -> WorkoutSummaryJobStatusResponse {
+        throw CoachClientError.invalidResponse
+    }
+
+    func sendChat(
+        locale: String,
+        question: String,
+        clientRecentTurns: [CoachConversationMessage],
+        snapshotEnvelope: CoachSnapshotEnvelope,
+        capabilityScope: CoachCapabilityScope,
+        runtimeContextDelta: CoachRuntimeContextDelta?
+    ) async throws -> CoachChatResponse {
+        throw CoachClientError.invalidResponse
+    }
+
+    func deleteRemoteState(installID: String) async throws {
+        throw CoachClientError.invalidResponse
+    }
+}
+
+private actor StubCoachSyncClient: CoachAPIClient {
+    let statusResponse: CloudBackupStatusResponse
+    let uploadResponse: CloudBackupHead
+
+    init(
+        statusResponse: CloudBackupStatusResponse,
+        uploadResponse: CloudBackupHead
+    ) {
+        self.statusResponse = statusResponse
+        self.uploadResponse = uploadResponse
+    }
+
+    func getBackupStatus(_ request: CloudBackupStatusRequest) async throws -> CloudBackupStatusResponse {
+        statusResponse
+    }
+
+    func uploadBackup(_ request: CloudBackupUploadRequest) async throws -> CloudBackupHead {
+        uploadResponse
+    }
+
+    func downloadBackup(installID: String, version: Int?) async throws -> CloudBackupDownloadResponse {
+        throw CoachClientError.invalidResponse
+    }
+
+    func recordRestoreDecision(_ request: CloudBackupRestoreDecisionRequest) async throws {}
+
+    func clearRemoteChatMemory(_ request: CloudCoachMemoryClearRequest) async throws {}
+
+    func deleteRemoteBackup(installID: String) async throws {}
 
     func updateCoachPreferences(
         _ request: CloudCoachPreferencesUpdateRequest

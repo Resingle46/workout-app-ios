@@ -281,7 +281,7 @@ final class AppStore {
         save()
     }
 
-    func applyRemoteRestore(snapshot: AppSnapshot) {
+    func applyRemoteRestore(snapshot: AppSnapshot, remoteBackupHash: String? = nil) {
         let existingSnapshot = currentSnapshot()
         if let checkpoint = persistence.saveRollbackCheckpoint(snapshot: existingSnapshot) {
             debugRecorder.log(
@@ -294,6 +294,9 @@ final class AppStore {
             )
         }
         apply(snapshot: snapshot)
+        if let remoteBackupHash {
+            adoptRemoteBackupHash(remoteBackupHash)
+        }
     }
 
     func dismissLastFinishedSession() {
@@ -1354,6 +1357,21 @@ final class AppStore {
         localSnapshotBackupHash = metadata?.backupHash
     }
 
+    func adoptRemoteBackupHash(_ backupHash: String) {
+        let normalizedBackupHash = backupHash
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .nilIfEmpty
+        guard let normalizedBackupHash else {
+            return
+        }
+
+        localSnapshotBackupHash = normalizedBackupHash
+        persistence.overrideStoredSnapshotBackupHash(
+            normalizedBackupHash,
+            modifiedAt: localSnapshotModifiedAt
+        )
+    }
+
     private var isSeedBaselineSnapshot: Bool {
         let seed = SeedData.make()
         let baselineSnapshot = AppStore.normalizedSnapshot(
@@ -1747,6 +1765,19 @@ struct PersistenceController {
         writeSnapshot(snapshot, to: fileURL, manifestURL: manifestURL)
     }
 
+    func overrideStoredSnapshotBackupHash(
+        _ backupHash: String?,
+        modifiedAt: Date? = nil
+    ) {
+        persistManifest(
+            StoredSnapshotMetadata(
+                modifiedAt: modifiedAt ?? modifiedAt(for: fileURL),
+                backupHash: backupHash
+            ),
+            to: manifestURL
+        )
+    }
+
     @discardableResult
     func saveRollbackCheckpoint(snapshot: AppSnapshot) -> StoredSnapshotMetadata? {
         writeSnapshot(
@@ -1767,6 +1798,11 @@ struct PersistenceController {
     func clearRollbackCheckpoint() {
         try? FileManager.default.removeItem(at: rollbackCheckpointURL)
         try? FileManager.default.removeItem(at: rollbackCheckpointManifestURL)
+    }
+
+    func clearStoredSnapshot() {
+        try? FileManager.default.removeItem(at: fileURL)
+        try? FileManager.default.removeItem(at: manifestURL)
     }
 
     func snapshotModifiedAt() -> Date? {

@@ -561,6 +561,14 @@ enum CoachClientError: LocalizedError, Equatable {
             return false
         }
     }
+
+    var isRemoteHeadChanged: Bool {
+        guard case .api(let statusCode, let code, _, _, _, _) = self else {
+            return false
+        }
+
+        return statusCode == 409 && code == "remote_head_changed"
+    }
 }
 
 enum CoachCapabilityScope: String, Codable, Hashable, Sendable {
@@ -2555,6 +2563,8 @@ final class CloudSyncStore {
                         snapshot: snapshot
                     )
                 )
+                appStore.adoptRemoteBackupHash(uploaded.backupHash)
+                let resolvedLocalBackupHash = appStore.localBackupHash ?? uploaded.backupHash
                 let readyStatus = CloudBackupStatusResponse(
                     syncState: .remoteReady,
                     contextState: .contextReady,
@@ -2569,14 +2579,17 @@ final class CloudSyncStore {
                     authMode: status.authMode,
                     remote: uploaded
                 )
-                applyStatus(readyStatus, localBackupHash: localBackupHash)
+                applyStatus(readyStatus, localBackupHash: resolvedLocalBackupHash)
                 lastSyncErrorDescription = nil
                 debugRecorder.log(
                     category: .cloudSync,
                     message: "upload_succeeded",
-                    metadata: ["remoteVersion": String(uploaded.backupVersion)]
+                    metadata: [
+                        "remoteVersion": String(uploaded.backupVersion),
+                        "adoptedRemoteHash": resolvedLocalBackupHash == uploaded.backupHash ? "true" : "false"
+                    ]
                 )
-                return currentPreparation(localBackupHash: localBackupHash)
+                return currentPreparation(localBackupHash: resolvedLocalBackupHash)
             }
 
             if status.actions.shouldOfferRestore,
@@ -2621,7 +2634,10 @@ final class CloudSyncStore {
             return
         }
 
-        appStore.applyRemoteRestore(snapshot: pendingRemoteRestore.response.backup.snapshot)
+        appStore.applyRemoteRestore(
+            snapshot: pendingRemoteRestore.response.backup.snapshot,
+            remoteBackupHash: pendingRemoteRestore.response.remote.backupHash
+        )
         let localBackupHash = appStore.localBackupHash ?? pendingRemoteRestore.response.remote.backupHash
         do {
             try await client.recordRestoreDecision(
@@ -2986,20 +3002,50 @@ final class CoachStore {
                 using: appStore,
                 allowUserPrompt: false
             )
-            let snapshotPackage = try makeSnapshotPackage(
-                from: appStore,
-                localBackupHash: preparation.localBackupHash ?? appStore.localBackupHash,
-                includeInlineSnapshot: !preparation.canUseRemoteAIContextNow && preparation.shouldBuildInlineFallback
-            )
-            let remoteInsights = try await client.fetchProfileInsights(
-                locale: appStore.selectedLanguageCode,
-                snapshotEnvelope: snapshotPackage.envelope,
-                capabilityScope: capabilityScope,
-                runtimeContextDelta: preparation.canUseRemoteAIContextNow
-                    ? contextBuilder.runtimeContextDelta(from: appStore)
-                    : nil,
-                forceRefresh: forceRefresh
-            )
+            let preferredLocalBackupHash = preparation.localBackupHash ?? appStore.localBackupHash
+
+            func performInsightsRequest(
+                includeInlineSnapshot: Bool
+            ) async throws -> (CoachProfileInsights, CoachSnapshotPackage) {
+                let snapshotPackage = try makeSnapshotPackage(
+                    from: appStore,
+                    localBackupHash: preferredLocalBackupHash,
+                    includeInlineSnapshot: includeInlineSnapshot
+                )
+                let remoteInsights = try await client.fetchProfileInsights(
+                    locale: appStore.selectedLanguageCode,
+                    snapshotEnvelope: snapshotPackage.envelope,
+                    capabilityScope: capabilityScope,
+                    runtimeContextDelta: includeInlineSnapshot
+                        ? nil
+                        : (preparation.canUseRemoteAIContextNow
+                            ? contextBuilder.runtimeContextDelta(from: appStore)
+                            : nil),
+                    forceRefresh: forceRefresh
+                )
+                return (remoteInsights, snapshotPackage)
+            }
+
+            let initialIncludeInlineSnapshot =
+                !preparation.canUseRemoteAIContextNow && preparation.shouldBuildInlineFallback
+            var remoteInsights: CoachProfileInsights
+            var snapshotPackage: CoachSnapshotPackage
+            do {
+                (remoteInsights, snapshotPackage) = try await performInsightsRequest(
+                    includeInlineSnapshot: initialIncludeInlineSnapshot
+                )
+            } catch let error as CoachClientError
+            where error.isRemoteHeadChanged && !initialIncludeInlineSnapshot {
+                debugRecorder.log(
+                    category: .coach,
+                    level: .warning,
+                    message: "insights_remote_head_changed_retry",
+                    metadata: ["provider": configuration.provider.rawValue]
+                )
+                (remoteInsights, snapshotPackage) = try await performInsightsRequest(
+                    includeInlineSnapshot: true
+                )
+            }
             profileInsights = {
                 var value = remoteInsights
                 value.provider = configuration.provider
@@ -3014,7 +3060,7 @@ final class CoachStore {
                 metadata: [
                     "source": remoteInsights.resolvedInsightSource.rawValue,
                     "provider": configuration.provider.rawValue,
-                    "usedServerSideContext": preparation.canUseRemoteAIContextNow ? "true" : "false",
+                    "usedServerSideContext": snapshotPackage.includedInlineSnapshot ? "false" : "true",
                     "includedInlineSnapshot": snapshotPackage.includedInlineSnapshot ? "true" : "false"
                 ]
             )
@@ -3167,24 +3213,54 @@ final class CoachStore {
                 using: appStore,
                 allowUserPrompt: false
             )
-            let snapshotPackage = try makeSnapshotPackage(
-                from: appStore,
-                localBackupHash: preparation.localBackupHash ?? appStore.localBackupHash,
-                includeInlineSnapshot: !preparation.canUseRemoteAIContextNow && preparation.shouldBuildInlineFallback
-            )
+            let preferredLocalBackupHash = preparation.localBackupHash ?? appStore.localBackupHash
+            func buildSnapshotPackage(includeInlineSnapshot: Bool) throws -> CoachSnapshotPackage {
+                try makeSnapshotPackage(
+                    from: appStore,
+                    localBackupHash: preferredLocalBackupHash,
+                    includeInlineSnapshot: includeInlineSnapshot
+                )
+            }
             let clientRequestID = UUID().uuidString.lowercased()
+            let initialIncludeInlineSnapshot =
+                !preparation.canUseRemoteAIContextNow && preparation.shouldBuildInlineFallback
+            var snapshotPackage = try buildSnapshotPackage(
+                includeInlineSnapshot: initialIncludeInlineSnapshot
+            )
 
             do {
-                let createResponse = try await client.createChatJob(
-                    locale: appStore.selectedLanguageCode,
-                    question: trimmedQuestion,
-                    clientRequestID: clientRequestID,
-                    snapshotEnvelope: snapshotPackage.envelope,
-                    capabilityScope: capabilityScope,
-                    runtimeContextDelta: preparation.canUseRemoteAIContextNow
-                        ? contextBuilder.runtimeContextDelta(from: appStore)
-                        : nil
-                )
+                let createResponse: CoachChatJobCreateResponse
+                do {
+                    createResponse = try await client.createChatJob(
+                        locale: appStore.selectedLanguageCode,
+                        question: trimmedQuestion,
+                        clientRequestID: clientRequestID,
+                        snapshotEnvelope: snapshotPackage.envelope,
+                        capabilityScope: capabilityScope,
+                        runtimeContextDelta: snapshotPackage.includedInlineSnapshot
+                            ? nil
+                            : (preparation.canUseRemoteAIContextNow
+                                ? contextBuilder.runtimeContextDelta(from: appStore)
+                                : nil)
+                    )
+                } catch let error as CoachClientError
+                where error.isRemoteHeadChanged && !snapshotPackage.includedInlineSnapshot {
+                    debugRecorder.log(
+                        category: .coach,
+                        level: .warning,
+                        message: "chat_remote_head_changed_retry",
+                        metadata: ["provider": configuration.provider.rawValue]
+                    )
+                    snapshotPackage = try buildSnapshotPackage(includeInlineSnapshot: true)
+                    createResponse = try await client.createChatJob(
+                        locale: appStore.selectedLanguageCode,
+                        question: trimmedQuestion,
+                        clientRequestID: clientRequestID,
+                        snapshotEnvelope: snapshotPackage.envelope,
+                        capabilityScope: capabilityScope,
+                        runtimeContextDelta: nil
+                    )
+                }
                 draftQuestion = ""
                 setActiveChatJob(
                     jobID: createResponse.jobID,
@@ -3200,7 +3276,7 @@ final class CoachStore {
                     metadata: [
                         "provider": createResponse.metadata?.provider?.rawValue ?? configuration.provider.rawValue,
                         "hasQuestion": "true",
-                        "usedServerSideContext": preparation.canUseRemoteAIContextNow ? "true" : "false",
+                        "usedServerSideContext": snapshotPackage.includedInlineSnapshot ? "false" : "true",
                         "includedInlineSnapshot": snapshotPackage.includedInlineSnapshot ? "true" : "false"
                     ]
                 )
