@@ -643,6 +643,21 @@ protocol CoachAPIClient: Sendable {
         allowDegradedCache: Bool
     ) async throws -> CoachProfileInsights
 
+    func createProfileInsightsJob(
+        locale: String,
+        clientRequestID: String,
+        snapshotEnvelope: CoachSnapshotEnvelope,
+        capabilityScope: CoachCapabilityScope,
+        runtimeContextDelta: CoachRuntimeContextDelta?,
+        forceRefresh: Bool,
+        allowDegradedCache: Bool
+    ) async throws -> CoachProfileInsightsJobCreateResponse
+
+    func getProfileInsightsJob(
+        jobID: String,
+        installID: String
+    ) async throws -> CoachProfileInsightsJobStatusResponse
+
     func createChatJob(
         locale: String,
         question: String,
@@ -726,6 +741,25 @@ extension CoachAPIClient {
         throw CoachClientError.invalidResponse
     }
 
+    func createProfileInsightsJob(
+        locale _: String,
+        clientRequestID _: String,
+        snapshotEnvelope _: CoachSnapshotEnvelope,
+        capabilityScope _: CoachCapabilityScope,
+        runtimeContextDelta _: CoachRuntimeContextDelta?,
+        forceRefresh _: Bool,
+        allowDegradedCache _: Bool
+    ) async throws -> CoachProfileInsightsJobCreateResponse {
+        throw CoachClientError.invalidResponse
+    }
+
+    func getProfileInsightsJob(
+        jobID _: String,
+        installID _: String
+    ) async throws -> CoachProfileInsightsJobStatusResponse {
+        throw CoachClientError.invalidResponse
+    }
+
     func getWorkoutSummaryJob(
         jobID: String,
         installID: String
@@ -763,6 +797,22 @@ struct CoachProfileInsightsRequest: Codable, Sendable {
     var forceRefresh: Bool?
     var allowDegradedCache: Bool?
     var providerID: String?
+}
+
+struct CoachProfileInsightsJobCreateRequest: Codable, Sendable {
+    var locale: String
+    var installID: String
+    var provider: CoachAIProvider
+    var localBackupHash: String?
+    var snapshotHash: String?
+    var snapshot: CompactCoachSnapshot?
+    var snapshotUpdatedAt: Date?
+    var runtimeContextDelta: CoachRuntimeContextDelta?
+    var capabilityScope: CoachCapabilityScope
+    var forceRefresh: Bool?
+    var allowDegradedCache: Bool?
+    var providerID: String?
+    var clientRequestID: String
 }
 
 struct CoachChatRequest: Codable, Sendable {
@@ -937,7 +987,11 @@ struct CloudCoachPreferencesUpdateResponse: Codable, Hashable, Sendable {
 
 struct CoachProfileInsights: Codable, Hashable, Sendable {
     var summary: String
+    var keyObservations: [String] = []
+    var topConstraints: [String] = []
     var recommendations: [String]
+    var confidenceNotes: [String] = []
+    var executionContext: CoachProfileExecutionContext? = nil
     var generationStatus: CoachResponseGenerationStatus? = nil
     var insightSource: CoachInsightsOrigin? = nil
     var provider: CoachAIProvider? = nil
@@ -954,6 +1008,21 @@ struct CoachProfileInsights: Codable, Hashable, Sendable {
     var isModelGenerated: Bool {
         resolvedInsightSource != .fallback
     }
+}
+
+struct CoachProfileExecutionContext: Codable, Hashable, Sendable {
+    var mode: String
+    var effectiveWeeklyFrequency: Double
+    var shouldTreatProgramCountAsMismatch: Bool
+    var programWorkoutCount: Int?
+    var weeklyTarget: Int
+    var statedWeeklyFrequency: Int?
+    var observedAverageWorkoutsPerWeek: Double?
+    var templateRotationSemantics: String
+    var authoritativeSignal: String
+    var userNote: String?
+    var explanation: String
+    var evidence: [String]
 }
 
 struct CoachChatResponse: Codable, Hashable, Sendable {
@@ -979,6 +1048,15 @@ struct CoachJobMetadata: Codable, Hashable, Sendable {
     var analyticsVersion: String?
     var memoryProfile: String?
     var providerID: String?
+    var useCase: String?
+    var modelRole: String?
+    var allowedContextProfiles: [String]?
+    var payloadTier: String?
+    var routingVersion: String?
+    var memoryCompatibilityKey: String?
+    var promptFamily: String?
+    var contextFamily: String?
+    var routingReasonTags: [String]?
 
     init(
         provider: CoachAIProvider? = nil,
@@ -989,7 +1067,16 @@ struct CoachJobMetadata: Codable, Hashable, Sendable {
         contextVersion: String? = nil,
         analyticsVersion: String? = nil,
         memoryProfile: String? = nil,
-        providerID: String? = nil
+        providerID: String? = nil,
+        useCase: String? = nil,
+        modelRole: String? = nil,
+        allowedContextProfiles: [String]? = nil,
+        payloadTier: String? = nil,
+        routingVersion: String? = nil,
+        memoryCompatibilityKey: String? = nil,
+        promptFamily: String? = nil,
+        contextFamily: String? = nil,
+        routingReasonTags: [String]? = nil
     ) {
         self.provider = provider
         self.selectedModel = selectedModel
@@ -1000,7 +1087,50 @@ struct CoachJobMetadata: Codable, Hashable, Sendable {
         self.analyticsVersion = analyticsVersion
         self.memoryProfile = memoryProfile
         self.providerID = providerID
+        self.useCase = useCase
+        self.modelRole = modelRole
+        self.allowedContextProfiles = allowedContextProfiles
+        self.payloadTier = payloadTier
+        self.routingVersion = routingVersion
+        self.memoryCompatibilityKey = memoryCompatibilityKey
+        self.promptFamily = promptFamily
+        self.contextFamily = contextFamily
+        self.routingReasonTags = routingReasonTags
     }
+}
+
+struct CoachProfileInsightsJobCreateResponse: Codable, Hashable, Sendable {
+    var jobID: String
+    var status: CoachChatJobStatus
+    var createdAt: Date
+    var pollAfterMs: Int
+    var metadata: CoachJobMetadata?
+}
+
+struct CoachProfileInsightsJobResult: Codable, Hashable, Sendable {
+    var summary: String
+    var keyObservations: [String]
+    var topConstraints: [String]
+    var recommendations: [String]
+    var confidenceNotes: [String]
+    var executionContext: CoachProfileExecutionContext?
+    var generationStatus: CoachResponseGenerationStatus? = nil
+    var insightSource: CoachInsightsOrigin? = nil
+    var selectedModel: String? = nil
+    var inferenceMode: CoachChatInferenceMode
+    var modelDurationMs: Int?
+    var totalJobDurationMs: Int?
+}
+
+struct CoachProfileInsightsJobStatusResponse: Codable, Hashable, Sendable {
+    var jobID: String
+    var status: CoachChatJobStatus
+    var createdAt: Date
+    var startedAt: Date?
+    var completedAt: Date?
+    var result: CoachProfileInsightsJobResult?
+    var error: CoachChatJobError?
+    var metadata: CoachJobMetadata?
 }
 
 struct CoachChatJobCreateResponse: Codable, Hashable, Sendable {
@@ -1425,6 +1555,72 @@ struct CoachAPIHTTPClient: CoachAPIClient {
             clientRequestID: nil,
             installID: snapshotEnvelope.installID,
             responseType: CoachProfileInsights.self
+        )
+    }
+
+    func createProfileInsightsJob(
+        locale: String,
+        clientRequestID: String,
+        snapshotEnvelope: CoachSnapshotEnvelope,
+        capabilityScope: CoachCapabilityScope,
+        runtimeContextDelta: CoachRuntimeContextDelta?,
+        forceRefresh: Bool,
+        allowDegradedCache: Bool
+    ) async throws -> CoachProfileInsightsJobCreateResponse {
+        try await send(
+            path: "v2/coach/profile-insights-jobs",
+            method: "POST",
+            body: CoachProfileInsightsJobCreateRequest(
+                locale: locale,
+                installID: snapshotEnvelope.installID,
+                provider: configuration.provider,
+                localBackupHash: snapshotEnvelope.localBackupHash,
+                snapshotHash: snapshotEnvelope.snapshotHash,
+                snapshot: snapshotEnvelope.snapshot,
+                snapshotUpdatedAt: snapshotEnvelope.snapshotUpdatedAt,
+                runtimeContextDelta: runtimeContextDelta,
+                capabilityScope: capabilityScope,
+                forceRefresh: forceRefresh ? true : nil,
+                allowDegradedCache: allowDegradedCache ? nil : false,
+                providerID: coachDefaultProviderID,
+                clientRequestID: clientRequestID
+            ),
+            session: standardSession,
+            timeoutInterval: Self.standardRequestTimeoutInterval,
+            clientRequestID: clientRequestID,
+            installID: snapshotEnvelope.installID,
+            responseType: CoachProfileInsightsJobCreateResponse.self
+        )
+    }
+
+    func getProfileInsightsJob(
+        jobID: String,
+        installID: String
+    ) async throws -> CoachProfileInsightsJobStatusResponse {
+        guard configuration.isFeatureEnabled else {
+            throw CoachClientError.featureDisabled
+        }
+        guard let baseURL = configuration.backendBaseURL else {
+            throw CoachClientError.missingBaseURL
+        }
+        var components = URLComponents(
+            url: baseURL.appending(path: "v2/coach/profile-insights-jobs/\(jobID)"),
+            resolvingAgainstBaseURL: false
+        )
+        components?.queryItems = [
+            URLQueryItem(name: "installID", value: installID)
+        ]
+
+        guard let url = components?.url else {
+            throw CoachClientError.invalidResponse
+        }
+        return try await sendGet(
+            url: url,
+            path: "v2/coach/profile-insights-jobs/\(jobID)",
+            session: standardSession,
+            timeoutInterval: Self.standardRequestTimeoutInterval,
+            installID: installID,
+            responseType: CoachProfileInsightsJobStatusResponse.self
         )
     }
 
@@ -1920,6 +2116,14 @@ struct CoachAPIHTTPClient: CoachAPIClient {
         body: RequestBody
     ) -> CoachAIRequestThrottleContext? {
         if let request = body as? CoachProfileInsightsRequest,
+           request.provider == .gemini {
+            return CoachAIRequestThrottleContext(
+                provider: request.provider,
+                operation: .profileInsights
+            )
+        }
+
+        if let request = body as? CoachProfileInsightsJobCreateRequest,
            request.provider == .gemini {
             return CoachAIRequestThrottleContext(
                 provider: request.provider,
@@ -2828,10 +3032,17 @@ private struct PendingCoachChatJobState: Codable, Hashable, Sendable {
     var providerID: String
 }
 
+private struct PendingProfileInsightsJobState: Codable, Hashable, Sendable {
+    var jobID: String
+    var installID: String
+    var providerID: String
+}
+
 @MainActor
 @Observable
 final class CoachStore {
     private static let initialChatPollAfterMs = 1_500
+    private static let initialProfileInsightsPollAfterMs = 1_500
 
     var profileInsights: CoachProfileInsights?
     var profileInsightsOrigin: CoachInsightsOrigin = .fallback
@@ -2839,6 +3050,9 @@ final class CoachStore {
     var visibleQuickPromptKeys: [String] = []
     var isLoadingProfileInsights = false
     var isSendingMessage = false
+    var activeProfileInsightsJobID: String?
+    var activeProfileInsightsInstallID: String?
+    var activeProfileInsightsProvider: CoachAIProvider?
     var activeChatJobID: String?
     var activeChatInstallID: String?
     var activeChatProvider: CoachAIProvider?
@@ -2895,6 +3109,7 @@ final class CoachStore {
         self.maxChatPollingDuration = maxChatPollingDuration
         self.allQuickPromptKeys = CoachStore.makeQuickPromptKeys()
         configureQuickPromptsIfNeeded()
+        restorePersistedPendingProfileInsightsJobIfNeeded()
         restorePersistedPendingChatJobIfNeeded()
     }
 
@@ -2920,6 +3135,7 @@ final class CoachStore {
         )
         cloudSyncStore.updateConfiguration(configuration)
         hasHydratedAnalysisSettingsDrafts = false
+        clearActiveProfileInsightsJob()
         profileInsights = nil
         profileInsightsOrigin = .fallback
         lastInsightsErrorDescription = nil
@@ -2968,6 +3184,74 @@ final class CoachStore {
             return
         }
 
+        if forceRefresh {
+            clearActiveProfileInsightsJob()
+        }
+
+        let fallbackInsights = CoachFallbackInsightsFactory.make(from: appStore)
+        let allowDegradedCache =
+            !forceRefresh &&
+            profileInsights != nil &&
+            profileInsightsOrigin != .fallback
+
+        if !forceRefresh,
+           let jobID = activeProfileInsightsJobID,
+           let installID = activeProfileInsightsInstallID {
+            isLoadingProfileInsights = true
+            defer { isLoadingProfileInsights = false }
+
+            guard configuration.canUseRemoteCoach else {
+                clearActiveProfileInsightsJob()
+                profileInsights = fallbackInsights
+                profileInsightsOrigin = .fallback
+                lastInsightsErrorDescription = nil
+                return
+            }
+
+            do {
+                let remoteInsights = try await pollProfileInsightsJobUntilTerminal(
+                    jobID: jobID,
+                    installID: installID,
+                    initialPollAfterMs: 0
+                )
+                applyProfileInsights(remoteInsights)
+                lastInsightsErrorDescription = nil
+                lastInsightsProvider = configuration.provider
+                debugRecorder.log(
+                    category: .coach,
+                    message: "insights_job_resumed_and_completed",
+                    metadata: [
+                        "jobID": jobID,
+                        "provider": configuration.provider.rawValue,
+                        "source": remoteInsights.resolvedInsightSource.rawValue
+                    ]
+                )
+            } catch is CancellationError {
+                debugRecorder.log(
+                    category: .coach,
+                    message: "insights_job_resume_canceled",
+                    metadata: ["jobID": jobID]
+                )
+                return
+            } catch {
+                profileInsights = fallbackInsights
+                profileInsightsOrigin = .fallback
+                lastInsightsErrorDescription = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                lastInsightsProvider = configuration.provider
+                debugRecorder.log(
+                    category: .coach,
+                    level: .error,
+                    message: "insights_job_resume_failed",
+                    metadata: [
+                        "jobID": jobID,
+                        "provider": configuration.provider.rawValue,
+                        "error": (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                    ]
+                )
+            }
+            return
+        }
+
         if !forceRefresh, let activeChatJobID {
             debugRecorder.log(
                 category: .coach,
@@ -2979,12 +3263,6 @@ final class CoachStore {
 
         isLoadingProfileInsights = true
         defer { isLoadingProfileInsights = false }
-
-        let fallbackInsights = CoachFallbackInsightsFactory.make(from: appStore)
-        let allowDegradedCache =
-            !forceRefresh &&
-            profileInsights != nil &&
-            profileInsightsOrigin != .fallback
         debugRecorder.log(
             category: .coach,
             message: "insights_refresh_started",
@@ -3016,14 +3294,15 @@ final class CoachStore {
 
             func performInsightsRequest(
                 includeInlineSnapshot: Bool
-            ) async throws -> (CoachProfileInsights, CoachSnapshotPackage) {
+            ) async throws -> (CoachProfileInsights, CoachSnapshotPackage, CoachProfileInsightsJobCreateResponse) {
                 let snapshotPackage = try makeSnapshotPackage(
                     from: appStore,
                     localBackupHash: preferredLocalBackupHash,
                     includeInlineSnapshot: includeInlineSnapshot
                 )
-                let remoteInsights = try await client.fetchProfileInsights(
+                let createResponse = try await client.createProfileInsightsJob(
                     locale: appStore.selectedLanguageCode,
+                    clientRequestID: UUID().uuidString,
                     snapshotEnvelope: snapshotPackage.envelope,
                     capabilityScope: capabilityScope,
                     runtimeContextDelta: includeInlineSnapshot
@@ -3034,15 +3313,26 @@ final class CoachStore {
                     forceRefresh: forceRefresh,
                     allowDegradedCache: allowDegradedCache
                 )
-                return (remoteInsights, snapshotPackage)
+                beginProfileInsightsJob(
+                    jobID: createResponse.jobID,
+                    installID: snapshotPackage.envelope.installID,
+                    provider: createResponse.metadata?.provider ?? configuration.provider
+                )
+                let remoteInsights = try await pollProfileInsightsJobUntilTerminal(
+                    jobID: createResponse.jobID,
+                    installID: snapshotPackage.envelope.installID,
+                    initialPollAfterMs: createResponse.pollAfterMs
+                )
+                return (remoteInsights, snapshotPackage, createResponse)
             }
 
             let initialIncludeInlineSnapshot =
                 !preparation.canUseRemoteAIContextNow && preparation.shouldBuildInlineFallback
             var remoteInsights: CoachProfileInsights
             var snapshotPackage: CoachSnapshotPackage
+            var createResponse: CoachProfileInsightsJobCreateResponse
             do {
-                (remoteInsights, snapshotPackage) = try await performInsightsRequest(
+                (remoteInsights, snapshotPackage, createResponse) = try await performInsightsRequest(
                     includeInlineSnapshot: initialIncludeInlineSnapshot
                 )
             } catch let error as CoachClientError
@@ -3053,22 +3343,18 @@ final class CoachStore {
                     message: "insights_remote_head_changed_retry",
                     metadata: ["provider": configuration.provider.rawValue]
                 )
-                (remoteInsights, snapshotPackage) = try await performInsightsRequest(
+                (remoteInsights, snapshotPackage, createResponse) = try await performInsightsRequest(
                     includeInlineSnapshot: true
                 )
             }
-            profileInsights = {
-                var value = remoteInsights
-                value.provider = configuration.provider
-                return value
-            }()
-            profileInsightsOrigin = remoteInsights.resolvedInsightSource
+            applyProfileInsights(remoteInsights)
             lastInsightsErrorDescription = nil
             lastInsightsProvider = configuration.provider
             debugRecorder.log(
                 category: .coach,
                 message: "insights_refresh_succeeded",
                 metadata: [
+                    "jobID": createResponse.jobID,
                     "source": remoteInsights.resolvedInsightSource.rawValue,
                     "provider": configuration.provider.rawValue,
                     "selectedModel": remoteInsights.selectedModel ?? "",
@@ -3076,6 +3362,13 @@ final class CoachStore {
                     "includedInlineSnapshot": snapshotPackage.includedInlineSnapshot ? "true" : "false"
                 ]
             )
+        } catch is CancellationError {
+            debugRecorder.log(
+                category: .coach,
+                message: "insights_refresh_canceled",
+                metadata: ["provider": configuration.provider.rawValue]
+            )
+            return
         } catch {
             profileInsights = fallbackInsights
             profileInsightsOrigin = .fallback
@@ -3091,6 +3384,126 @@ final class CoachStore {
                 ]
             )
         }
+    }
+
+    private func applyProfileInsights(_ insights: CoachProfileInsights) {
+        profileInsights = {
+            var value = insights
+            value.provider = configuration.provider
+            return value
+        }()
+        profileInsightsOrigin = insights.resolvedInsightSource
+    }
+
+    private func beginProfileInsightsJob(
+        jobID: String,
+        installID: String,
+        provider: CoachAIProvider
+    ) {
+        activeProfileInsightsJobID = jobID
+        activeProfileInsightsInstallID = installID
+        activeProfileInsightsProvider = provider
+        persistPendingProfileInsightsJobState()
+    }
+
+    private func clearActiveProfileInsightsJob() {
+        activeProfileInsightsJobID = nil
+        activeProfileInsightsInstallID = nil
+        activeProfileInsightsProvider = nil
+        persistPendingProfileInsightsJobState()
+    }
+
+    private func pollProfileInsightsJobUntilTerminal(
+        jobID: String,
+        installID: String,
+        initialPollAfterMs: Int
+    ) async throws -> CoachProfileInsights {
+        let startedAt = Date()
+        var nextDelayMs = max(
+            initialPollAfterMs,
+            CoachStore.initialProfileInsightsPollAfterMs
+        )
+        var pollAttempt = 0
+
+        while Date().timeIntervalSince(startedAt) < maxChatPollingDuration {
+            if pollAttempt > 0 || initialPollAfterMs == 0 {
+                let response = try await client.getProfileInsightsJob(
+                    jobID: jobID,
+                    installID: installID
+                )
+                switch response.status {
+                case .completed:
+                    clearActiveProfileInsightsJob()
+                    guard let result = response.result else {
+                        throw CoachClientError.invalidResponse
+                    }
+                    return CoachProfileInsights(
+                        summary: result.summary,
+                        keyObservations: result.keyObservations,
+                        topConstraints: result.topConstraints,
+                        recommendations: result.recommendations,
+                        confidenceNotes: result.confidenceNotes,
+                        executionContext: result.executionContext,
+                        generationStatus: result.generationStatus,
+                        insightSource: result.insightSource,
+                        provider: response.metadata?.provider ?? activeProfileInsightsProvider,
+                        selectedModel: result.selectedModel ?? response.metadata?.selectedModel
+                    )
+                case .failed, .canceled:
+                    clearActiveProfileInsightsJob()
+                    throw CoachClientError.api(
+                        statusCode: 500,
+                        code: response.error?.code ?? "profile_insights_job_failed",
+                        message: profileInsightsJobFailureDescription(from: response),
+                        requestID: nil,
+                        jobID: response.jobID,
+                        provider: response.metadata?.provider ?? activeProfileInsightsProvider
+                    )
+                case .queued, .running:
+                    break
+                }
+            }
+
+            if nextDelayMs > 0 {
+                try Task.checkCancellation()
+                try await Task.sleep(nanoseconds: UInt64(nextDelayMs) * 1_000_000)
+            }
+
+            pollAttempt += 1
+            nextDelayMs = profileInsightsPollIntervalMs(for: pollAttempt)
+        }
+
+        throw CoachClientError.api(
+            statusCode: 202,
+            code: "profile_insights_job_poll_timeout",
+            message: coachLocalizedString("coach.loading.profile_insights"),
+            requestID: nil,
+            jobID: jobID,
+            provider: activeProfileInsightsProvider
+        )
+    }
+
+    private func profileInsightsPollIntervalMs(for attempt: Int) -> Int {
+        switch attempt {
+        case 0:
+            return CoachStore.initialProfileInsightsPollAfterMs
+        case 1:
+            return 3_000
+        default:
+            return 5_000
+        }
+    }
+
+    private func profileInsightsJobFailureDescription(
+        from jobResponse: CoachProfileInsightsJobStatusResponse
+    ) -> String {
+        if let message = jobResponse.error?.message
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !message.isEmpty {
+            return message
+        }
+
+        return coachLocalizedString("coach.error.invalid_response")
     }
 
     func saveAnalysisSettings(using appStore: AppStore) async {
@@ -3475,6 +3888,13 @@ final class CoachStore {
         if activeChatJobID != nil {
             await resumePendingChatJobIfNeeded(using: appStore)
             if activeChatJobID != nil {
+                return
+            }
+        }
+
+        if activeProfileInsightsJobID != nil {
+            await refreshProfileInsights(using: appStore)
+            if activeProfileInsightsJobID != nil {
                 return
             }
         }
@@ -4044,6 +4464,26 @@ final class CoachStore {
         }
     }
 
+    private func persistPendingProfileInsightsJobState() {
+        let defaults = localStateStore.userDefaults
+        guard let jobID = activeProfileInsightsJobID,
+              let installID = activeProfileInsightsInstallID else {
+            defaults.removeObject(forKey: PreferenceKey.pendingProfileInsightsJobState)
+            return
+        }
+
+        let state = PendingProfileInsightsJobState(
+            jobID: jobID,
+            installID: installID,
+            providerID: coachDefaultProviderID
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        if let data = try? encoder.encode(state) {
+            defaults.set(data, forKey: PreferenceKey.pendingProfileInsightsJobState)
+        }
+    }
+
     private func restorePersistedPendingChatJobIfNeeded() {
         let defaults = localStateStore.userDefaults
         guard let data = defaults.data(forKey: PreferenceKey.pendingChatJobState) else {
@@ -4076,8 +4516,39 @@ final class CoachStore {
         activeChatNextPollAfterMs = max(state.nextPollAfterMs, CoachStore.initialChatPollAfterMs)
     }
 
+    private func restorePersistedPendingProfileInsightsJobIfNeeded() {
+        let defaults = localStateStore.userDefaults
+        guard let data = defaults.data(forKey: PreferenceKey.pendingProfileInsightsJobState) else {
+            return
+        }
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard let state = try? decoder.decode(PendingProfileInsightsJobState.self, from: data) else {
+            defaults.removeObject(forKey: PreferenceKey.pendingProfileInsightsJobState)
+            return
+        }
+
+        guard state.installID == localStateStore.installID,
+              state.providerID == coachDefaultProviderID else {
+            defaults.removeObject(forKey: PreferenceKey.pendingProfileInsightsJobState)
+            debugRecorder.log(
+                category: .coach,
+                level: .warning,
+                message: "insights_job_resume_ignored",
+                metadata: ["reason": "install_or_provider_mismatch"]
+            )
+            return
+        }
+
+        activeProfileInsightsJobID = state.jobID
+        activeProfileInsightsInstallID = state.installID
+        activeProfileInsightsProvider = configuration.provider
+    }
+
     private enum PreferenceKey {
         static let pendingChatJobState = "coach.runtime.pending_chat_job_state"
+        static let pendingProfileInsightsJobState = "coach.runtime.pending_profile_insights_job_state"
     }
 }
 
@@ -4542,22 +5013,121 @@ private struct CoachInsightsOverviewCard: View {
                     .lineSpacing(2)
                     .fixedSize(horizontal: false, vertical: true)
 
-                VStack(alignment: .leading, spacing: 10) {
-                    ForEach(Array(insights.recommendations.prefix(4).enumerated()), id: \.offset) { _, recommendation in
-                        HStack(alignment: .top, spacing: 10) {
-                            Circle()
-                                .fill(AppTheme.accent)
-                                .frame(width: 7, height: 7)
-                                .padding(.top, 8)
+                if let executionContext = insights.executionContext {
+                    executionContextSection(executionContext)
+                }
 
-                            Text(coachNormalizedReadableText(recommendation))
-                                .font(AppTypography.body(size: 15, weight: .medium, relativeTo: .subheadline))
+                insightsSection(
+                    titleKey: "coach.insights.section.observations",
+                    items: insights.keyObservations,
+                    bulletColor: AppTheme.primaryText.opacity(0.8)
+                )
+
+                insightsSection(
+                    titleKey: "coach.insights.section.constraints",
+                    items: insights.topConstraints,
+                    bulletColor: AppTheme.warning
+                )
+
+                insightsSection(
+                    titleKey: "coach.insights.section.recommendations",
+                    items: insights.recommendations,
+                    bulletColor: AppTheme.accent
+                )
+
+                insightsSection(
+                    titleKey: "coach.insights.section.confidence",
+                    items: insights.confidenceNotes,
+                    bulletColor: AppTheme.secondaryText.opacity(0.75)
+                )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func insightsSection(
+        titleKey: LocalizedStringKey,
+        items: [String],
+        bulletColor: Color
+    ) -> some View {
+        if !items.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                Text(titleKey)
+                    .font(AppTypography.caption(size: 12, weight: .semibold))
+                    .foregroundStyle(AppTheme.secondaryText)
+
+                ForEach(Array(items.prefix(6).enumerated()), id: \.offset) { _, item in
+                    HStack(alignment: .top, spacing: 10) {
+                        Circle()
+                            .fill(bulletColor)
+                            .frame(width: 7, height: 7)
+                            .padding(.top, 8)
+
+                        Text(coachNormalizedReadableText(item))
+                            .font(AppTypography.body(size: 15, weight: .medium, relativeTo: .subheadline))
+                            .foregroundStyle(AppTheme.secondaryText)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func executionContextSection(
+        _ context: CoachProfileExecutionContext
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("coach.insights.execution.title")
+                .font(AppTypography.caption(size: 12, weight: .semibold))
+                .foregroundStyle(AppTheme.secondaryText)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text(coachNormalizedReadableText(context.explanation))
+                    .font(AppTypography.body(size: 15, weight: .semibold, relativeTo: .subheadline))
+                    .foregroundStyle(AppTheme.primaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if let userNote = context.userNote?
+                    .trimmingCharacters(in: .whitespacesAndNewlines),
+                   !userNote.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("coach.insights.execution.saved_note")
+                            .font(AppTypography.caption(size: 11, weight: .semibold))
+                            .foregroundStyle(AppTheme.secondaryText)
+
+                        Text(coachNormalizedReadableText(userNote))
+                            .font(AppTypography.body(size: 14, weight: .medium, relativeTo: .subheadline))
+                            .foregroundStyle(AppTheme.secondaryText)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+
+                if !context.evidence.isEmpty {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("coach.insights.execution.evidence")
+                            .font(AppTypography.caption(size: 11, weight: .semibold))
+                            .foregroundStyle(AppTheme.secondaryText)
+
+                        ForEach(Array(context.evidence.prefix(3).enumerated()), id: \.offset) { _, item in
+                            Text("• \(coachNormalizedReadableText(item))")
+                                .font(AppTypography.caption(size: 12, weight: .medium))
                                 .foregroundStyle(AppTheme.secondaryText)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                     }
                 }
             }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(AppTheme.surface)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(AppTheme.border, lineWidth: 1)
+            )
         }
     }
 }

@@ -342,6 +342,7 @@
 "coach.error.chat_unavailable" = "Чат Coach недоступен, пока не настроен backend.";
 "coach.loading.insights" = "Обновляем рекомендации Coach...";
 "coach.loading.response" = "Coach думает...";
+"coach.loading.profile_insights" = "Coach всё ещё собирает подробную сводку по профилю.";
 "coach.loading.response_delayed" = "Coach всё ещё готовит ответ. Можно продолжить ожидание позже.";
 "coach.loading.response_short" = "Ждём ответ...";
 "coach.action.resume_waiting" = "Продолжить ожидание";
@@ -395,6 +396,13 @@
 "coach.status.fallback" = "Режим fallback";
 "coach.status.fallback_description" = "В профиле используются локальные расчёты. Чат станет доступен после настройки backend.";
 "coach.insights.title" = "Сводка Coach";
+"coach.insights.section.observations" = "Ключевые наблюдения";
+"coach.insights.section.constraints" = "Главные ограничения";
+"coach.insights.section.recommendations" = "Рекомендации";
+"coach.insights.section.confidence" = "Оговорки по уверенности";
+"coach.insights.execution.title" = "Контекст выполнения";
+"coach.insights.execution.saved_note" = "Сохранённая заметка";
+"coach.insights.execution.evidence" = "Учтённые факты";
 "coach.insights.source.fresh_model" = "Свежий AI";
 "coach.insights.source.cached_model" = "AI из кэша";
 "coach.insights.source.fallback" = "Локальный fallback";

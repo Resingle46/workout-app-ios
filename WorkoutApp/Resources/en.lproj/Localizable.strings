@@ -342,6 +342,7 @@
 "coach.error.chat_unavailable" = "Coach chat is unavailable until the backend is configured.";
 "coach.loading.insights" = "Refreshing coach insights...";
 "coach.loading.response" = "Coach is thinking...";
+"coach.loading.profile_insights" = "Coach is still generating your detailed profile insights.";
 "coach.loading.response_delayed" = "Coach is still preparing the answer. Continue waiting when you're ready.";
 "coach.loading.response_short" = "Waiting...";
 "coach.action.resume_waiting" = "Continue waiting";
@@ -395,6 +396,13 @@
 "coach.status.fallback" = "Fallback mode";
 "coach.status.fallback_description" = "Profile guidance uses local analytics. Chat stays unavailable until the backend is configured.";
 "coach.insights.title" = "Coach summary";
+"coach.insights.section.observations" = "Key observations";
+"coach.insights.section.constraints" = "Top constraints";
+"coach.insights.section.recommendations" = "Recommendations";
+"coach.insights.section.confidence" = "Confidence notes";
+"coach.insights.execution.title" = "Execution context";
+"coach.insights.execution.saved_note" = "Saved note";
+"coach.insights.execution.evidence" = "Evidence used";
 "coach.insights.source.fresh_model" = "Fresh AI";
 "coach.insights.source.cached_model" = "Cached AI";
 "coach.insights.source.fallback" = "Local fallback";

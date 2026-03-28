@@ -51,6 +51,11 @@
       "name": "workout-summary-job",
       "binding": "WORKOUT_SUMMARY_WORKFLOW",
       "class_name": "WorkoutSummaryJobWorkflow"
+    },
+    {
+      "name": "profile-insights-job",
+      "binding": "PROFILE_INSIGHTS_WORKFLOW",
+      "class_name": "ProfileInsightsJobWorkflow"
     }
   ],
   "vars": {

@@ -71,10 +71,10 @@ import {
 } from "./gemini-quota";
 
 export { DEFAULT_AI_MODEL } from "./routing";
-const PROFILE_INSIGHTS_STRUCTURED_MAX_TOKENS = 550;
-const PROFILE_INSIGHTS_ASYNC_STRUCTURED_MAX_TOKENS = 1_000;
-const PROFILE_INSIGHTS_PLAIN_TEXT_MAX_TOKENS = 260;
-const PROFILE_INSIGHTS_ASYNC_PLAIN_TEXT_MAX_TOKENS = 500;
+const PROFILE_INSIGHTS_STRUCTURED_MAX_TOKENS = 900;
+const PROFILE_INSIGHTS_ASYNC_STRUCTURED_MAX_TOKENS = 1_600;
+const PROFILE_INSIGHTS_PLAIN_TEXT_MAX_TOKENS = 420;
+const PROFILE_INSIGHTS_ASYNC_PLAIN_TEXT_MAX_TOKENS = 700;
 const CHAT_STRUCTURED_MAX_TOKENS = 700;
 const CHAT_ASYNC_STRUCTURED_MAX_TOKENS = 1_400;
 const CHAT_FALLBACK_MAX_TOKENS = 450;
@@ -94,15 +94,15 @@ type ProfileInsightsTimeoutBudget = {
 };
 
 const PROFILE_INSIGHTS_TIMEOUTS: ProfileInsightsTimeoutBudget = {
-  totalBudgetMs: 25_000,
-  structuredTimeoutMs: 18_000,
-  fallbackTimeoutMs: 5_000,
+  totalBudgetMs: 30_000,
+  structuredTimeoutMs: 22_000,
+  fallbackTimeoutMs: 6_000,
   fallbackMinTimeoutMs: 3_000,
 };
 const GEMINI_PROFILE_INSIGHTS_TIMEOUTS: ProfileInsightsTimeoutBudget = {
-  totalBudgetMs: 30_000,
-  structuredTimeoutMs: 24_000,
-  fallbackTimeoutMs: 6_000,
+  totalBudgetMs: 34_000,
+  structuredTimeoutMs: 26_000,
+  fallbackTimeoutMs: 7_000,
   fallbackMinTimeoutMs: 3_000,
 };
 const PROFILE_INSIGHTS_STRUCTURED_MIN_TIMEOUT_MS = 1_500;
@@ -141,6 +141,7 @@ export interface Env {
   APP_META_DB?: CoachD1Database;
   COACH_CHAT_WORKFLOW?: WorkflowBinding<{ jobID: string }>;
   WORKOUT_SUMMARY_WORKFLOW?: WorkflowBinding<{ jobID: string }>;
+  PROFILE_INSIGHTS_WORKFLOW?: WorkflowBinding<{ jobID: string }>;
   COACH_INTERNAL_TOKEN: string;
   AI_MODEL?: string;
   COACH_PROMPT_VERSION?: string;
@@ -228,7 +229,7 @@ interface ProviderExecutionMetadata {
 
 type CoachProfileInsightsContent = Omit<
   CoachProfileInsightsResponse,
-  "generationStatus" | "insightSource"
+  "generationStatus" | "insightSource" | "selectedModel"
 >;
 type CoachWorkoutSummaryContent = Omit<
   CoachWorkoutSummaryResponse,
@@ -238,12 +239,17 @@ type CoachChatContent = Omit<
   CoachChatResponse,
   "responseID" | "generationStatus"
 >;
+export type GeneratedProfileInsights = Pick<
+  CoachProfileInsightsResponse,
+  "summary"
+> &
+  Partial<Omit<CoachProfileInsightsResponse, "summary">>;
 
 export interface CoachInferenceService {
   generateProfileInsights(
     request: CoachProfileInsightsRequest,
     options?: GenerateProfileInsightsOptions
-  ): Promise<InferenceResult<CoachProfileInsightsResponse>>;
+  ): Promise<InferenceResult<GeneratedProfileInsights>>;
   generateWorkoutSummary(
     request: CoachWorkoutSummaryJobCreateRequest
   ): Promise<InferenceResult<CoachWorkoutSummaryResponse>>;
@@ -313,24 +319,22 @@ export class WorkersAICoachService implements CoachInferenceService {
   async generateProfileInsights(
     request: CoachProfileInsightsRequest,
     options: GenerateProfileInsightsOptions = {}
-  ): Promise<InferenceResult<CoachProfileInsightsResponse>> {
+  ): Promise<InferenceResult<GeneratedProfileInsights>> {
     const operation = "profile_insights";
     const timeoutProfile = options.timeoutProfile ?? "sync";
-    const routingDecision = buildProfileInsightsRoutingDecision(this.env, request);
-    const defaultProfileExecution =
-      timeoutProfile === "async_job"
-        ? {
-            contextProfile: "rich_async_analytics_v1" as const,
-            promptProfile: "profile_rich_async_analytics_v1",
-          }
-        : resolveProfileInsightsExecutionProfile(routingDecision.provider);
+    const routingDecision = buildProfileInsightsRoutingDecision(this.env, request, {
+      timeoutProfile,
+    });
+    const defaultProfileExecution = resolveProfileInsightsExecutionProfile();
     const timeouts =
       timeoutProfile === "async_job"
         ? ASYNC_LONG_TIMEOUTS
         : routingDecision.provider === "gemini"
           ? GEMINI_PROFILE_INSIGHTS_TIMEOUTS
           : PROFILE_INSIGHTS_TIMEOUTS;
-    const attempts = buildProfileInsightsRoutingAttempts(this.env, routingDecision);
+    const attempts = buildProfileInsightsRoutingAttempts(this.env, routingDecision, {
+      timeoutProfile,
+    });
     const promptExecution = resolvePromptExecution(
       request,
       options,
@@ -475,7 +479,7 @@ export class WorkersAICoachService implements CoachInferenceService {
           );
           const effectiveModel =
             invocation.providerExecution?.effectiveModel ?? attempt.selectedModel;
-          const guardedResponse = applyProfileInsightsGuardrails(
+          const guardrailResult = applyProfileInsightsGuardrails(
             request,
             {
               ...parsed.response,
@@ -485,6 +489,7 @@ export class WorkersAICoachService implements CoachInferenceService {
             localFallback,
             attemptExecution.derivedAnalytics
           );
+          const guardedResponse = guardrailResult.response;
           const fallbackReason = hasProfileGuardrailEmptiedResponse(
             guardedResponse,
             localFallback
@@ -507,6 +512,12 @@ export class WorkersAICoachService implements CoachInferenceService {
             fallbackStage: attempt.fallbackStage,
             mode: attempt.mode,
             structuredParseMode: parsed.parseMode,
+            profileGuardrailDowngradedClaims:
+              guardrailResult.diagnostics.downgradedClaims,
+            profileGuardrailBlockedClaims:
+              guardrailResult.diagnostics.blockedClaims,
+            profileGuardrailFullSummaryReplacement:
+              guardrailResult.diagnostics.fullSummaryReplacement,
             modelDurationMs: invocation.modelDurationMs,
             promptBytes: invocation.promptBytes,
             ...mergeProviderExecutionDetails({}, invocation.providerExecution),
@@ -576,7 +587,7 @@ export class WorkersAICoachService implements CoachInferenceService {
           attempt.selectedModel;
         stats.fallbackPromptBytes = fallbackInvocation.promptBytes;
         stats.fallbackModelDurationMs = fallbackInvocation.modelDurationMs;
-        const guardedResponse = applyProfileInsightsGuardrails(
+        const guardrailResult = applyProfileInsightsGuardrails(
           request,
           {
             ...parsePlainProfileInsights(
@@ -588,6 +599,7 @@ export class WorkersAICoachService implements CoachInferenceService {
           localFallback,
           attemptExecution.derivedAnalytics
         );
+        const guardedResponse = guardrailResult.response;
         const fallbackReason = hasProfileGuardrailEmptiedResponse(
           guardedResponse,
           localFallback
@@ -609,6 +621,12 @@ export class WorkersAICoachService implements CoachInferenceService {
           attemptReason: attempt.attemptReason,
           fallbackStage: attempt.fallbackStage,
           mode: attempt.mode,
+          profileGuardrailDowngradedClaims:
+            guardrailResult.diagnostics.downgradedClaims,
+          profileGuardrailBlockedClaims:
+            guardrailResult.diagnostics.blockedClaims,
+          profileGuardrailFullSummaryReplacement:
+            guardrailResult.diagnostics.fullSummaryReplacement,
           modelDurationMs: fallbackInvocation.modelDurationMs,
           promptBytes: fallbackInvocation.promptBytes,
           ...mergeProviderExecutionDetails(
@@ -2214,14 +2232,29 @@ function ensureTrailingPeriod(value: string): string {
 }
 
 function normalizeProfileInsightsResponse(
-  response: {
+  response: Partial<CoachProfileInsightsContent> & {
     summary: string;
-    recommendations: string[];
   }
 ): CoachProfileInsightsContent {
   return {
-    summary: response.summary.trim(),
-    recommendations: dedupeText(response.recommendations).slice(0, 8),
+    summary: cleanPlainParagraph(response.summary).slice(0, 2200),
+    keyObservations: normalizeProfileInsightStringArray(
+      response.keyObservations,
+      8
+    ),
+    topConstraints: normalizeProfileInsightStringArray(
+      response.topConstraints,
+      6
+    ),
+    recommendations: normalizeProfileInsightStringArray(
+      response.recommendations,
+      8
+    ),
+    confidenceNotes: normalizeProfileInsightStringArray(
+      response.confidenceNotes,
+      6
+    ),
+    executionContext: response.executionContext,
   };
 }
 
@@ -2320,21 +2353,47 @@ function coerceProfileInsightsResponseRecord(
     candidate.overview,
     candidate.headline,
     candidate.analysis,
-  ])?.slice(0, 1200);
+  ])?.slice(0, 2200);
   if (!summary) {
     return undefined;
   }
 
   return {
     summary,
-    recommendations: coerceProfileInsightRecommendations(
+    keyObservations: coerceProfileInsightStrings(
+      candidate.keyObservations ??
+        candidate.observations ??
+        candidate.findings ??
+        candidate.highlights,
+      8
+    ),
+    topConstraints: coerceProfileInsightStrings(
+      candidate.topConstraints ??
+        candidate.constraints ??
+        candidate.limitations ??
+        candidate.watchouts,
+      6
+    ),
+    recommendations: coerceProfileInsightStrings(
       candidate.recommendations ??
         candidate.recommendation ??
         candidate.recommendationList ??
         candidate.actionItems ??
         candidate.nextSteps ??
         candidate.suggestions ??
-        candidate.highlights
+        candidate.highlights,
+      8
+    ),
+    confidenceNotes: coerceProfileInsightStrings(
+      candidate.confidenceNotes ??
+        candidate.caveats ??
+        candidate.assumptions ??
+        candidate.confidence ??
+        candidate.notes,
+      6
+    ),
+    executionContext: coerceProfileInsightsExecutionContext(
+      candidate.executionContext
     ),
   };
 }
@@ -2343,22 +2402,30 @@ function coerceProfileInsightsFromPlainText(
   rawPayload: string
 ): CoachProfileInsightsContent | undefined {
   const parsed = parsePlainProfileInsights(rawPayload);
-  const summary = cleanPlainParagraph(parsed.summary).slice(0, 1200);
-  const recommendations = dedupeText(parsed.recommendations).slice(0, 8);
+  const summary = cleanPlainParagraph(parsed.summary).slice(0, 2200);
 
-  if (!summary || recommendations.length === 0) {
+  if (
+    !summary ||
+    (parsed.keyObservations.length === 0 &&
+      parsed.topConstraints.length === 0 &&
+      parsed.recommendations.length === 0 &&
+      parsed.confidenceNotes.length === 0)
+  ) {
     return undefined;
   }
 
   return {
     summary,
-    recommendations,
+    keyObservations: parsed.keyObservations,
+    topConstraints: parsed.topConstraints,
+    recommendations: parsed.recommendations,
+    confidenceNotes: parsed.confidenceNotes,
   };
 }
 
-function coerceProfileInsightRecommendations(value: unknown): string[] {
+function coerceProfileInsightStrings(value: unknown, maxItems: number): string[] {
   if (typeof value === "string") {
-    return splitRecommendationText(value);
+    return splitRecommendationText(value, maxItems);
   }
 
   if (Array.isArray(value)) {
@@ -2383,25 +2450,26 @@ function coerceProfileInsightRecommendations(value: unknown): string[] {
         return text ? [text] : [];
       })
     )
-      .map((item) => item.slice(0, 280))
+      .map((item) => item.slice(0, 320))
       .filter(Boolean)
-      .slice(0, 8);
+      .slice(0, maxItems);
   }
 
   if (isRecord(value)) {
-    return coerceProfileInsightRecommendations(
+    return coerceProfileInsightStrings(
       value.items ??
         value.values ??
         value.lines ??
         value.bullets ??
-        value.recommendations
+        value.recommendations,
+      maxItems
     );
   }
 
   return [];
 }
 
-function splitRecommendationText(text: string): string[] {
+function splitRecommendationText(text: string, maxItems = 8): string[] {
   const normalized = text.replace(/\r\n/g, "\n").trim();
   if (!normalized) {
     return [];
@@ -2413,9 +2481,9 @@ function splitRecommendationText(text: string): string[] {
     .filter((value): value is string => Boolean(value));
   if (bulletRecommendations.length > 0) {
     return dedupeText(bulletRecommendations)
-      .map((item) => item.slice(0, 280))
+      .map((item) => item.slice(0, 320))
       .filter(Boolean)
-      .slice(0, 8);
+      .slice(0, maxItems);
   }
 
   return dedupeText(
@@ -2424,9 +2492,86 @@ function splitRecommendationText(text: string): string[] {
       .map((paragraph) => cleanPlainParagraph(paragraph))
       .filter(Boolean)
   )
-    .map((item) => item.slice(0, 280))
+    .map((item) => item.slice(0, 320))
     .filter(Boolean)
-    .slice(0, 8);
+    .slice(0, maxItems);
+}
+
+function normalizeProfileInsightStringArray(
+  value: string[] | undefined,
+  maxItems: number
+): string[] {
+  return dedupeText((value ?? []).map((item) => cleanPlainParagraph(item)))
+    .map((item) => item.slice(0, 320))
+    .filter(Boolean)
+    .slice(0, maxItems);
+}
+
+function coerceProfileInsightsExecutionContext(
+  value: unknown
+): CoachProfileInsightsContent["executionContext"] | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const mode = firstNonEmptyText([value.mode]);
+  const effectiveWeeklyFrequency = readNumericField(
+    value.effectiveWeeklyFrequency
+  );
+  const weeklyTarget = readNumericField(value.weeklyTarget);
+  const explanation = firstNonEmptyText([value.explanation]);
+
+  if (
+    !mode ||
+    !effectiveWeeklyFrequency ||
+    weeklyTarget === undefined ||
+    !explanation
+  ) {
+    return undefined;
+  }
+
+  if (
+    mode !== "rolling_rotation" &&
+    mode !== "calendar_matched" &&
+    mode !== "program_count_mismatch" &&
+    mode !== "unknown"
+  ) {
+    return undefined;
+  }
+
+  const templateRotationSemantics = firstNonEmptyText([
+    value.templateRotationSemantics,
+  ]);
+  const authoritativeSignal = firstNonEmptyText([value.authoritativeSignal]);
+
+  return {
+    mode,
+    effectiveWeeklyFrequency,
+    shouldTreatProgramCountAsMismatch:
+      value.shouldTreatProgramCountAsMismatch === true,
+    programWorkoutCount: readNumericField(value.programWorkoutCount),
+    weeklyTarget,
+    statedWeeklyFrequency: readNumericField(value.statedWeeklyFrequency),
+    observedAverageWorkoutsPerWeek: readNumericField(
+      value.observedAverageWorkoutsPerWeek
+    ),
+    templateRotationSemantics:
+      templateRotationSemantics === "rotate_through_templates" ||
+      templateRotationSemantics === "calendar_bound_templates" ||
+      templateRotationSemantics === "unresolved"
+        ? templateRotationSemantics
+        : "unresolved",
+    authoritativeSignal:
+      authoritativeSignal === "user_note" ||
+      authoritativeSignal === "program_structure" ||
+      authoritativeSignal === "weekly_target" ||
+      authoritativeSignal === "unknown"
+        ? authoritativeSignal
+        : "unknown",
+    userNote: firstNonEmptyText([value.userNote])?.slice(0, 500),
+    explanation: explanation.slice(0, 1200),
+    evidence: coerceProfileInsightStrings(value.evidence, 8),
+  };
 }
 
 function firstNonEmptyText(values: unknown[]): string | undefined {
@@ -2440,6 +2585,19 @@ function firstNonEmptyText(values: unknown[]): string | undefined {
     }
   }
 
+  return undefined;
+}
+
+function readNumericField(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed) && parsed >= 0) {
+      return parsed;
+    }
+  }
   return undefined;
 }
 
@@ -2463,6 +2621,8 @@ function parsePlainProfileInsights(
   content: string
 ): CoachProfileInsightsContent {
   const normalized = content.replace(/\r\n/g, "\n").trim();
+  const lines = normalized.split("\n");
+  const sections = parseLabeledSections(lines);
   const paragraphs = normalized
     .split(/\n\s*\n+/)
     .map((paragraph) => cleanPlainParagraph(paragraph))
@@ -2471,9 +2631,31 @@ function parsePlainProfileInsights(
     .split("\n")
     .map((line) => parseBulletRecommendation(line))
     .filter((value): value is string => Boolean(value));
+  const leadingNarrative = cleanPlainParagraph(
+    lines
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0)
+      .reduce((result, line) => {
+        if (result.done) {
+          return result;
+        }
+        if (parseBulletRecommendation(line)) {
+          return {
+            done: true,
+            lines: result.lines,
+          };
+        }
+        return {
+          done: false,
+          lines: [...result.lines, stripKnownLabel(line)],
+        };
+      }, { done: false, lines: [] as string[] }).lines.join(" ")
+  );
 
   let summary =
-    paragraphs.find((paragraph) => !looksLikeRecommendationSection(paragraph)) ??
+    cleanPlainParagraph(sections.summary ?? "") ||
+    leadingNarrative ||
+    paragraphs.find((paragraph) => !looksLikeRecommendationSection(paragraph)) ||
     cleanPlainParagraph(normalized);
 
   if (!summary) {
@@ -2484,7 +2666,19 @@ function parsePlainProfileInsights(
     );
   }
 
-  summary = summary.slice(0, 1200);
+  summary = summary.slice(0, 2200);
+  const keyObservations = normalizeProfileInsightStringArray(
+    extractSectionBullets(sections.keyObservations),
+    8
+  );
+  const topConstraints = normalizeProfileInsightStringArray(
+    extractSectionBullets(sections.constraints),
+    6
+  );
+  const confidenceNotes = normalizeProfileInsightStringArray(
+    extractSectionBullets(sections.confidenceNotes),
+    6
+  );
 
   const narrativeRecommendations =
     bulletRecommendations.length > 0
@@ -2495,10 +2689,17 @@ function parsePlainProfileInsights(
 
   return {
     summary,
-    recommendations: dedupeText([
-      ...bulletRecommendations,
-      ...narrativeRecommendations,
-    ]).slice(0, 8),
+    keyObservations,
+    topConstraints,
+    recommendations: normalizeProfileInsightStringArray(
+      [
+        ...extractSectionBullets(sections.recommendations),
+        ...bulletRecommendations,
+        ...narrativeRecommendations,
+      ],
+      8
+    ),
+    confidenceNotes,
   };
 }
 
@@ -2547,28 +2748,109 @@ function parsePlainWorkoutSummary(
   };
 }
 
+type ProfileInsightsGuardrailDiagnostics = {
+  downgradedClaims: Array<{
+    field: "summary" | "keyObservations" | "topConstraints" | "recommendations" | "confidenceNotes";
+    rule: string;
+  }>;
+  blockedClaims: Array<{
+    field: "summary" | "keyObservations" | "topConstraints" | "recommendations" | "confidenceNotes";
+    rule: string;
+  }>;
+  fullSummaryReplacement: boolean;
+};
+
 function applyProfileInsightsGuardrails(
   request: CoachProfileInsightsRequest,
   response: CoachProfileInsightsResponse,
   fallback: CoachProfileInsightsResponse,
   derivedAnalytics?: CoachDerivedAnalytics
-): CoachProfileInsightsResponse {
-  const constraints = extractConstraintsFromSnapshot(request.snapshot);
-  const summary =
-    shouldBlockFrequencyStructureText(response.summary, constraints) ||
-    shouldBlockUnsupportedClaimText(response.summary, derivedAnalytics)
-    ? fallback.summary
-    : response.summary;
-  const recommendations = filterUnsupportedClaimText(
-    filterFrequencyStructureText(response.recommendations, constraints),
+): {
+  response: CoachProfileInsightsResponse;
+  diagnostics: ProfileInsightsGuardrailDiagnostics;
+} {
+  const diagnostics: ProfileInsightsGuardrailDiagnostics = {
+    downgradedClaims: [],
+    blockedClaims: [],
+    fullSummaryReplacement: false,
+  };
+  const enriched = enrichProfileInsightsResponse(
+    request,
+    response,
     derivedAnalytics
   );
+
+  const summaryRewrite = softenProfileInsightsText(
+    enriched.summary,
+    "summary",
+    request,
+    derivedAnalytics
+  );
+  if (summaryRewrite.downgradedRules.length > 0) {
+    diagnostics.downgradedClaims.push(
+      ...summaryRewrite.downgradedRules.map((rule) => ({
+        field: "summary" as const,
+        rule,
+      }))
+    );
+  }
+  if (summaryRewrite.blockedRules.length > 0) {
+    diagnostics.blockedClaims.push(
+      ...summaryRewrite.blockedRules.map((rule) => ({
+        field: "summary" as const,
+        rule,
+      }))
+    );
+  }
+
+  const summary = summaryRewrite.text?.trim()
+    ? summaryRewrite.text
+    : fallback.summary;
+  diagnostics.fullSummaryReplacement = summary === fallback.summary;
+
+  const keyObservations = rewriteProfileInsightList(
+    enriched.keyObservations,
+    "keyObservations",
+    request,
+    derivedAnalytics,
+    diagnostics
+  );
+  const topConstraints = rewriteProfileInsightList(
+    enriched.topConstraints,
+    "topConstraints",
+    request,
+    derivedAnalytics,
+    diagnostics
+  );
+  const recommendations = rewriteProfileInsightList(
+    enriched.recommendations,
+    "recommendations",
+    request,
+    derivedAnalytics,
+    diagnostics
+  );
+  const confidenceNotes = rewriteProfileInsightList(
+    enriched.confidenceNotes,
+    "confidenceNotes",
+    request,
+    derivedAnalytics,
+    diagnostics
+  );
+
   return {
-    summary,
-    recommendations:
-      recommendations.length > 0 ? recommendations : fallback.recommendations,
-    generationStatus: response.generationStatus,
-    insightSource: response.insightSource,
+    response: {
+      summary,
+      keyObservations,
+      topConstraints,
+      recommendations:
+        recommendations.length > 0 ? recommendations : fallback.recommendations,
+      confidenceNotes,
+      executionContext: enriched.executionContext ?? fallback.executionContext,
+      generationStatus: response.generationStatus,
+      insightSource: response.insightSource,
+      selectedModel: response.selectedModel,
+    },
+    diagnostics,
   };
 }
 
@@ -2583,6 +2865,221 @@ function hasProfileGuardrailEmptiedResponse(
       (recommendation, index) => recommendation === fallback.recommendations[index]
     )
   );
+}
+
+function rewriteProfileInsightList(
+  values: string[],
+  field:
+    | "keyObservations"
+    | "topConstraints"
+    | "recommendations"
+    | "confidenceNotes",
+  request: CoachProfileInsightsRequest,
+  derivedAnalytics: CoachDerivedAnalytics | undefined,
+  diagnostics: ProfileInsightsGuardrailDiagnostics
+): string[] {
+  const rewritten: string[] = [];
+
+  for (const value of values) {
+    const result = softenProfileInsightsText(
+      value,
+      field,
+      request,
+      derivedAnalytics
+    );
+    if (result.downgradedRules.length > 0) {
+      diagnostics.downgradedClaims.push(
+        ...result.downgradedRules.map((rule) => ({ field, rule }))
+      );
+    }
+    if (result.blockedRules.length > 0) {
+      diagnostics.blockedClaims.push(
+        ...result.blockedRules.map((rule) => ({ field, rule }))
+      );
+    }
+    if (result.text) {
+      rewritten.push(result.text);
+    }
+  }
+
+  return dedupeText(rewritten).slice(0, field === "topConstraints" || field === "confidenceNotes" ? 6 : 8);
+}
+
+function enrichProfileInsightsResponse(
+  request: CoachProfileInsightsRequest,
+  response: CoachProfileInsightsResponse,
+  derivedAnalytics?: CoachDerivedAnalytics
+): CoachProfileInsightsResponse {
+  const executionContext = response.executionContext ?? derivedAnalytics?.splitExecution;
+  const keyObservations = [...(response.keyObservations ?? [])];
+  const topConstraints = [...(response.topConstraints ?? [])];
+  const confidenceNotes = [...(response.confidenceNotes ?? [])];
+
+  if (keyObservations.length === 0 && derivedAnalytics) {
+    if (derivedAnalytics.splitExecution.mode === "rolling_rotation") {
+      keyObservations.push(
+        "Your saved note indicates a rolling rotation, so template count should be read as part of that rotation rather than as a weekly mismatch."
+      );
+    }
+    if (derivedAnalytics.progressionSummary.recentPersonalRecordCount > 0) {
+      keyObservations.push(
+        `Recent PR activity is still present, led most recently by ${derivedAnalytics.progressionSummary.topRecentPersonalRecordExercise ?? "recent training wins"}.`
+      );
+    }
+    if ((derivedAnalytics.adherenceSummary.consistencyGap ?? 0) > 0) {
+      keyObservations.push(
+        `Recent adherence is trailing the weekly target by about ${formatLoad(derivedAnalytics.adherenceSummary.consistencyGap ?? 0)} session(s) per week.`
+      );
+    }
+  }
+
+  if (topConstraints.length === 0 && executionContext?.mode === "rolling_rotation") {
+    topConstraints.push(
+      executionContext.explanation
+    );
+  }
+  if (
+    topConstraints.length < 3 &&
+    (derivedAnalytics?.adherenceSummary.consistencyGap ?? 0) > 0
+  ) {
+    topConstraints.push(
+      `Observed recent consistency is below the saved weekly target of ${derivedAnalytics?.adherenceSummary.weeklyTarget ?? 0}.`
+    );
+  }
+  if (
+    topConstraints.length < 3 &&
+    request.snapshot?.coachAnalysisSettings.programComment.trim()
+  ) {
+    topConstraints.push(
+      `Saved execution note: ${request.snapshot.coachAnalysisSettings.programComment.trim()}`
+    );
+  }
+
+  confidenceNotes.push(...buildConfidenceNotesFromDerived(derivedAnalytics));
+
+  return {
+    ...response,
+    keyObservations: dedupeText(keyObservations).slice(0, 8),
+    topConstraints: dedupeText(topConstraints).slice(0, 6),
+    confidenceNotes: dedupeText(confidenceNotes).slice(0, 6),
+    executionContext,
+  };
+}
+
+function buildConfidenceNotesFromDerived(
+  derivedAnalytics?: CoachDerivedAnalytics
+): string[] {
+  if (!derivedAnalytics) {
+    return [];
+  }
+
+  const notes: string[] = [];
+  if (derivedAnalytics.claimConfidence.muscleExposure !== "supported") {
+    notes.push(
+      "Muscle exposure reasoning is cautious because it is based on recent execution patterns, not on a full physiology audit."
+    );
+  }
+  if (derivedAnalytics.claimConfidence.laggingCandidates === "weakly_supported") {
+    notes.push(
+      "Lagging-area candidates are phrased cautiously because the signal comes from execution coverage and staleness, not direct performance testing."
+    );
+  }
+  if (derivedAnalytics.claimConfidence.imbalanceCandidates === "weakly_supported") {
+    notes.push(
+      "Imbalance notes reflect concentration in recent completed work, so treat them as directional rather than absolute."
+    );
+  }
+
+  return notes;
+}
+
+function softenProfileInsightsText(
+  value: string,
+  field:
+    | "summary"
+    | "keyObservations"
+    | "topConstraints"
+    | "recommendations"
+    | "confidenceNotes",
+  request: CoachProfileInsightsRequest,
+  derivedAnalytics?: CoachDerivedAnalytics
+): {
+  text?: string;
+  downgradedRules: string[];
+  blockedRules: string[];
+} {
+  const constraints = extractConstraintsFromSnapshot(request.snapshot);
+  const normalized = value.trim();
+  if (!normalized) {
+    return {
+      text: undefined,
+      downgradedRules: [],
+      blockedRules: [],
+    };
+  }
+
+  if (
+    !derivedAnalytics?.splitExecution.shouldTreatProgramCountAsMismatch &&
+    /(mismatch|does not match|weekly target|несоответств)/i.test(normalized)
+  ) {
+    return {
+      text:
+        derivedAnalytics?.splitExecution.mode === "rolling_rotation"
+          ? "The saved note indicates a rolling rotation, so template count should be treated as part of that rotation rather than as a weekly mismatch."
+          : "Treat the saved frequency and program structure as context that has already been interpreted, not as the main problem to solve.",
+      downgradedRules: ["resolved_execution_context_rewrite"],
+      blockedRules: [],
+    };
+  }
+
+  if (shouldBlockFrequencyStructureText(normalized, constraints)) {
+    return {
+      text:
+        derivedAnalytics?.splitExecution.mode === "rolling_rotation"
+          ? "Keep the current rolling execution model intact and focus on progression, recovery, and adherence within that rotation."
+          : "Respect the saved weekly frequency and program structure while coaching the next useful adjustment.",
+      downgradedRules: ["frequency_structure_rewrite"],
+      blockedRules: [],
+    };
+  }
+
+  if (
+    derivedAnalytics &&
+    !derivedAnalytics.supportedClaims.muscleExposure &&
+    /\b(make sure|check|verify)\b.*\b(included|covered|part of)\b/i.test(normalized)
+  ) {
+    return {
+      text: undefined,
+      downgradedRules: [],
+      blockedRules: ["unsupported_program_coverage_block"],
+    };
+  }
+
+  if (derivedAnalytics && shouldBlockUnsupportedClaimText(normalized, derivedAnalytics)) {
+    let rewritten = normalized
+      .replace(/\blagging\b/gi, "possible lagging")
+      .replace(/\bundertrained\b/gi, "lightly exposed recently")
+      .replace(/\bunderloaded\b/gi, "not obviously emphasized recently")
+      .replace(/\binsufficient\b/gi, "possibly insufficient")
+      .replace(/\bimbalanc(?:e|ed)\b/gi, "possible concentration pattern")
+      .replace(/\bnot\s+getting\s+enough\s+(?:work|stimulus|volume|load)\b/gi, "may not be getting much recent emphasis");
+
+    if (rewritten === normalized && field === "recommendations") {
+      rewritten = `Treat this as a cautious watchpoint rather than a hard claim: ${normalized}`;
+    }
+
+    return {
+      text: rewritten,
+      downgradedRules: ["unsupported_claim_softened"],
+      blockedRules: [],
+    };
+  }
+
+  return {
+    text: normalized,
+    downgradedRules: [],
+    blockedRules: [],
+  };
 }
 
 function resolveProfileFallbackReasonFromError(
@@ -2674,9 +3171,13 @@ function buildNeutralProfileInsights(
   if (!snapshot) {
     return {
       summary: localizedCoachText(request.locale, "fallbackSummary"),
+      keyObservations: [],
+      topConstraints: [],
       recommendations: [
         localizedCoachText(request.locale, "fallbackProgressionBaseline"),
       ],
+      confidenceNotes: [],
+      executionContext: derivedAnalytics?.splitExecution,
       generationStatus: "fallback",
       insightSource: "fallback",
     };
@@ -2684,7 +3185,10 @@ function buildNeutralProfileInsights(
 
   const locale = request.locale;
   const constraints = extractConstraintsFromSnapshot(snapshot);
+  const keyObservations: string[] = [];
+  const topConstraints: string[] = [];
   const recommendations: string[] = [];
+  const confidenceNotes: string[] = [];
   const consistency = snapshot.analytics.consistency;
 
   if (
@@ -2693,6 +3197,11 @@ function buildNeutralProfileInsights(
     constraints.preserveProgramWorkoutCount ||
     derivedAnalytics?.splitExecution.mode === "rolling_rotation"
   ) {
+    keyObservations.push(localizedCoachText(locale, "fallbackCommentGuardrail"));
+    topConstraints.push(
+      derivedAnalytics?.splitExecution.explanation ??
+        localizedCoachText(locale, "fallbackCommentGuardrail")
+    );
     recommendations.push(
       localizedCoachText(locale, "fallbackCommentGuardrail")
     );
@@ -2723,13 +3232,37 @@ function buildNeutralProfileInsights(
     );
   }
 
+  if (derivedAnalytics?.progressionSummary.recentPersonalRecordCount) {
+    keyObservations.push(
+      localizedCoachText(locale, "fallbackRecentPR", {
+        exercise:
+          derivedAnalytics.progressionSummary.topRecentPersonalRecordExercise ??
+          snapshot.analytics.recentPersonalRecords[0]?.exerciseName ??
+          "recent PR",
+        delta: formatLoad(snapshot.analytics.recentPersonalRecords[0]?.delta ?? 0),
+      })
+    );
+  }
+
+  if (derivedAnalytics?.claimConfidence.muscleExposure !== "supported") {
+    confidenceNotes.push(
+      locale.toLowerCase().startsWith("ru")
+        ? "Выводы по распределению нагрузки даны осторожно: они основаны на недавних сессиях и сохранённой программе, а не на полном аудите объёма."
+        : "Muscle exposure notes stay cautious here because they are based on recent sessions and the saved program, not on a full volume audit."
+    );
+  }
+
   recommendations.push(
     localizedCoachText(locale, "fallbackProgressionBaseline")
   );
 
   return {
     summary: localizedCoachText(locale, "fallbackSummary"),
+    keyObservations: dedupeText(keyObservations).slice(0, 6),
+    topConstraints: dedupeText(topConstraints).slice(0, 4),
     recommendations: dedupeText(recommendations).slice(0, 5),
+    confidenceNotes: dedupeText(confidenceNotes).slice(0, 3),
+    executionContext: derivedAnalytics?.splitExecution,
     generationStatus: "fallback",
     insightSource: "fallback",
   };
@@ -4639,6 +5172,13 @@ function isSectionHeading(line: string): boolean {
   return [
     "summary",
     "coach summary",
+    "key observations",
+    "observations",
+    "constraints",
+    "top constraints",
+    "confidence notes",
+    "confidence",
+    "execution context",
     "recommendations",
     "recommendation",
     "key recommendations",
@@ -4651,7 +5191,7 @@ function isSectionHeading(line: string): boolean {
 function stripKnownLabel(text: string): string {
   return stripMarkdownPrefix(text)
     .replace(
-      /^(?:summary|coach summary|recommendations?|key recommendations|сводка|итог|рекомендации)\s*[:：-]\s*/i,
+      /^(?:summary|coach summary|key observations|observations|constraints|top constraints|confidence notes|confidence|execution context|recommendations?|key recommendations|сводка|итог|рекомендации)\s*[:：-]\s*/i,
       ""
     )
     .trim();
@@ -4671,6 +5211,10 @@ function looksLikeRecommendationSection(text: string): boolean {
   return (
     normalized.startsWith("recommendation") ||
     normalized.startsWith("key recommendation") ||
+    normalized.startsWith("key observation") ||
+    normalized.startsWith("constraint") ||
+    normalized.startsWith("confidence") ||
+    normalized.startsWith("execution context") ||
     normalized.startsWith("рекомендац")
   );
 }
@@ -4682,7 +5226,7 @@ function parseLabeledSections(lines: string[]): Record<string, string> {
   for (const rawLine of lines) {
     const line = rawLine.trimEnd();
     const match = line.match(
-      /^(Headline|Summary|Highlights|Next workout focus)\s*:\s*(.*)$/i
+      /^(Headline|Summary|Highlights|Next workout focus|Key observations|Observations|Constraints|Top constraints|Recommendations|Confidence notes|Confidence|Execution context)\s*:\s*(.*)$/i
     );
 
     if (match) {
@@ -4709,6 +5253,19 @@ function normalizeSectionKey(value: string): string {
       return "headline";
     case "summary":
       return "summary";
+    case "key observations":
+    case "observations":
+      return "keyObservations";
+    case "constraints":
+    case "top constraints":
+      return "constraints";
+    case "recommendations":
+      return "recommendations";
+    case "confidence notes":
+    case "confidence":
+      return "confidenceNotes";
+    case "execution context":
+      return "executionContext";
     case "highlights":
       return "highlights";
     case "next workout focus":
@@ -4808,14 +5365,69 @@ const profileInsightsResponseJsonSchema = {
     summary: {
       type: "string",
     },
+    keyObservations: {
+      type: "array",
+      items: {
+        type: "string",
+      },
+    },
+    topConstraints: {
+      type: "array",
+      items: {
+        type: "string",
+      },
+    },
     recommendations: {
       type: "array",
       items: {
         type: "string",
       },
     },
+    confidenceNotes: {
+      type: "array",
+      items: {
+        type: "string",
+      },
+    },
+    executionContext: {
+      type: "object",
+      properties: {
+        mode: { type: "string" },
+        effectiveWeeklyFrequency: { type: "number" },
+        shouldTreatProgramCountAsMismatch: { type: "boolean" },
+        programWorkoutCount: { type: "number" },
+        weeklyTarget: { type: "number" },
+        statedWeeklyFrequency: { type: "number" },
+        observedAverageWorkoutsPerWeek: { type: "number" },
+        templateRotationSemantics: { type: "string" },
+        authoritativeSignal: { type: "string" },
+        userNote: { type: "string" },
+        explanation: { type: "string" },
+        evidence: {
+          type: "array",
+          items: { type: "string" },
+        },
+      },
+      required: [
+        "mode",
+        "effectiveWeeklyFrequency",
+        "shouldTreatProgramCountAsMismatch",
+        "weeklyTarget",
+        "templateRotationSemantics",
+        "authoritativeSignal",
+        "explanation",
+        "evidence",
+      ],
+      additionalProperties: false,
+    },
   },
-  required: ["summary", "recommendations"],
+  required: [
+    "summary",
+    "keyObservations",
+    "topConstraints",
+    "recommendations",
+    "confidenceNotes",
+  ],
   additionalProperties: false,
 } as const;
 

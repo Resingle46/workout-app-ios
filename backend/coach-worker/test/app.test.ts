@@ -58,7 +58,8 @@ vi.mock("cloudflare:workers", () => ({
   },
 }));
 
-const PROFILE_INSIGHTS_TEST_ROUTING_VERSION = "phase1.v1.profile-insights.v2";
+const PROFILE_INSIGHTS_TEST_ROUTING_VERSION =
+  "phase1.v1.profile-insights.v3.quality-first";
 
 describe("coach worker app", () => {
   it("returns health for configured runtime", async () => {
@@ -708,19 +709,19 @@ describe("coach worker app", () => {
     await repository.storeInsightsCache(
       upload.installID,
       storageKeyFromMetadata(context.contextHash, {
-        contextProfile: "compact_sync_v2",
+        contextProfile: "rich_async_analytics_v1",
         contextVersion: context.contextVersion,
         analyticsVersion: context.analyticsVersion,
-        promptProfile: "profile_compact_context_v2",
-        memoryProfile: "compact_v1",
+        promptProfile: "profile_rich_async_analytics_v2",
+        memoryProfile: "rich_async_v1",
         routingVersion: PROFILE_INSIGHTS_TEST_ROUTING_VERSION,
       }, "test.v1", DEFAULT_AI_MODEL),
-      {
-      summary: "Cached fallback summary",
-      recommendations: ["Cached fallback recommendation"],
-      generationStatus: "fallback",
-      insightSource: "fallback",
-      }
+      makeProfileInsightsResponseFixture({
+        summary: "Cached fallback summary",
+        recommendations: ["Cached fallback recommendation"],
+        generationStatus: "fallback",
+        insightSource: "fallback",
+      })
     );
 
     const response = await app.fetch(
@@ -788,19 +789,19 @@ describe("coach worker app", () => {
     await repository.storeInsightsCache(
       upload.installID,
       storageKeyFromMetadata(context.contextHash, {
-        contextProfile: "compact_sync_v2",
+        contextProfile: "rich_async_analytics_v1",
         contextVersion: context.contextVersion,
         analyticsVersion: context.analyticsVersion,
-        promptProfile: "profile_compact_context_v2",
-        memoryProfile: "compact_v1",
+        promptProfile: "profile_rich_async_analytics_v2",
+        memoryProfile: "rich_async_v1",
         routingVersion: PROFILE_INSIGHTS_TEST_ROUTING_VERSION,
       }, "test.v1", DEFAULT_AI_MODEL),
-      {
-      summary: "Cached remote summary",
-      recommendations: ["Cached remote recommendation"],
-      generationStatus: "model",
-      insightSource: "fresh_model",
-      }
+      makeProfileInsightsResponseFixture({
+        summary: "Cached remote summary",
+        recommendations: ["Cached remote recommendation"],
+        generationStatus: "model",
+        insightSource: "fresh_model",
+      })
     );
 
     const response = await app.fetch(
@@ -868,18 +869,18 @@ describe("coach worker app", () => {
     await repository.storeInsightsCache(
       upload.installID,
       storageKeyFromMetadata(context.contextHash, {
-        contextProfile: "compact_sync_v2",
+        contextProfile: "rich_async_analytics_v1",
         contextVersion: context.contextVersion,
         analyticsVersion: context.analyticsVersion,
-        promptProfile: "profile_compact_context_v2",
-        memoryProfile: "compact_v1",
+        promptProfile: "profile_rich_async_analytics_v2",
+        memoryProfile: "rich_async_v1",
       }, "test.v1", DEFAULT_AI_MODEL),
-      {
-      summary: "Cached remote summary",
-      recommendations: ["Cached remote recommendation"],
-      generationStatus: "model",
-      insightSource: "fresh_model",
-      }
+      makeProfileInsightsResponseFixture({
+        summary: "Cached remote summary",
+        recommendations: ["Cached remote recommendation"],
+        generationStatus: "model",
+        insightSource: "fresh_model",
+      })
     );
 
     const response = await app.fetch(
@@ -906,11 +907,11 @@ describe("coach worker app", () => {
       repository.getInsightsCache(
         upload.installID,
         storageKeyFromMetadata(context.contextHash, {
-          contextProfile: "compact_sync_v2",
+          contextProfile: "rich_async_analytics_v1",
           contextVersion: context.contextVersion,
           analyticsVersion: context.analyticsVersion,
-          promptProfile: "profile_compact_context_v2",
-          memoryProfile: "compact_v1",
+          promptProfile: "profile_rich_async_analytics_v2",
+          memoryProfile: "rich_async_v1",
           routingVersion: PROFILE_INSIGHTS_TEST_ROUTING_VERSION,
         }, "test.v1", DEFAULT_AI_MODEL)
       )
@@ -987,28 +988,36 @@ describe("coach worker app", () => {
     const key = storageKeyFromMetadata(
       context.contextHash,
       {
-        contextProfile: "compact_sync_v2",
+        contextProfile: "rich_async_analytics_v1",
         contextVersion: context.contextVersion,
         analyticsVersion: context.analyticsVersion,
-        promptProfile: "profile_compact_context_v2",
-        memoryProfile: "compact_v1",
+        promptProfile: "profile_rich_async_analytics_v2",
+        memoryProfile: "rich_async_v1",
         routingVersion: PROFILE_INSIGHTS_TEST_ROUTING_VERSION,
       },
       "test.v1",
       DEFAULT_AI_MODEL
     );
-    await repository.storeInsightsCache(body.installID, key, {
-      summary: "Cached model summary",
-      recommendations: ["Cached model recommendation"],
-      generationStatus: "model",
-      insightSource: "fresh_model",
-    });
-    await repository.storeDegradedInsightsCache(body.installID, key, {
-      summary: "Cached degraded summary",
-      recommendations: ["Cached degraded recommendation"],
-      generationStatus: "fallback",
-      insightSource: "fallback",
-    });
+    await repository.storeInsightsCache(
+      body.installID,
+      key,
+      makeProfileInsightsResponseFixture({
+        summary: "Cached model summary",
+        recommendations: ["Cached model recommendation"],
+        generationStatus: "model",
+        insightSource: "fresh_model",
+      })
+    );
+    await repository.storeDegradedInsightsCache(
+      body.installID,
+      key,
+      makeProfileInsightsResponseFixture({
+        summary: "Cached degraded summary",
+        recommendations: ["Cached degraded recommendation"],
+        generationStatus: "fallback",
+        insightSource: "fallback",
+      })
+    );
 
     const app = createApp({
       createInferenceService: () => stubInferenceService(),
@@ -1041,22 +1050,26 @@ describe("coach worker app", () => {
     const key = storageKeyFromMetadata(
       context.contextHash,
       {
-        contextProfile: "compact_sync_v2",
+        contextProfile: "rich_async_analytics_v1",
         contextVersion: context.contextVersion,
         analyticsVersion: context.analyticsVersion,
-        promptProfile: "profile_compact_context_v2",
-        memoryProfile: "compact_v1",
+        promptProfile: "profile_rich_async_analytics_v2",
+        memoryProfile: "rich_async_v1",
         routingVersion: PROFILE_INSIGHTS_TEST_ROUTING_VERSION,
       },
       "test.v1",
       DEFAULT_AI_MODEL
     );
-    await repository.storeDegradedInsightsCache(body.installID, key, {
-      summary: "Cached degraded model summary",
-      recommendations: ["Cached degraded model recommendation"],
-      generationStatus: "model",
-      insightSource: "fresh_model",
-    });
+    await repository.storeDegradedInsightsCache(
+      body.installID,
+      key,
+      makeProfileInsightsResponseFixture({
+        summary: "Cached degraded model summary",
+        recommendations: ["Cached degraded model recommendation"],
+        generationStatus: "model",
+        insightSource: "fresh_model",
+      })
+    );
 
     const app = createApp({
       createInferenceService: () => ({
@@ -1113,21 +1126,25 @@ describe("coach worker app", () => {
     const key = storageKeyFromMetadata(
       context.contextHash,
       {
-        contextProfile: "compact_sync_v2",
+        contextProfile: "rich_async_analytics_v1",
         contextVersion: context.contextVersion,
         analyticsVersion: context.analyticsVersion,
-        promptProfile: "profile_compact_context_v2",
-        memoryProfile: "compact_v1",
+        promptProfile: "profile_rich_async_analytics_v2",
+        memoryProfile: "rich_async_v1",
       },
       "test.v1",
       DEFAULT_AI_MODEL
     );
-    await repository.storeDegradedInsightsCache(body.installID, key, {
-      summary: "Cached degraded summary",
-      recommendations: ["Cached degraded recommendation"],
-      generationStatus: "fallback",
-      insightSource: "fallback",
-    });
+    await repository.storeDegradedInsightsCache(
+      body.installID,
+      key,
+      makeProfileInsightsResponseFixture({
+        summary: "Cached degraded summary",
+        recommendations: ["Cached degraded recommendation"],
+        generationStatus: "fallback",
+        insightSource: "fallback",
+      })
+    );
 
     const app = createApp({
       createInferenceService: () => ({
@@ -1184,23 +1201,27 @@ describe("coach worker app", () => {
     const key = storageKeyFromMetadata(
       context.contextHash,
       {
-        contextProfile: "compact_sync_v2",
+        contextProfile: "rich_async_analytics_v1",
         contextVersion: context.contextVersion,
         analyticsVersion: context.analyticsVersion,
-        promptProfile: "profile_compact_context_v2",
-        memoryProfile: "compact_v1",
+        promptProfile: "profile_rich_async_analytics_v2",
+        memoryProfile: "rich_async_v1",
         routingVersion: PROFILE_INSIGHTS_TEST_ROUTING_VERSION,
       },
       "test.v1",
       DEFAULT_AI_MODEL
     );
-    await repository.storeDegradedInsightsCache(body.installID, key, {
-      summary: "Cached degraded summary",
-      recommendations: ["Cached degraded recommendation"],
-      generationStatus: "model",
-      insightSource: "fresh_model",
-      selectedModel: "@cf/test/degraded",
-    });
+    await repository.storeDegradedInsightsCache(
+      body.installID,
+      key,
+      makeProfileInsightsResponseFixture({
+        summary: "Cached degraded summary",
+        recommendations: ["Cached degraded recommendation"],
+        generationStatus: "model",
+        insightSource: "fresh_model",
+        selectedModel: "@cf/test/degraded",
+      })
+    );
 
     const app = createApp({
       createInferenceService: () => ({
@@ -1256,22 +1277,26 @@ describe("coach worker app", () => {
     const key = storageKeyFromMetadata(
       context.contextHash,
       {
-        contextProfile: "compact_sync_v2",
+        contextProfile: "rich_async_analytics_v1",
         contextVersion: context.contextVersion,
         analyticsVersion: context.analyticsVersion,
-        promptProfile: "profile_compact_context_v2",
-        memoryProfile: "compact_v1",
+        promptProfile: "profile_rich_async_analytics_v2",
+        memoryProfile: "rich_async_v1",
         routingVersion: PROFILE_INSIGHTS_TEST_ROUTING_VERSION,
       },
       "test.v1",
       DEFAULT_AI_MODEL
     );
-    await repository.storeInsightsCache(body.installID, key, {
-      summary: "Canonical cached summary",
-      recommendations: ["Canonical cached recommendation"],
-      generationStatus: "model",
-      insightSource: "fresh_model",
-    });
+    await repository.storeInsightsCache(
+      body.installID,
+      key,
+      makeProfileInsightsResponseFixture({
+        summary: "Canonical cached summary",
+        recommendations: ["Canonical cached recommendation"],
+        generationStatus: "model",
+        insightSource: "fresh_model",
+      })
+    );
 
     const app = createApp({
       createInferenceService: () => ({
@@ -1396,21 +1421,25 @@ describe("coach worker app", () => {
     const originalKey = storageKeyFromMetadata(
       originalContext.contextHash,
       {
-        contextProfile: "compact_sync_v2",
+        contextProfile: "rich_async_analytics_v1",
         contextVersion: originalContext.contextVersion,
         analyticsVersion: originalContext.analyticsVersion,
-        promptProfile: "profile_compact_context_v2",
-        memoryProfile: "compact_v1",
+        promptProfile: "profile_rich_async_analytics_v2",
+        memoryProfile: "rich_async_v1",
       },
       "test.v1",
       DEFAULT_AI_MODEL
     );
-    await repository.storeDegradedInsightsCache(originalBody.installID, originalKey, {
-      summary: "Old degraded summary",
-      recommendations: ["Old degraded recommendation"],
-      generationStatus: "fallback",
-      insightSource: "fallback",
-    });
+    await repository.storeDegradedInsightsCache(
+      originalBody.installID,
+      originalKey,
+      makeProfileInsightsResponseFixture({
+        summary: "Old degraded summary",
+        recommendations: ["Old degraded recommendation"],
+        generationStatus: "fallback",
+        insightSource: "fallback",
+      })
+    );
 
     const changedBody = makeProfileInsightsRequestFixture();
     const changedSnapshot = changedBody.snapshot!;
@@ -1475,11 +1504,11 @@ describe("coach worker app", () => {
     const matchingKey = storageKeyFromMetadata(
       context.contextHash,
       {
-        contextProfile: "compact_sync_v2",
+        contextProfile: "rich_async_analytics_v1",
         contextVersion: context.contextVersion,
         analyticsVersion: context.analyticsVersion,
-        promptProfile: "profile_compact_context_v2",
-        memoryProfile: "compact_v1",
+        promptProfile: "profile_rich_async_analytics_v2",
+        memoryProfile: "rich_async_v1",
         routingVersion: PROFILE_INSIGHTS_TEST_ROUTING_VERSION,
       },
       "test.v1",
@@ -1489,18 +1518,26 @@ describe("coach worker app", () => {
       ...matchingKey,
       contextHash: "ctx_hash_other",
     };
-    await repository.storeDegradedInsightsCache(body.installID, matchingKey, {
-      summary: "Matching degraded summary",
-      recommendations: ["Matching degraded recommendation"],
-      generationStatus: "fallback",
-      insightSource: "fallback",
-    });
-    await repository.storeDegradedInsightsCache(body.installID, otherKey, {
-      summary: "Other degraded summary",
-      recommendations: ["Other degraded recommendation"],
-      generationStatus: "fallback",
-      insightSource: "fallback",
-    });
+    await repository.storeDegradedInsightsCache(
+      body.installID,
+      matchingKey,
+      makeProfileInsightsResponseFixture({
+        summary: "Matching degraded summary",
+        recommendations: ["Matching degraded recommendation"],
+        generationStatus: "fallback",
+        insightSource: "fallback",
+      })
+    );
+    await repository.storeDegradedInsightsCache(
+      body.installID,
+      otherKey,
+      makeProfileInsightsResponseFixture({
+        summary: "Other degraded summary",
+        recommendations: ["Other degraded recommendation"],
+        generationStatus: "fallback",
+        insightSource: "fallback",
+      })
+    );
 
     const app = createApp({
       createInferenceService: () => ({
@@ -1557,11 +1594,11 @@ describe("coach worker app", () => {
     const key = storageKeyFromMetadata(
       context.contextHash,
       {
-        contextProfile: "compact_sync_v2",
+        contextProfile: "rich_async_analytics_v1",
         contextVersion: context.contextVersion,
         analyticsVersion: context.analyticsVersion,
-        promptProfile: "profile_compact_context_v2",
-        memoryProfile: "compact_v1",
+        promptProfile: "profile_rich_async_analytics_v2",
+        memoryProfile: "rich_async_v1",
         routingVersion: PROFILE_INSIGHTS_TEST_ROUTING_VERSION,
       },
       "test.v1",
@@ -1629,11 +1666,11 @@ describe("coach worker app", () => {
     const key = storageKeyFromMetadata(
       context.contextHash,
       {
-        contextProfile: "compact_sync_v2",
+        contextProfile: "rich_async_analytics_v1",
         contextVersion: context.contextVersion,
         analyticsVersion: context.analyticsVersion,
-        promptProfile: "profile_compact_context_v2",
-        memoryProfile: "compact_v1",
+        promptProfile: "profile_rich_async_analytics_v2",
+        memoryProfile: "rich_async_v1",
         routingVersion: PROFILE_INSIGHTS_TEST_ROUTING_VERSION,
       },
       "test.v1",
@@ -3533,7 +3570,7 @@ describe("profile insights routing", () => {
     expect(resolveModelForRole(env, "insights_fast")).toBe("@cf/test/profile-fast");
   });
 
-  it("builds profile insights attempts in fast -> balanced -> quality -> plain-text order", () => {
+  it("builds profile insights attempts in balanced -> quality -> plain-text order", () => {
     const env = makeEnv({
       MODEL_ROUTING_ENABLED: "true",
       INSIGHTS_FAST_MODEL: "@cf/test/profile-fast",
@@ -3550,18 +3587,16 @@ describe("profile insights routing", () => {
     const attempts = buildProfileInsightsRoutingAttempts(env, decision);
 
     expect(attempts.map((attempt) => [attempt.modelRole, attempt.mode])).toEqual([
-      ["insights_fast", "structured"],
       ["insights_balanced", "structured"],
       ["quality_escalation", "structured"],
       ["sync_fallback", "plain_text_fallback"],
     ]);
     expect(attempts.map((attempt) => attempt.selectedModel)).toEqual([
-      "@cf/test/profile-fast",
       "@cf/test/profile-balanced",
       "@cf/test/profile-quality",
       "@cf/test/profile-fallback",
     ]);
-    expect(attempts.map((attempt) => attempt.fallbackHopCount)).toEqual([0, 1, 2, 3]);
+    expect(attempts.map((attempt) => attempt.fallbackHopCount)).toEqual([0, 1, 2]);
   });
 
   it("uses rich analytics context for Gemini profile insights routing", () => {
@@ -3574,9 +3609,9 @@ describe("profile insights routing", () => {
 
     expect(decision.allowedContextProfiles).toEqual(["rich_async_analytics_v1"]);
     expect(decision.payloadTier).toBe("full");
-    expect(decision.promptFamily).toBe("profile_rich_async_analytics_v1");
+    expect(decision.promptFamily).toBe("profile_quality_first_rich_async_v2");
     expect(attempts.every((attempt) => attempt.contextProfile === "rich_async_analytics_v1")).toBe(true);
-    expect(attempts.every((attempt) => attempt.promptProfile === "profile_rich_async_analytics_v1")).toBe(true);
+    expect(attempts.every((attempt) => attempt.promptProfile === "profile_rich_async_analytics_v2")).toBe(true);
   });
 
   it("keeps Gemini profile insights plain-text fallback on a quality model instead of flash-lite", () => {
@@ -3790,14 +3825,14 @@ describe("WorkersAICoachService", () => {
     expect(promptText).toContain(
       "Do not recommend changing weekly training frequency."
     );
+    expect(promptText).toContain(
+      "Use the full server-owned context to build a detailed coach brief."
+    );
     expect(promptText).toContain("Goal summary JSON:");
     expect(promptText).toContain("Consistency summary JSON:");
     expect(promptText).toContain("30-day progress JSON:");
     expect(promptText).toContain(
-      "Do not spend the response on workout-template count, split mismatch, or weekly-target mismatch."
-    );
-    expect(promptText).toContain(
-      "Focus guidance: treat rolling rotation and template count versus weekly target as already-resolved context"
+      "Focus guidance: treat rolling rotation and template count versus weekly target as already-resolved execution context"
     );
     expect(promptText).toContain("Preferred program summary JSON:");
     expect(promptText).toContain(
@@ -3960,7 +3995,8 @@ describe("WorkersAICoachService", () => {
     );
 
     expect(result.data.summary).not.toContain("saved program has 4 workouts");
-    expect(result.data.recommendations).toEqual(["Keep bench progression steady."]);
+    expect(result.data.recommendations).toContain("Keep bench progression steady.");
+    expect(result.data.recommendations[0]).toContain("rolling execution model");
   });
 
   it("keeps the full rolling-rotation note in compact profile insights prompts, preserves program coverage, and de-emphasizes structure", () => {
@@ -3984,13 +4020,13 @@ describe("WorkersAICoachService", () => {
     const userPrompt = messages[1]?.content ?? "";
 
     expect(systemPrompt).toContain(
-      "Do not spend the response on workout-template count, split mismatch, or weekly-target mismatch."
+      "Use the full server-owned context to build a detailed coach brief."
     );
     expect(userPrompt).toContain(
       "Do not treat that as a mismatch between my saved program and weekly frequency."
     );
     expect(userPrompt).toContain(
-      "Focus guidance: treat rolling rotation and template count versus weekly target as already-resolved context"
+      "Focus guidance: treat rolling rotation and template count versus weekly target as already-resolved execution context"
     );
     expect(userPrompt).toContain("Preferred program summary JSON:");
     expect(userPrompt).toContain(
@@ -4037,6 +4073,7 @@ describe("WorkersAICoachService", () => {
     );
 
     expect(result.data.recommendations).toEqual([
+      "Treat this as a cautious watchpoint rather than a hard claim: Убедитесь, что руки, спина и ноги включены в ваши тренировочные шаблоны.",
       "Сохраняйте текущую прогрессию и повышайте нагрузку только на повторяемых сетах.",
     ]);
   });
@@ -4120,7 +4157,13 @@ describe("WorkersAICoachService", () => {
       expect(payload.generationConfig?.responseMimeType).toBe("application/json");
       expect(payload.generationConfig?.responseJsonSchema).toMatchObject({
         type: "object",
-        required: ["summary", "recommendations"],
+        required: [
+          "summary",
+          "keyObservations",
+          "topConstraints",
+          "recommendations",
+          "confidenceNotes",
+        ],
         additionalProperties: false,
       });
       expect(payload.generationConfig?.responseSchema).toBeUndefined();
@@ -4699,8 +4742,8 @@ describe("WorkersAICoachService", () => {
       );
 
       expect(aiRun.mock.calls.map(([model]) => model)).toEqual([
-        "@cf/zai-org/glm-4.7-flash",
         DEFAULT_AI_MODEL,
+        "@cf/meta/llama-3.1-8b-instruct-fast",
       ]);
       expect(result.mode).toBe("structured");
       expect(result.model).toBe(DEFAULT_AI_MODEL);
@@ -4756,7 +4799,6 @@ describe("WorkersAICoachService", () => {
     );
 
     expect(aiRun.mock.calls.map(([model]) => model)).toEqual([
-      "@cf/zai-org/glm-4.7-flash",
       DEFAULT_AI_MODEL,
       "@cf/meta/llama-3.1-8b-instruct-fast",
     ]);
@@ -4793,7 +4835,7 @@ describe("WorkersAICoachService", () => {
         makeProfileInsightsRequestFixture()
       );
 
-      expect(aiRun).toHaveBeenCalledTimes(1);
+      expect(aiRun).toHaveBeenCalledTimes(3);
       expect(result.mode).toBe("local_fallback");
       expect(result.fallbackReason).toBe("sync_budget_exhausted");
       expect(result.data.generationStatus).toBe("fallback");
@@ -4816,7 +4858,7 @@ describe("WorkersAICoachService", () => {
 
     expect(aiRun).toHaveBeenCalledTimes(2);
     expect(result.data.summary.length).toBeGreaterThan(0);
-    expect(result.data.recommendations.length).toBeGreaterThan(0);
+    expect((result.data.recommendations ?? []).length).toBeGreaterThan(0);
     expect(result.data.summary.toLowerCase()).not.toContain("adjustments");
     expect(result.data.generationStatus).toBe("fallback");
     expect(result.data.insightSource).toBe("fallback");
@@ -4865,7 +4907,7 @@ describe("WorkersAICoachService", () => {
       await service.generateProfileInsights(makeProfileInsightsRequestFixture(), {
         timeoutProfile: "async_job",
         contextProfile: "rich_async_analytics_v1",
-        promptProfile: "profile_rich_async_analytics_v1",
+        promptProfile: "profile_rich_async_analytics_v2",
       });
 
       const failedLog = parseLoggedPayloads(warnSpy).find(
@@ -4874,17 +4916,17 @@ describe("WorkersAICoachService", () => {
       expect(failedLog).toBeDefined();
       expect(failedLog).toMatchObject({
         provider: "workers_ai",
-        selectedModel: "@cf/zai-org/glm-4.7-flash",
-        modelRole: "insights_fast",
+        selectedModel: DEFAULT_AI_MODEL,
+        modelRole: "insights_balanced",
         fallbackStage: "primary",
         fallbackHopCount: 0,
         mode: "structured",
       });
       expect(failedLog?.reasonDetails).toMatchObject({
-        promptVariant: "profile_compact_context_v2",
-        contextProfile: "compact_sync_v2",
-        modelRole: "insights_fast",
-        selectedModel: "@cf/zai-org/glm-4.7-flash",
+        promptVariant: "profile_rich_async_analytics_v2",
+        contextProfile: "rich_async_analytics_v1",
+        modelRole: "insights_balanced",
+        selectedModel: DEFAULT_AI_MODEL,
         fallbackStage: "primary",
         fallbackHopCount: 0,
         mode: "structured",
@@ -5003,8 +5045,23 @@ describe("WorkersAICoachService", () => {
   });
 });
 
+function makeProfileInsightsResponseFixture(
+  overrides: Partial<CoachProfileInsightsResponse> = {}
+): CoachProfileInsightsResponse {
+  return {
+    summary: "Summary",
+    keyObservations: [],
+    topConstraints: [],
+    recommendations: ["Recommendation"],
+    confidenceNotes: [],
+    generationStatus: "model",
+    insightSource: "fresh_model",
+    ...overrides,
+  };
+}
+
 function stubInferenceService(overrides?: {
-  profileInsights?: CoachProfileInsightsResponse;
+  profileInsights?: Partial<CoachProfileInsightsResponse>;
   workoutSummary?: CoachWorkoutSummaryResponse;
   chat?: CoachChatResponse;
   chatError?: Error;
@@ -5013,12 +5070,7 @@ function stubInferenceService(overrides?: {
   return {
     async generateProfileInsights() {
       return {
-        data: overrides?.profileInsights ?? {
-          summary: "Summary",
-          recommendations: ["Recommendation"],
-          generationStatus: "model",
-          insightSource: "fresh_model",
-        },
+        data: makeProfileInsightsResponseFixture(overrides?.profileInsights),
         model: DEFAULT_AI_MODEL,
       };
     },
@@ -5655,3 +5707,4 @@ function withStrictCommentConstraints(
     },
   };
 }
+

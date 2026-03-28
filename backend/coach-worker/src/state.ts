@@ -37,6 +37,8 @@ import type {
   CoachConversationTurn,
   CoachPreferencesUpdateRequest,
   CoachPreferencesUpdateResponse,
+  CoachProfileInsightsJobCreateRequest,
+  CoachProfileInsightsJobResult,
   CoachProfileInsightsRequest,
   CoachProfileInsightsResponse,
   CoachMemoryClearRequest,
@@ -132,6 +134,11 @@ export interface PreparedWorkoutSummaryJobRequest
   metadata?: CoachExecutionMetadata;
 }
 
+export interface PreparedProfileInsightsJobRequest
+  extends CoachProfileInsightsJobCreateRequest {
+  metadata?: CoachExecutionMetadata;
+}
+
 export interface CreateCoachChatJobInput {
   jobID: string;
   installID: string;
@@ -190,6 +197,23 @@ export interface CreateWorkoutSummaryJobInput {
   historySessionCount: number;
 }
 
+export interface CreateProfileInsightsJobInput {
+  jobID: string;
+  installID: string;
+  clientRequestID: string;
+  createdAt: string;
+  model: string;
+  provider: CoachAIProvider;
+  preparedRequest: PreparedProfileInsightsJobRequest;
+  contextHash: string;
+  contextSource: ResolvedCoachContext["source"];
+  snapshotBytes: number;
+  programCommentChars: number;
+  recentPrCount: number;
+  relativeStrengthCount: number;
+  preferredProgramWorkoutCount: number;
+}
+
 export interface CompleteWorkoutSummaryJobInput {
   completedAt: string;
   result: CoachWorkoutSummaryJobResult;
@@ -203,6 +227,29 @@ export interface CompleteWorkoutSummaryJobInput {
 }
 
 export interface FailWorkoutSummaryJobInput {
+  completedAt: string;
+  error: CoachChatJobError;
+  promptBytes?: number;
+  fallbackPromptBytes?: number;
+  modelDurationMs?: number;
+  fallbackModelDurationMs?: number;
+  totalJobDurationMs?: number;
+  inferenceMode?: CoachChatInferenceMode;
+}
+
+export interface CompleteProfileInsightsJobInput {
+  completedAt: string;
+  result: CoachProfileInsightsJobResult;
+  promptBytes?: number;
+  fallbackPromptBytes?: number;
+  modelDurationMs?: number;
+  fallbackModelDurationMs?: number;
+  totalJobDurationMs?: number;
+  inferenceMode?: CoachChatInferenceMode;
+  generationStatus?: CoachProfileInsightsJobResult["generationStatus"];
+}
+
+export interface FailProfileInsightsJobInput {
   completedAt: string;
   error: CoachChatJobError;
   promptBytes?: number;
@@ -273,6 +320,36 @@ export interface CoachWorkoutSummaryJobRecord {
   totalJobDurationMs?: number;
   inferenceMode?: CoachChatInferenceMode;
   generationStatus?: CoachWorkoutSummaryJobResult["generationStatus"];
+}
+
+export interface CoachProfileInsightsJobRecord {
+  jobID: string;
+  installID: string;
+  clientRequestID: string;
+  status: CoachChatJobStatus;
+  preparedRequest: PreparedProfileInsightsJobRequest;
+  result?: CoachProfileInsightsJobResult;
+  error?: CoachChatJobError;
+  createdAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  contextHash: string;
+  contextSource: ResolvedCoachContext["source"];
+  snapshotBytes: number;
+  programCommentChars: number;
+  recentPrCount: number;
+  relativeStrengthCount: number;
+  preferredProgramWorkoutCount: number;
+  promptVersion: string;
+  model: string;
+  provider?: CoachAIProvider;
+  promptBytes?: number;
+  fallbackPromptBytes?: number;
+  modelDurationMs?: number;
+  fallbackModelDurationMs?: number;
+  totalJobDurationMs?: number;
+  inferenceMode?: CoachChatInferenceMode;
+  generationStatus?: CoachProfileInsightsJobResult["generationStatus"];
 }
 
 export interface ClaimCoachChatJobExecutionResult {
@@ -390,6 +467,28 @@ export interface CoachStateStore {
     jobID: string,
     input: FailWorkoutSummaryJobInput
   ): Promise<CoachWorkoutSummaryJobRecord>;
+  createProfileInsightsJob(
+    input: CreateProfileInsightsJobInput
+  ): Promise<CoachProfileInsightsJobRecord>;
+  getProfileInsightsJob(
+    jobID: string,
+    installID: string
+  ): Promise<CoachProfileInsightsJobRecord | null>;
+  getProfileInsightsJobByID(
+    jobID: string
+  ): Promise<CoachProfileInsightsJobRecord | null>;
+  markProfileInsightsJobRunning(
+    jobID: string,
+    startedAt: string
+  ): Promise<{ job: CoachProfileInsightsJobRecord | null; claimed: boolean }>;
+  completeProfileInsightsJob(
+    jobID: string,
+    input: CompleteProfileInsightsJobInput
+  ): Promise<CoachProfileInsightsJobRecord>;
+  failProfileInsightsJob(
+    jobID: string,
+    input: FailProfileInsightsJobInput
+  ): Promise<CoachProfileInsightsJobRecord>;
   getBackupStatus(request: BackupStatusRequest): Promise<BackupStatusResponse>;
   uploadBackup(request: BackupUploadRequest): Promise<BackupUploadResponse>;
   downloadBackup(input: {
@@ -512,6 +611,37 @@ interface WorkoutSummaryJobRow {
   generation_status: CoachWorkoutSummaryJobResult["generationStatus"] | null;
 }
 
+interface ProfileInsightsJobRow {
+  job_id: string;
+  install_id: string;
+  client_request_id: string;
+  status: CoachChatJobStatus;
+  prepared_request_json: string;
+  response_json: string | null;
+  error_code: string | null;
+  error_message: string | null;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  context_hash: string;
+  context_source: ResolvedCoachContext["source"];
+  snapshot_bytes: number;
+  program_comment_chars: number;
+  recent_pr_count: number;
+  relative_strength_count: number;
+  preferred_program_workout_count: number;
+  prompt_version: string;
+  model: string;
+  provider: CoachAIProvider | null;
+  prompt_bytes: number | null;
+  fallback_prompt_bytes: number | null;
+  model_duration_ms: number | null;
+  fallback_model_duration_ms: number | null;
+  total_job_duration_ms: number | null;
+  inference_mode: CoachChatInferenceMode | null;
+  generation_status: CoachProfileInsightsJobResult["generationStatus"] | null;
+}
+
 interface InternalBackupRecord {
   remote: BackupHead;
   envelope: BackupEnvelopeV2;
@@ -520,6 +650,7 @@ interface InternalBackupRecord {
 export class CloudflareCoachStateRepository implements CoachStateStore {
   private chatJobProviderColumnSupport: boolean | undefined;
   private workoutSummaryProviderColumnSupport: boolean | undefined;
+  private profileInsightsJobProviderColumnSupport: boolean | undefined;
 
   constructor(
     private readonly kv: CoachKVNamespace,
@@ -1356,6 +1487,185 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
     return job;
   }
 
+  async createProfileInsightsJob(
+    input: CreateProfileInsightsJobInput
+  ): Promise<CoachProfileInsightsJobRecord> {
+    const existingByClientRequestID =
+      await this.getProfileInsightsJobByClientRequestID(
+        input.installID,
+        input.clientRequestID,
+        input.provider
+      );
+    if (existingByClientRequestID) {
+      return existingByClientRequestID;
+    }
+
+    try {
+      await this.insertProfileInsightsJobRow(input);
+    } catch (error) {
+      const duplicated = await this.getProfileInsightsJobByClientRequestID(
+        input.installID,
+        input.clientRequestID,
+        input.provider
+      );
+      if (duplicated) {
+        return duplicated;
+      }
+      throw error;
+    }
+
+    const created = await this.getProfileInsightsJobByID(input.jobID);
+    if (!created) {
+      throw new Error("Failed to read created profile insights job.");
+    }
+
+    return created;
+  }
+
+  async getProfileInsightsJob(
+    jobID: string,
+    installID: string
+  ): Promise<CoachProfileInsightsJobRecord | null> {
+    const row = await this.db
+      .prepare(
+        `
+          SELECT * FROM coach_profile_insights_jobs
+          WHERE job_id = ? AND install_id = ?
+          LIMIT 1
+        `
+      )
+      .bind(jobID, installID)
+      .first<ProfileInsightsJobRow>();
+    return row ? parseProfileInsightsJobRow(row) : null;
+  }
+
+  async getProfileInsightsJobByID(
+    jobID: string
+  ): Promise<CoachProfileInsightsJobRecord | null> {
+    const row = await this.db
+      .prepare(
+        `SELECT * FROM coach_profile_insights_jobs WHERE job_id = ? LIMIT 1`
+      )
+      .bind(jobID)
+      .first<ProfileInsightsJobRow>();
+    return row ? parseProfileInsightsJobRow(row) : null;
+  }
+
+  async markProfileInsightsJobRunning(
+    jobID: string,
+    startedAt: string
+  ): Promise<{ job: CoachProfileInsightsJobRecord | null; claimed: boolean }> {
+    const updateResult = await this.db
+      .prepare(
+        `
+          UPDATE coach_profile_insights_jobs
+          SET
+            status = 'running',
+            started_at = COALESCE(started_at, ?)
+          WHERE job_id = ? AND status = 'queued'
+        `
+      )
+      .bind(startedAt, jobID)
+      .run();
+
+    return {
+      job: await this.getProfileInsightsJobByID(jobID),
+      claimed: d1Changes(updateResult) > 0,
+    };
+  }
+
+  async completeProfileInsightsJob(
+    jobID: string,
+    input: CompleteProfileInsightsJobInput
+  ): Promise<CoachProfileInsightsJobRecord> {
+    await this.db
+      .prepare(
+        `
+          UPDATE coach_profile_insights_jobs
+          SET
+            status = 'completed',
+            response_json = ?,
+            error_code = NULL,
+            error_message = NULL,
+            completed_at = ?,
+            prompt_bytes = ?,
+            fallback_prompt_bytes = ?,
+            model_duration_ms = ?,
+            fallback_model_duration_ms = ?,
+            total_job_duration_ms = ?,
+            inference_mode = ?,
+            generation_status = ?
+          WHERE job_id = ?
+        `
+      )
+      .bind(
+        JSON.stringify(input.result),
+        input.completedAt,
+        input.promptBytes ?? null,
+        input.fallbackPromptBytes ?? null,
+        input.modelDurationMs ?? null,
+        input.fallbackModelDurationMs ?? null,
+        input.totalJobDurationMs ?? null,
+        input.inferenceMode ?? null,
+        input.generationStatus ?? null,
+        jobID
+      )
+      .run();
+
+    const job = await this.getProfileInsightsJobByID(jobID);
+    if (!job) {
+      throw new Error("Completed profile insights job was not found.");
+    }
+
+    return job;
+  }
+
+  async failProfileInsightsJob(
+    jobID: string,
+    input: FailProfileInsightsJobInput
+  ): Promise<CoachProfileInsightsJobRecord> {
+    await this.db
+      .prepare(
+        `
+          UPDATE coach_profile_insights_jobs
+          SET
+            status = 'failed',
+            response_json = NULL,
+            error_code = ?,
+            error_message = ?,
+            completed_at = ?,
+            prompt_bytes = ?,
+            fallback_prompt_bytes = ?,
+            model_duration_ms = ?,
+            fallback_model_duration_ms = ?,
+            total_job_duration_ms = ?,
+            inference_mode = ?,
+            generation_status = NULL
+          WHERE job_id = ?
+        `
+      )
+      .bind(
+        input.error.code,
+        input.error.message,
+        input.completedAt,
+        input.promptBytes ?? null,
+        input.fallbackPromptBytes ?? null,
+        input.modelDurationMs ?? null,
+        input.fallbackModelDurationMs ?? null,
+        input.totalJobDurationMs ?? null,
+        input.inferenceMode ?? null,
+        jobID
+      )
+      .run();
+
+    const job = await this.getProfileInsightsJobByID(jobID);
+    if (!job) {
+      throw new Error("Failed profile insights job was not found.");
+    }
+
+    return job;
+  }
+
   async getBackupStatus(
     request: BackupStatusRequest
   ): Promise<BackupStatusResponse> {
@@ -1793,6 +2103,10 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
       .prepare(`DELETE FROM coach_workout_summary_jobs WHERE install_id = ?`)
       .bind(installID)
       .run();
+    await this.db
+      .prepare(`DELETE FROM coach_profile_insights_jobs WHERE install_id = ?`)
+      .bind(installID)
+      .run();
   }
 
   private async getCurrentInstallState(
@@ -2050,6 +2364,59 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
     return (
       results.results
         .map((row) => parseWorkoutSummaryJobRow(row))
+        .find((job) => job.provider === provider) ?? null
+    );
+  }
+
+  private async getProfileInsightsJobByClientRequestID(
+    installID: string,
+    clientRequestID: string,
+    provider: CoachAIProvider
+  ): Promise<CoachProfileInsightsJobRecord | null> {
+    if (this.profileInsightsJobProviderColumnSupport !== false) {
+      try {
+        const row = await this.db
+          .prepare(
+            `
+              SELECT * FROM coach_profile_insights_jobs
+              WHERE install_id = ? AND client_request_id = ? AND provider = ?
+              LIMIT 1
+            `
+          )
+          .bind(installID, clientRequestID, provider)
+          .first<ProfileInsightsJobRow>();
+        this.profileInsightsJobProviderColumnSupport = true;
+        return row ? parseProfileInsightsJobRow(row) : null;
+      } catch (error) {
+        if (!isMissingProviderColumnError(error)) {
+          throw error;
+        }
+        this.markProviderColumnUnavailable(
+          "coach_profile_insights_jobs",
+          error
+        );
+      }
+    }
+
+    const candidates = legacyProviderScopedClientRequestIDCandidates(
+      clientRequestID,
+      provider
+    );
+    const results = await this.db
+      .prepare(
+        `
+          SELECT * FROM coach_profile_insights_jobs
+          WHERE install_id = ?
+            AND (client_request_id = ? OR client_request_id = ?)
+          ORDER BY created_at DESC
+          LIMIT 5
+        `
+      )
+      .bind(installID, candidates[0], candidates[1])
+      .all<ProfileInsightsJobRow>();
+    return (
+      results.results
+        .map((row) => parseProfileInsightsJobRow(row))
         .find((job) => job.provider === provider) ?? null
     );
   }
@@ -2323,16 +2690,126 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
       .run();
   }
 
+  private async insertProfileInsightsJobRow(
+    input: CreateProfileInsightsJobInput
+  ): Promise<void> {
+    if (this.profileInsightsJobProviderColumnSupport !== false) {
+      try {
+        await this.db
+          .prepare(
+            `
+              INSERT INTO coach_profile_insights_jobs (
+                job_id,
+                install_id,
+                client_request_id,
+                status,
+                prepared_request_json,
+                created_at,
+                context_hash,
+                context_source,
+                snapshot_bytes,
+                program_comment_chars,
+                recent_pr_count,
+                relative_strength_count,
+                preferred_program_workout_count,
+                prompt_version,
+                model,
+                provider
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `
+          )
+          .bind(
+            input.jobID,
+            input.installID,
+            input.clientRequestID,
+            "queued",
+            stableJSONStringify(input.preparedRequest),
+            input.createdAt,
+            input.contextHash,
+            input.contextSource,
+            input.snapshotBytes,
+            input.programCommentChars,
+            input.recentPrCount,
+            input.relativeStrengthCount,
+            input.preferredProgramWorkoutCount,
+            this.promptVersion,
+            input.model,
+            input.provider
+          )
+          .run();
+        this.profileInsightsJobProviderColumnSupport = true;
+        return;
+      } catch (error) {
+        if (!isMissingProviderColumnError(error)) {
+          throw error;
+        }
+        this.markProviderColumnUnavailable(
+          "coach_profile_insights_jobs",
+          error
+        );
+      }
+    }
+
+    await this.db
+      .prepare(
+        `
+          INSERT INTO coach_profile_insights_jobs (
+            job_id,
+            install_id,
+            client_request_id,
+            status,
+            prepared_request_json,
+            created_at,
+            context_hash,
+            context_source,
+            snapshot_bytes,
+            program_comment_chars,
+            recent_pr_count,
+            relative_strength_count,
+            preferred_program_workout_count,
+            prompt_version,
+            model
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `
+      )
+      .bind(
+        input.jobID,
+        input.installID,
+        encodeLegacyProviderScopedClientRequestID(
+          input.clientRequestID,
+          input.provider
+        ),
+        "queued",
+        stableJSONStringify(input.preparedRequest),
+        input.createdAt,
+        input.contextHash,
+        input.contextSource,
+        input.snapshotBytes,
+        input.programCommentChars,
+        input.recentPrCount,
+        input.relativeStrengthCount,
+        input.preferredProgramWorkoutCount,
+        this.promptVersion,
+        input.model
+      )
+      .run();
+  }
+
   private markProviderColumnUnavailable(
-    table: "coach_chat_jobs" | "coach_workout_summary_jobs",
+    table:
+      | "coach_chat_jobs"
+      | "coach_workout_summary_jobs"
+      | "coach_profile_insights_jobs",
     error: unknown
   ): void {
     const message =
       error instanceof Error ? error.message.slice(0, 300) : "Unknown error";
     if (table === "coach_chat_jobs") {
       this.chatJobProviderColumnSupport = false;
-    } else {
+    } else if (table === "coach_workout_summary_jobs") {
       this.workoutSummaryProviderColumnSupport = false;
+    } else {
+      this.profileInsightsJobProviderColumnSupport = false;
     }
     console.warn(
       JSON.stringify({
@@ -2355,6 +2832,7 @@ export class InMemoryCoachStateRepository implements CoachStateStore {
   private readonly chatMemory = new Map<string, StoredChatMemory>();
   private readonly chatJobs = new Map<string, CoachChatJobRecord>();
   private readonly workoutSummaryJobs = new Map<string, CoachWorkoutSummaryJobRecord>();
+  private readonly profileInsightsJobs = new Map<string, CoachProfileInsightsJobRecord>();
   private readonly coachStateVersions = new Map<string, number>();
   private readonly installSecretHashes = new Map<string, string>();
   private readonly restoreDecisions = new Map<
@@ -3016,6 +3494,132 @@ export class InMemoryCoachStateRepository implements CoachStateStore {
     return job;
   }
 
+  async createProfileInsightsJob(
+    input: CreateProfileInsightsJobInput
+  ): Promise<CoachProfileInsightsJobRecord> {
+    const existing = [...this.profileInsightsJobs.values()].find(
+      (job) =>
+        job.installID === input.installID &&
+        job.clientRequestID === input.clientRequestID &&
+        job.provider === input.provider
+    );
+    if (existing) {
+      return existing;
+    }
+
+    const created: CoachProfileInsightsJobRecord = {
+      jobID: input.jobID,
+      installID: input.installID,
+      clientRequestID: input.clientRequestID,
+      status: "queued",
+      preparedRequest: input.preparedRequest,
+      createdAt: input.createdAt,
+      contextHash: input.contextHash,
+      contextSource: input.contextSource,
+      snapshotBytes: input.snapshotBytes,
+      programCommentChars: input.programCommentChars,
+      recentPrCount: input.recentPrCount,
+      relativeStrengthCount: input.relativeStrengthCount,
+      preferredProgramWorkoutCount: input.preferredProgramWorkoutCount,
+      promptVersion: this.promptVersion,
+      model: input.model,
+      provider: input.provider,
+    };
+    this.profileInsightsJobs.set(created.jobID, created);
+    return created;
+  }
+
+  async getProfileInsightsJob(
+    jobID: string,
+    installID: string
+  ): Promise<CoachProfileInsightsJobRecord | null> {
+    const job = this.profileInsightsJobs.get(jobID);
+    if (!job || job.installID != installID) {
+      return null;
+    }
+
+    return job;
+  }
+
+  async getProfileInsightsJobByID(
+    jobID: string
+  ): Promise<CoachProfileInsightsJobRecord | null> {
+    return this.profileInsightsJobs.get(jobID) ?? null;
+  }
+
+  async markProfileInsightsJobRunning(
+    jobID: string,
+    startedAt: string
+  ): Promise<{ job: CoachProfileInsightsJobRecord | null; claimed: boolean }> {
+    const job = this.profileInsightsJobs.get(jobID);
+    if (!job) {
+      return {
+        job: null,
+        claimed: false,
+      };
+    }
+
+    if (job.status === "queued") {
+      job.status = "running";
+      job.startedAt ??= startedAt;
+      return {
+        job,
+        claimed: true,
+      };
+    }
+
+    return {
+      job,
+      claimed: false,
+    };
+  }
+
+  async completeProfileInsightsJob(
+    jobID: string,
+    input: CompleteProfileInsightsJobInput
+  ): Promise<CoachProfileInsightsJobRecord> {
+    const job = this.profileInsightsJobs.get(jobID);
+    if (!job) {
+      throw new Error("Completed profile insights job was not found.");
+    }
+
+    job.status = "completed";
+    job.result = input.result;
+    job.error = undefined;
+    job.completedAt = input.completedAt;
+    job.promptBytes = input.promptBytes;
+    job.fallbackPromptBytes = input.fallbackPromptBytes;
+    job.modelDurationMs = input.modelDurationMs;
+    job.fallbackModelDurationMs = input.fallbackModelDurationMs;
+    job.totalJobDurationMs = input.totalJobDurationMs;
+    job.inferenceMode = input.inferenceMode;
+    job.generationStatus = input.generationStatus;
+    return job;
+  }
+
+  async failProfileInsightsJob(
+    jobID: string,
+    input: FailProfileInsightsJobInput
+  ): Promise<CoachProfileInsightsJobRecord> {
+    const job = this.profileInsightsJobs.get(jobID);
+    if (!job) {
+      throw new Error("Failed profile insights job was not found.");
+    }
+
+    job.status = "failed";
+    job.result = undefined;
+    job.error = input.error;
+    job.completedAt = input.completedAt;
+    job.promptBytes = input.promptBytes;
+    job.fallbackPromptBytes = input.fallbackPromptBytes;
+    job.modelDurationMs = input.modelDurationMs;
+    job.fallbackModelDurationMs = input.fallbackModelDurationMs;
+    job.totalJobDurationMs = input.totalJobDurationMs;
+    job.inferenceMode = input.inferenceMode;
+    job.generationStatus = undefined;
+    return job;
+  }
+
   async getBackupStatus(
     request: BackupStatusRequest
   ): Promise<BackupStatusResponse> {
@@ -3218,6 +3822,11 @@ export class InMemoryCoachStateRepository implements CoachStateStore {
     for (const [jobID, job] of this.workoutSummaryJobs.entries()) {
       if (job.installID === installID) {
         this.workoutSummaryJobs.delete(jobID);
+      }
+    }
+    for (const [jobID, job] of this.profileInsightsJobs.entries()) {
+      if (job.installID === installID) {
+        this.profileInsightsJobs.delete(jobID);
       }
     }
     for (const key of [...this.insightsCache.keys()]) {
@@ -3587,6 +4196,60 @@ function parseWorkoutSummaryJobRow(
     currentExerciseCount: row.current_exercise_count,
     historyExerciseCount: row.history_exercise_count,
     historySessionCount: row.history_session_count,
+    promptVersion: row.prompt_version,
+    model: row.model,
+    provider,
+    promptBytes: nullableNumber(row.prompt_bytes),
+    fallbackPromptBytes: nullableNumber(row.fallback_prompt_bytes),
+    modelDurationMs: nullableNumber(row.model_duration_ms),
+    fallbackModelDurationMs: nullableNumber(row.fallback_model_duration_ms),
+    totalJobDurationMs: nullableNumber(row.total_job_duration_ms),
+    inferenceMode: row.inference_mode ?? undefined,
+    generationStatus: row.generation_status ?? undefined,
+  };
+}
+
+function parseProfileInsightsJobRow(
+  row: ProfileInsightsJobRow
+): CoachProfileInsightsJobRecord {
+  const preparedRequest = JSON.parse(
+    row.prepared_request_json
+  ) as PreparedProfileInsightsJobRequest;
+  const provider =
+    row.provider ??
+    preparedRequest.metadata?.provider ??
+    preparedRequest.provider ??
+    "workers_ai";
+  return {
+    jobID: row.job_id,
+    installID: row.install_id,
+    clientRequestID: decodeLegacyProviderScopedClientRequestID(
+      row.client_request_id,
+      provider
+    ),
+    status: row.status,
+    preparedRequest,
+    result: row.response_json
+      ? (JSON.parse(row.response_json) as CoachProfileInsightsJobResult)
+      : undefined,
+    error:
+      row.error_code && row.error_message
+        ? {
+            code: row.error_code,
+            message: row.error_message,
+            retryable: isRetryableJobErrorCode(row.error_code),
+          }
+        : undefined,
+    createdAt: row.created_at,
+    startedAt: row.started_at ?? undefined,
+    completedAt: row.completed_at ?? undefined,
+    contextHash: row.context_hash,
+    contextSource: row.context_source,
+    snapshotBytes: row.snapshot_bytes,
+    programCommentChars: row.program_comment_chars,
+    recentPrCount: row.recent_pr_count,
+    relativeStrengthCount: row.relative_strength_count,
+    preferredProgramWorkoutCount: row.preferred_program_workout_count,
     promptVersion: row.prompt_version,
     model: row.model,
     provider,

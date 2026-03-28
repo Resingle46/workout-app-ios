@@ -51,13 +51,27 @@ export interface ProgramCommentConstraints {
   statedWeeklyFrequency?: number;
 }
 
+export type CoachClaimConfidence =
+  | "supported"
+  | "weakly_supported"
+  | "unsupported";
+
 export interface CoachSplitExecutionInterpretation {
   mode: "rolling_rotation" | "calendar_matched" | "program_count_mismatch" | "unknown";
+  effectiveWeeklyFrequency: number;
   shouldTreatProgramCountAsMismatch: boolean;
   programWorkoutCount?: number;
   weeklyTarget: number;
   statedWeeklyFrequency?: number;
+  observedAverageWorkoutsPerWeek?: number;
+  templateRotationSemantics:
+    | "rotate_through_templates"
+    | "calendar_bound_templates"
+    | "unresolved";
+  authoritativeSignal: "user_note" | "program_structure" | "weekly_target" | "unknown";
+  userNote?: string;
   explanation: string;
+  evidence: string[];
 }
 
 export interface CoachMuscleExposureSummary {
@@ -66,6 +80,16 @@ export interface CoachMuscleExposureSummary {
   recentSessionsHit: number;
   plannedExerciseCount: number;
   lastHitDaysAgo?: number;
+  confidence: CoachClaimConfidence;
+  exposureLevel: "high" | "moderate" | "low";
+  evidence: string[];
+}
+
+export interface CoachDerivedCandidate {
+  muscleGroup: string;
+  confidence: CoachClaimConfidence;
+  reason: string;
+  evidence: string[];
 }
 
 export interface CoachDerivedAnalytics {
@@ -82,11 +106,26 @@ export interface CoachDerivedAnalytics {
     completedWorkoutsLast30Days: number;
   };
   muscleExposure: CoachMuscleExposureSummary[];
+  lowExposureCandidates: CoachDerivedCandidate[];
+  staleHitCandidates: CoachDerivedCandidate[];
+  imbalanceCandidates: CoachDerivedCandidate[];
+  laggingCandidates: CoachDerivedCandidate[];
   supportedClaims: {
     splitExecution: boolean;
     programFrequency: boolean;
     muscleExposure: boolean;
     laggingCandidates: boolean;
+    staleHitCandidates: boolean;
+    imbalanceCandidates: boolean;
+  };
+  claimConfidence: {
+    splitExecution: CoachClaimConfidence;
+    programFrequency: CoachClaimConfidence;
+    muscleExposure: CoachClaimConfidence;
+    lowExposureCandidates: CoachClaimConfidence;
+    staleHitCandidates: CoachClaimConfidence;
+    imbalanceCandidates: CoachClaimConfidence;
+    laggingCandidates: CoachClaimConfidence;
   };
 }
 
@@ -451,57 +490,110 @@ export function resolveSplitExecutionInterpretation(input: {
   weeklyTarget: number;
   programWorkoutCount?: number;
   constraints: ProgramCommentConstraints;
+  observedAverageWorkoutsPerWeek?: number;
 }): CoachSplitExecutionInterpretation {
-  const { weeklyTarget, programWorkoutCount, constraints } = input;
+  const {
+    weeklyTarget,
+    programWorkoutCount,
+    constraints,
+    observedAverageWorkoutsPerWeek,
+  } = input;
   const statedWeeklyFrequency =
     constraints.statedWeeklyFrequency ?? weeklyTarget ?? undefined;
+  const effectiveWeeklyFrequency =
+    Math.max(constraints.statedWeeklyFrequency ?? weeklyTarget, 0);
+  const baseEvidence = [
+    `Weekly target: ${weeklyTarget} session(s) per week.`,
+    programWorkoutCount !== undefined
+      ? `Selected program contains ${programWorkoutCount} workout template(s).`
+      : undefined,
+    constraints.rawComment
+      ? `User-authored note: ${constraints.rawComment}`
+      : undefined,
+    observedAverageWorkoutsPerWeek !== undefined
+      ? `Observed recent adherence averages ${formatDecimal(
+          observedAverageWorkoutsPerWeek
+        )} session(s) per week.`
+      : undefined,
+  ].filter((value): value is string => Boolean(value));
 
   if (!programWorkoutCount || programWorkoutCount <= 0) {
     return {
       mode: "unknown",
+      effectiveWeeklyFrequency,
       shouldTreatProgramCountAsMismatch: false,
       programWorkoutCount,
       weeklyTarget,
       statedWeeklyFrequency,
+      observedAverageWorkoutsPerWeek,
+      templateRotationSemantics: "unresolved",
+      authoritativeSignal:
+        constraints.rawComment.length > 0 ? "user_note" : "unknown",
+      userNote: constraints.rawComment || undefined,
       explanation: "No selected program was available for split interpretation.",
+      evidence: baseEvidence,
     };
   }
-
-  const effectiveWeeklyFrequency =
-    constraints.statedWeeklyFrequency ?? weeklyTarget;
 
   if (constraints.rollingSplitExecution) {
     return {
       mode: "rolling_rotation",
+      effectiveWeeklyFrequency,
       shouldTreatProgramCountAsMismatch: false,
       programWorkoutCount,
       weeklyTarget,
       statedWeeklyFrequency,
+      observedAverageWorkoutsPerWeek,
+      templateRotationSemantics: "rotate_through_templates",
+      authoritativeSignal: "user_note",
+      userNote: constraints.rawComment || undefined,
       explanation:
-        "The user explicitly says they rotate through templates in sequence instead of matching template count to calendar-week sessions.",
+        "The user-authored note explicitly describes rolling/rotation execution, so template count should be treated as a rotating library rather than a calendar-week mismatch.",
+      evidence: [
+        ...baseEvidence,
+        "Rolling/rotation wording was detected in the user-authored program note.",
+      ],
     };
   }
 
   if (programWorkoutCount === effectiveWeeklyFrequency) {
     return {
       mode: "calendar_matched",
+      effectiveWeeklyFrequency,
       shouldTreatProgramCountAsMismatch: false,
       programWorkoutCount,
       weeklyTarget,
       statedWeeklyFrequency,
+      observedAverageWorkoutsPerWeek,
+      templateRotationSemantics: "calendar_bound_templates",
+      authoritativeSignal:
+        constraints.statedWeeklyFrequency !== undefined
+          ? "user_note"
+          : "program_structure",
+      userNote: constraints.rawComment || undefined,
       explanation:
         "Program template count matches the stated/effective weekly training frequency.",
+      evidence: baseEvidence,
     };
   }
 
   return {
     mode: "program_count_mismatch",
+    effectiveWeeklyFrequency,
     shouldTreatProgramCountAsMismatch: true,
     programWorkoutCount,
     weeklyTarget,
     statedWeeklyFrequency,
+    observedAverageWorkoutsPerWeek,
+    templateRotationSemantics: "calendar_bound_templates",
+    authoritativeSignal:
+      constraints.statedWeeklyFrequency !== undefined
+        ? "user_note"
+        : "weekly_target",
+    userNote: constraints.rawComment || undefined,
     explanation:
       "Program template count differs from the effective weekly training frequency and no rolling-rotation note was detected.",
+    evidence: baseEvidence,
   };
 }
 
@@ -511,14 +603,15 @@ export function buildDerivedCoachAnalyticsFromCompactSnapshot(
   const constraints = extractProgramCommentConstraints(
     snapshot.coachAnalysisSettings.programComment
   );
+  const observedAverage = observedAverageWorkoutsPerWeek(
+    snapshot.analytics.consistency
+  );
   const splitExecution = resolveSplitExecutionInterpretation({
     weeklyTarget: snapshot.profile.weeklyWorkoutTarget,
     programWorkoutCount: snapshot.preferredProgram?.workoutCount,
     constraints,
+    observedAverageWorkoutsPerWeek: observedAverage,
   });
-  const observedAverage = observedAverageWorkoutsPerWeek(
-    snapshot.analytics.consistency
-  );
 
   return {
     splitExecution,
@@ -539,11 +632,26 @@ export function buildDerivedCoachAnalyticsFromCompactSnapshot(
         snapshot.analytics.progress30Days.totalFinishedWorkouts,
     },
     muscleExposure: [],
+    lowExposureCandidates: [],
+    staleHitCandidates: [],
+    imbalanceCandidates: [],
+    laggingCandidates: [],
     supportedClaims: {
       splitExecution: true,
       programFrequency: true,
       muscleExposure: false,
       laggingCandidates: false,
+      staleHitCandidates: false,
+      imbalanceCandidates: false,
+    },
+    claimConfidence: {
+      splitExecution: "supported",
+      programFrequency: "supported",
+      muscleExposure: "unsupported",
+      lowExposureCandidates: "unsupported",
+      staleHitCandidates: "unsupported",
+      imbalanceCandidates: "unsupported",
+      laggingCandidates: "unsupported",
     },
   };
 }
@@ -559,10 +667,12 @@ export function buildDerivedCoachAnalyticsFromSnapshot(input: {
   const constraints = extractProgramCommentConstraints(
     input.coachAnalysisSettings?.programComment
   );
+  const observedAverage = observedAverageWorkoutsPerWeek(input.consistencySummary);
   const splitExecution = resolveSplitExecutionInterpretation({
     weeklyTarget: input.profile.weeklyWorkoutTarget,
     programWorkoutCount: input.preferredProgram?.workouts.length,
     constraints,
+    observedAverageWorkoutsPerWeek: observedAverage,
   });
   const exerciseByID = new Map(
     input.snapshot.exercises.map((exercise) => [exercise.id, exercise] as const)
@@ -641,24 +751,51 @@ export function buildDerivedCoachAnalyticsFromSnapshot(input: {
     }
   }
 
-  const observedAverage = observedAverageWorkoutsPerWeek(input.consistencySummary);
   const muscleExposure = Array.from(exposureByGroup.entries())
-    .map(([muscleGroup, summary]) => ({
-      muscleGroup,
-      recentCompletedSets: summary.recentCompletedSets,
-      recentSessionsHit: summary.recentSessionsHit,
-      plannedExerciseCount: summary.plannedExerciseCount,
-      lastHitDaysAgo:
-        summary.lastHitAt !== undefined
-          ? Math.max(Math.round((Date.now() - summary.lastHitAt) / (24 * 60 * 60 * 1000)), 0)
-          : undefined,
-    }))
+    .map(([muscleGroup, summary]) =>
+      buildMuscleExposureSummary(muscleGroup, summary, recentWindow.length)
+    )
     .sort((left, right) => {
       if (left.recentCompletedSets === right.recentCompletedSets) {
         return left.muscleGroup.localeCompare(right.muscleGroup);
       }
       return right.recentCompletedSets - left.recentCompletedSets;
     });
+  const lowExposureCandidates = buildLowExposureCandidates(
+    muscleExposure,
+    recentWindow.length
+  );
+  const staleHitCandidates = buildStaleHitCandidates(
+    muscleExposure,
+    recentWindow.length
+  );
+  const imbalanceCandidates = buildImbalanceCandidates(
+    muscleExposure,
+    recentWindow.length
+  );
+  const laggingCandidates = buildLaggingCandidates(
+    lowExposureCandidates,
+    staleHitCandidates
+  );
+  const recentPRs = recentPersonalRecords({
+    exercises: input.snapshot.exercises,
+    finishedSessions: input.finishedSessions,
+  });
+  const muscleExposureConfidence = resolveAggregateClaimConfidence(
+    muscleExposure.map((item) => item.confidence)
+  );
+  const lowExposureConfidence = resolveAggregateClaimConfidence(
+    lowExposureCandidates.map((item) => item.confidence)
+  );
+  const staleHitConfidence = resolveAggregateClaimConfidence(
+    staleHitCandidates.map((item) => item.confidence)
+  );
+  const imbalanceConfidence = resolveAggregateClaimConfidence(
+    imbalanceCandidates.map((item) => item.confidence)
+  );
+  const laggingConfidence = resolveAggregateClaimConfidence(
+    laggingCandidates.map((item) => item.confidence)
+  );
 
   return {
     splitExecution,
@@ -671,14 +808,8 @@ export function buildDerivedCoachAnalyticsFromSnapshot(input: {
           : undefined,
     },
     progressionSummary: {
-      recentPersonalRecordCount: recentPersonalRecords({
-        exercises: input.snapshot.exercises,
-        finishedSessions: input.finishedSessions,
-      }).length,
-      topRecentPersonalRecordExercise: recentPersonalRecords({
-        exercises: input.snapshot.exercises,
-        finishedSessions: input.finishedSessions,
-      })[0]?.exerciseName,
+      recentPersonalRecordCount: recentPRs.length,
+      topRecentPersonalRecordExercise: recentPRs[0]?.exerciseName,
       lastWorkoutDate: input.finishedSessions[0]
         ? finishedSessionDate(input.finishedSessions[0])
         : undefined,
@@ -686,13 +817,247 @@ export function buildDerivedCoachAnalyticsFromSnapshot(input: {
         .totalFinishedWorkouts,
     },
     muscleExposure,
+    lowExposureCandidates,
+    staleHitCandidates,
+    imbalanceCandidates,
+    laggingCandidates,
     supportedClaims: {
       splitExecution: true,
       programFrequency: true,
-      muscleExposure: muscleExposure.length > 0,
-      laggingCandidates: false,
+      muscleExposure: muscleExposureConfidence !== "unsupported",
+      laggingCandidates: laggingConfidence !== "unsupported",
+      staleHitCandidates: staleHitConfidence !== "unsupported",
+      imbalanceCandidates: imbalanceConfidence !== "unsupported",
+    },
+    claimConfidence: {
+      splitExecution: "supported",
+      programFrequency: "supported",
+      muscleExposure: muscleExposureConfidence,
+      lowExposureCandidates: lowExposureConfidence,
+      staleHitCandidates: staleHitConfidence,
+      imbalanceCandidates: imbalanceConfidence,
+      laggingCandidates: laggingConfidence,
     },
   };
+}
+
+function buildMuscleExposureSummary(
+  muscleGroup: string,
+  summary: {
+    recentCompletedSets: number;
+    recentSessionsHit: number;
+    plannedExerciseCount: number;
+    lastHitAt?: number;
+  },
+  recentWindowSize: number
+): CoachMuscleExposureSummary {
+  const lastHitDaysAgo =
+    summary.lastHitAt !== undefined
+      ? Math.max(
+          Math.round((Date.now() - summary.lastHitAt) / (24 * 60 * 60 * 1000)),
+          0
+        )
+      : undefined;
+  const confidence =
+    recentWindowSize >= 4 || summary.plannedExerciseCount > 0
+      ? "supported"
+      : recentWindowSize >= 2
+        ? "weakly_supported"
+        : "unsupported";
+  const exposureLevel =
+    summary.recentCompletedSets >= 8 || summary.recentSessionsHit >= 3
+      ? "high"
+      : summary.recentCompletedSets >= 4 || summary.recentSessionsHit >= 2
+        ? "moderate"
+        : "low";
+
+  return {
+    muscleGroup,
+    recentCompletedSets: summary.recentCompletedSets,
+    recentSessionsHit: summary.recentSessionsHit,
+    plannedExerciseCount: summary.plannedExerciseCount,
+    lastHitDaysAgo,
+    confidence,
+    exposureLevel,
+    evidence: [
+      `${summary.recentCompletedSets} completed set(s) across ${summary.recentSessionsHit} recent session(s).`,
+      summary.plannedExerciseCount > 0
+        ? `${summary.plannedExerciseCount} saved-program exercise(s) map to this muscle group.`
+        : undefined,
+      lastHitDaysAgo !== undefined
+        ? `Last completed hit was about ${lastHitDaysAgo} day(s) ago.`
+        : undefined,
+    ].filter((value): value is string => Boolean(value)),
+  };
+}
+
+function buildLowExposureCandidates(
+  muscleExposure: CoachMuscleExposureSummary[],
+  recentWindowSize: number
+): CoachDerivedCandidate[] {
+  return muscleExposure
+    .filter(
+      (item) =>
+        item.plannedExerciseCount > 0 &&
+        (item.recentCompletedSets <= 3 || item.recentSessionsHit <= 1)
+    )
+    .map((item) => {
+      const confidence: CoachClaimConfidence =
+        recentWindowSize >= 4 &&
+        item.recentCompletedSets <= 3 &&
+        (item.recentSessionsHit <= 1 || (item.lastHitDaysAgo ?? 0) >= 9)
+          ? "supported"
+          : recentWindowSize >= 2
+            ? "weakly_supported"
+            : "unsupported";
+      return {
+        muscleGroup: item.muscleGroup,
+        confidence,
+        reason:
+          `${capitalize(item.muscleGroup)} is showing lighter recent exposure than the saved program would suggest.`,
+        evidence: item.evidence,
+      };
+    })
+    .filter((item) => item.confidence !== "unsupported")
+    .slice(0, 4);
+}
+
+function buildStaleHitCandidates(
+  muscleExposure: CoachMuscleExposureSummary[],
+  recentWindowSize: number
+): CoachDerivedCandidate[] {
+  return muscleExposure
+    .filter(
+      (item) =>
+        item.plannedExerciseCount > 0 &&
+        ((item.lastHitDaysAgo ?? 0) >= 7 || item.recentSessionsHit === 0)
+    )
+    .map((item) => {
+      const confidence: CoachClaimConfidence =
+        recentWindowSize >= 4 &&
+        ((item.lastHitDaysAgo ?? 0) >= 10 || item.recentSessionsHit === 0)
+          ? "supported"
+          : recentWindowSize >= 2
+            ? "weakly_supported"
+            : "unsupported";
+      return {
+        muscleGroup: item.muscleGroup,
+        confidence,
+        reason:
+          `${capitalize(item.muscleGroup)} looks stale in recent execution, so it may be slipping behind the rest of the rotation.`,
+        evidence: item.evidence,
+      };
+    })
+    .filter((item) => item.confidence !== "unsupported")
+    .slice(0, 4);
+}
+
+function buildImbalanceCandidates(
+  muscleExposure: CoachMuscleExposureSummary[],
+  recentWindowSize: number
+): CoachDerivedCandidate[] {
+  if (muscleExposure.length < 3) {
+    return [];
+  }
+
+  const totalSets = muscleExposure.reduce(
+    (partialResult, item) => partialResult + item.recentCompletedSets,
+    0
+  );
+  if (totalSets < 12) {
+    return [];
+  }
+
+  const sortedSets = muscleExposure
+    .map((item) => item.recentCompletedSets)
+    .sort((left, right) => left - right);
+  const medianSets = sortedSets[Math.floor(sortedSets.length / 2)] ?? 0;
+
+  return muscleExposure
+    .filter(
+      (item) =>
+        item.recentCompletedSets >= Math.max(medianSets * 1.75, 6) &&
+        item.recentCompletedSets / Math.max(totalSets, 1) >= 0.28
+    )
+    .map((item) => ({
+      muscleGroup: item.muscleGroup,
+      confidence:
+        (recentWindowSize >= 4
+          ? "supported"
+          : "weakly_supported") as CoachClaimConfidence,
+      reason:
+        `${capitalize(item.muscleGroup)} is taking a disproportionate share of recent completed volume, which can flatten balance elsewhere.`,
+      evidence: [
+        ...item.evidence,
+        `${item.recentCompletedSets} of ${totalSets} recent completed sets landed here.`,
+      ],
+    }))
+    .slice(0, 3);
+}
+
+function buildLaggingCandidates(
+  lowExposureCandidates: CoachDerivedCandidate[],
+  staleHitCandidates: CoachDerivedCandidate[]
+): CoachDerivedCandidate[] {
+  const staleByMuscle = new Map(
+    staleHitCandidates.map((item) => [item.muscleGroup, item] as const)
+  );
+
+  return lowExposureCandidates
+    .map((item) => {
+      const staleMatch = staleByMuscle.get(item.muscleGroup);
+      const confidence: CoachClaimConfidence =
+        staleMatch &&
+        (item.confidence === "supported" || staleMatch.confidence === "supported")
+          ? "supported"
+          : staleMatch || item.confidence === "weakly_supported"
+            ? "weakly_supported"
+            : "unsupported";
+      return {
+        muscleGroup: item.muscleGroup,
+        confidence,
+        reason: staleMatch
+          ? `${capitalize(item.muscleGroup)} is the clearest lagging-execution candidate because it is both low-exposure and stale in recent training.`
+          : `${capitalize(item.muscleGroup)} is a cautious lagging candidate because recent exposure is light relative to the saved program.`,
+        evidence: dedupeEvidence([
+          ...(item.evidence ?? []),
+          ...(staleMatch?.evidence ?? []),
+        ]).slice(0, 6),
+      };
+    })
+    .filter((item) => item.confidence !== "unsupported")
+    .slice(0, 4);
+}
+
+function resolveAggregateClaimConfidence(
+  values: CoachClaimConfidence[]
+): CoachClaimConfidence {
+  if (values.some((value) => value === "supported")) {
+    return "supported";
+  }
+  if (values.some((value) => value === "weakly_supported")) {
+    return "weakly_supported";
+  }
+  return "unsupported";
+}
+
+function capitalize(value: string): string {
+  return value.length > 0 ? `${value[0]?.toUpperCase()}${value.slice(1)}` : value;
+}
+
+function dedupeEvidence(values: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const value of values.map((item) => item.trim()).filter(Boolean)) {
+    if (seen.has(value)) {
+      continue;
+    }
+    seen.add(value);
+    result.push(value);
+  }
+
+  return result;
 }
 
 function contextPromptLimits(profile: CoachContextProfile): PromptLimitProfile {

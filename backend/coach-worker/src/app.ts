@@ -14,6 +14,9 @@ import {
   coachPreferencesUpdateRequestSchema,
   coachPreferencesUpdateResponseSchema,
   coachMemoryClearRequestSchema,
+  profileInsightsJobCreateRequestSchema,
+  profileInsightsJobCreateResponseSchema,
+  profileInsightsJobStatusResponseSchema,
   profileInsightsResponseSchema,
   profileInsightsRequestSchema,
   stateDeleteRequestSchema,
@@ -40,6 +43,7 @@ import {
   resolveModelForRole,
   resolveModelRoutingVersion,
   resolvePrimaryChatExecutionProfile,
+  resolveProfileInsightsExecutionProfile,
 } from "./routing";
 import {
   ActiveCoachChatJobError,
@@ -66,6 +70,7 @@ interface AppDependencies {
 const CHAT_JOB_INITIAL_POLL_AFTER_MS = 1_500;
 const ASYNC_CHAT_JOB_TTL_MS = 20 * 60 * 1_000;
 const ASYNC_WORKOUT_SUMMARY_JOB_TTL_MS = 10 * 60 * 1_000;
+const ASYNC_PROFILE_INSIGHTS_JOB_TTL_MS = 20 * 60 * 1_000;
 
 export function createApp(
   overrides: Partial<AppDependencies> = {}
@@ -308,6 +313,254 @@ export function createApp(
           return json({}, 200);
         }
 
+        if (pathname === "/v2/coach/profile-insights-jobs" && request.method === "POST") {
+          const body = profileInsightsJobCreateRequestSchema.parse(
+            await readJSON(request)
+          );
+          const installAuth = await authorizeInstallScope(
+            request,
+            stateRepository,
+            body.installID
+          );
+          assertProviderReadiness(env, body.provider);
+          const contextResolveStartedAt = deps.now();
+          const context = await stateRepository.resolveCoachContext(body);
+          const contextResolveMs = deps.now() - contextResolveStartedAt;
+          const routingDecision = buildProfileInsightsRoutingDecision(
+            env,
+            {
+              ...body,
+              snapshotHash: context.contextHash,
+              snapshot: context.snapshot,
+              snapshotUpdatedAt:
+                context.backupHead?.uploadedAt ?? body.snapshotUpdatedAt,
+            },
+            { timeoutProfile: "async_job" }
+          );
+          const executionProfile = resolveProfileInsightsExecutionProfile();
+          const executionMetadata = buildExecutionMetadata({
+            provider: routingDecision.provider,
+            contextProfile: executionProfile.contextProfile,
+            promptProfile: executionProfile.promptProfile,
+            contextVersion: context.contextVersion,
+            analyticsVersion: context.analyticsVersion,
+            memoryProfile: "rich_async_v1",
+            providerID: body.providerID ?? "workers_ai",
+            jobDeadlineAt: new Date(
+              deps.now() + ASYNC_PROFILE_INSIGHTS_JOB_TTL_MS
+            ).toISOString(),
+            derivedAnalytics: context.derivedAnalytics,
+            useCase: routingDecision.useCase,
+            modelRole: routingDecision.modelRole,
+            selectedModel: routingDecision.selectedModel,
+            allowedContextProfiles: routingDecision.allowedContextProfiles,
+            payloadTier: routingDecision.payloadTier,
+            routingVersion: routingDecision.routingVersion,
+            memoryCompatibilityKey: routingDecision.memoryCompatibilityKey,
+            promptFamily: routingDecision.promptFamily,
+            contextFamily: routingDecision.contextFamily,
+            routingReasonTags: routingDecision.routingReasonTags,
+          });
+          const snapshotBytes = jsonByteLength(context.snapshot);
+          const programCommentChars =
+            context.snapshot.coachAnalysisSettings.programComment.trim().length;
+          const recentPrCount =
+            context.snapshot.analytics.recentPersonalRecords.length;
+          const relativeStrengthCount =
+            context.snapshot.analytics.relativeStrength.length;
+          const preferredProgramWorkoutCount =
+            context.snapshot.preferredProgram?.workouts.length ?? 0;
+          const createdAt = new Date(deps.now()).toISOString();
+          const jobID = buildProfileInsightsJobID();
+
+          routeDiagnostics = {
+            installID: body.installID,
+            clientRequestID: body.clientRequestID,
+            requestedProvider: body.provider,
+            provider: routingDecision.provider,
+            contextSource: context.source,
+            contextProfile: executionMetadata.contextProfile,
+            promptProfile: executionMetadata.promptProfile,
+            useCase: routingDecision.useCase,
+            modelRole: routingDecision.modelRole,
+            selectedModel: routingDecision.selectedModel,
+            routingVersion: routingDecision.routingVersion,
+            routingReasonTags: routingDecision.routingReasonTags,
+            forceRefresh: body.forceRefresh,
+            snapshotBytes,
+            programCommentChars,
+            recentPrCount,
+            relativeStrengthCount,
+            preferredProgramWorkoutCount,
+          };
+
+          let job;
+          try {
+            job = await stateRepository.createProfileInsightsJob({
+              jobID,
+              installID: body.installID,
+              clientRequestID: body.clientRequestID,
+              createdAt,
+              model: routingDecision.selectedModel,
+              provider: routingDecision.provider,
+              preparedRequest: {
+                ...body,
+                snapshotHash: context.contextHash,
+                snapshot: context.snapshot,
+                snapshotUpdatedAt:
+                  context.backupHead?.uploadedAt ?? body.snapshotUpdatedAt,
+                metadata: executionMetadata,
+              },
+              contextHash: context.contextHash,
+              contextSource: context.source,
+              snapshotBytes,
+              programCommentChars,
+              recentPrCount,
+              relativeStrengthCount,
+              preferredProgramWorkoutCount,
+            });
+          } catch (error) {
+            console.error(
+              JSON.stringify({
+                event: "profile_insights_job_row_create_failed",
+                requestID,
+                installID: body.installID,
+                clientRequestID: body.clientRequestID,
+                requestedProvider: body.provider,
+                provider: routingDecision.provider,
+                contextHash: context.contextHash,
+                selectedModel: routingDecision.selectedModel,
+                errorMessage:
+                  error instanceof Error ? error.message.slice(0, 300) : "Unknown error",
+              })
+            );
+            throw error;
+          }
+
+          const reusedExistingJob = job.jobID !== jobID;
+
+          console.log(
+            JSON.stringify({
+              event: "profile_insights_job_created",
+              requestID,
+              jobID: job.jobID,
+              installID: job.installID,
+              clientRequestID: job.clientRequestID,
+              contextHash: job.contextHash,
+              contextSource: job.contextSource,
+              snapshotBytes: job.snapshotBytes,
+              programCommentChars: job.programCommentChars,
+              recentPrCount: job.recentPrCount,
+              relativeStrengthCount: job.relativeStrengthCount,
+              preferredProgramWorkoutCount: job.preferredProgramWorkoutCount,
+              promptVersion: job.promptVersion,
+              model: job.model,
+              provider: job.provider ?? job.preparedRequest.metadata?.provider ?? "workers_ai",
+              useCase: job.preparedRequest.metadata?.useCase,
+              modelRole: job.preparedRequest.metadata?.modelRole,
+              selectedModel: job.preparedRequest.metadata?.selectedModel,
+              routingVersion: job.preparedRequest.metadata?.routingVersion,
+              contextProfile: job.preparedRequest.metadata?.contextProfile,
+              promptProfile: job.preparedRequest.metadata?.promptProfile,
+              promptFamily: job.preparedRequest.metadata?.promptFamily,
+              contextFamily: job.preparedRequest.metadata?.contextFamily,
+              routingReasonTags: job.preparedRequest.metadata?.routingReasonTags,
+              reusedExistingJob,
+              status: job.status,
+            })
+          );
+
+          if (!reusedExistingJob) {
+            try {
+              const workflow = mustGetProfileInsightsWorkflow(env);
+              await workflow.create({
+                id: job.jobID,
+                params: { jobID: job.jobID },
+              });
+            } catch (error) {
+              const failedAt = new Date(deps.now()).toISOString();
+              try {
+                await stateRepository.failProfileInsightsJob(job.jobID, {
+                  completedAt: failedAt,
+                  error: {
+                    code: "workflow_start_failed",
+                    message: "Profile insights workflow failed to start.",
+                    retryable: true,
+                  },
+                  totalJobDurationMs: Math.max(
+                    deps.now() - Date.parse(job.createdAt),
+                    0
+                  ),
+                });
+              } catch (persistError) {
+                console.error(
+                  JSON.stringify({
+                    event: "terminal_state_persist_failed",
+                    phase: "persist_failure",
+                    route: pathname,
+                    jobID: job.jobID,
+                    installID: job.installID,
+                    clientRequestID: job.clientRequestID,
+                    errorCode: "workflow_start_failed",
+                    persistErrorMessage:
+                      persistError instanceof Error
+                        ? persistError.message.slice(0, 200)
+                        : "Unknown persistence error",
+                  })
+                );
+              }
+              throw new RequestError(
+                500,
+                "workflow_start_failed",
+                "Coach backend is not configured.",
+                {
+                  ...routeDiagnostics,
+                  providerMessage:
+                    error instanceof Error
+                      ? error.message.slice(0, 200)
+                      : "Unknown workflow start error",
+                }
+              );
+            }
+          }
+
+          const response = profileInsightsJobCreateResponseSchema.parse({
+            jobID: job.jobID,
+            status: job.status,
+            createdAt: job.createdAt,
+            pollAfterMs: isTerminalJobStatus(job.status)
+              ? 0
+              : CHAT_JOB_INITIAL_POLL_AFTER_MS,
+            metadata: publicJobMetadata(job.preparedRequest.metadata),
+          });
+          const statusCode = isTerminalJobStatus(job.status) ? 200 : 202;
+
+          logRequest({
+            requestID,
+            route: pathname,
+            method: request.method,
+            status: statusCode,
+            durationMs: deps.now() - startedAt,
+            jobID: job.jobID,
+            installID: body.installID,
+            contextSource: context.source,
+            contextResolveMs,
+            snapshotBytes,
+            programCommentChars,
+            recentPrCount,
+            relativeStrengthCount,
+            preferredProgramWorkoutCount,
+            useCase: routingDecision.useCase,
+            modelRole: routingDecision.modelRole,
+            selectedModel: routingDecision.selectedModel,
+            routingVersion: routingDecision.routingVersion,
+            routingReasonTags: routingDecision.routingReasonTags,
+            reusedExistingJob,
+            installAuthMode: installAuth.authMode,
+          });
+          return json(response, statusCode);
+        }
+
         if (pathname === "/v1/coach/profile-insights" && request.method === "POST") {
           const body = profileInsightsRequestSchema.parse(await readJSON(request));
           const installAuth = await authorizeInstallScope(
@@ -320,20 +573,25 @@ export function createApp(
           const contextResolveStartedAt = deps.now();
           const context = await stateRepository.resolveCoachContext(body);
           const contextResolveMs = deps.now() - contextResolveStartedAt;
-          const routingDecision = buildProfileInsightsRoutingDecision(env, {
-            ...body,
-            snapshotHash: context.contextHash,
-            snapshot: context.snapshot,
-            snapshotUpdatedAt:
-              context.backupHead?.uploadedAt ?? body.snapshotUpdatedAt,
-          });
+          const routingDecision = buildProfileInsightsRoutingDecision(
+            env,
+            {
+              ...body,
+              snapshotHash: context.contextHash,
+              snapshot: context.snapshot,
+              snapshotUpdatedAt:
+                context.backupHead?.uploadedAt ?? body.snapshotUpdatedAt,
+            },
+            { timeoutProfile: "sync" }
+          );
+          const executionProfile = resolveProfileInsightsExecutionProfile();
           const executionMetadata = buildExecutionMetadata({
             provider: routingDecision.provider,
-            contextProfile: "compact_sync_v2",
-            promptProfile: "profile_compact_context_v2",
+            contextProfile: executionProfile.contextProfile,
+            promptProfile: executionProfile.promptProfile,
             contextVersion: context.contextVersion,
             analyticsVersion: context.analyticsVersion,
-            memoryProfile: "compact_v1",
+            memoryProfile: "rich_async_v1",
             providerID: body.providerID ?? "workers_ai",
             derivedAnalytics: context.derivedAnalytics,
             useCase: routingDecision.useCase,
@@ -369,6 +627,7 @@ export function createApp(
             allowDegradedCache: body.allowDegradedCache,
             contextSource: context.source,
             profileContextVariant: executionMetadata.promptProfile,
+            routeMode: "legacy_sync_wrapper",
             useCase: routingDecision.useCase,
             modelRole: routingDecision.modelRole,
             selectedModel: routingDecision.selectedModel,
@@ -484,6 +743,7 @@ export function createApp(
             snapshotUpdatedAt:
               context.backupHead?.uploadedAt ?? body.snapshotUpdatedAt,
           }, {
+            timeoutProfile: "sync",
             contextProfile: executionMetadata.contextProfile,
             promptProfile: executionMetadata.promptProfile,
             derivedAnalytics: executionMetadata.derivedAnalytics,
@@ -1369,6 +1629,60 @@ export function createApp(
           return json(response, 200);
         }
 
+        const profileInsightsJobPath = parseProfileInsightsJobPath(pathname);
+        if (profileInsightsJobPath && request.method === "GET") {
+          const installID = parseInstallIDQuery(request);
+          const installAuth = await authorizeInstallScope(
+            request,
+            stateRepository,
+            installID
+          );
+          const job = await stateRepository.getProfileInsightsJob(
+            profileInsightsJobPath.jobID,
+            installID
+          );
+          if (!job) {
+            throw new RequestError(
+              404,
+              "profile_insights_job_not_found",
+              "Profile insights job not found."
+            );
+          }
+
+          const response = profileInsightsJobStatusResponseSchema.parse({
+            jobID: job.jobID,
+            status: job.status,
+            createdAt: job.createdAt,
+            startedAt: job.startedAt,
+            completedAt: job.completedAt,
+            result: job.result,
+            error: job.error,
+            metadata: publicJobMetadata(job.preparedRequest.metadata),
+          });
+
+          logRequest({
+            requestID,
+            route: pathname,
+            method: request.method,
+            status: 200,
+            durationMs: deps.now() - startedAt,
+            jobID: job.jobID,
+            installID: job.installID,
+            contextSource: job.contextSource,
+            snapshotBytes: job.snapshotBytes,
+            programCommentChars: job.programCommentChars,
+            recentPrCount: job.recentPrCount,
+            relativeStrengthCount: job.relativeStrengthCount,
+            preferredProgramWorkoutCount: job.preferredProgramWorkoutCount,
+            inferenceMode: job.inferenceMode,
+            promptBytes: job.promptBytes,
+            modelDurationMs: job.modelDurationMs,
+            totalJobDurationMs: job.totalJobDurationMs,
+            installAuthMode: installAuth.authMode,
+          });
+          return json(response, 200);
+        }
+
         throw new RequestError(404, "not_found", "Route not found");
       } catch (error) {
         const mapped = mapError(error, requestID);
@@ -1613,6 +1927,22 @@ function mustGetWorkoutSummaryWorkflow(
       "server_misconfigured",
       "Coach backend is not configured.",
       { missing: ["WORKOUT_SUMMARY_WORKFLOW"] }
+    );
+  }
+
+  return workflow;
+}
+
+function mustGetProfileInsightsWorkflow(
+  env: Env
+): NonNullable<Env["PROFILE_INSIGHTS_WORKFLOW"]> {
+  const workflow = env.PROFILE_INSIGHTS_WORKFLOW;
+  if (!workflow) {
+    throw new RequestError(
+      500,
+      "server_misconfigured",
+      "Coach backend is not configured.",
+      { missing: ["PROFILE_INSIGHTS_WORKFLOW"] }
     );
   }
 
@@ -2130,6 +2460,10 @@ function buildWorkoutSummaryJobID(): string {
   return `workout-summary-job_${crypto.randomUUID()}`;
 }
 
+function buildProfileInsightsJobID(): string {
+  return `profile-insights-job_${crypto.randomUUID()}`;
+}
+
 function parseChatJobPath(
   pathname: string
 ): {
@@ -2151,6 +2485,21 @@ function parseWorkoutSummaryJobPath(
   jobID: string;
 } | null {
   const match = pathname.match(/^\/v2\/coach\/workout-summary-jobs\/([^/]+)$/);
+  if (!match?.[1]) {
+    return null;
+  }
+
+  return {
+    jobID: decodeURIComponent(match[1]),
+  };
+}
+
+function parseProfileInsightsJobPath(
+  pathname: string
+): {
+  jobID: string;
+} | null {
+  const match = pathname.match(/^\/v2\/coach\/profile-insights-jobs\/([^/]+)$/);
   if (!match?.[1]) {
     return null;
   }
@@ -2394,6 +2743,15 @@ function publicJobMetadata(
       analyticsVersion?: string;
       memoryProfile?: string;
       providerID?: string;
+      useCase?: string;
+      modelRole?: string;
+      allowedContextProfiles?: string[];
+      payloadTier?: "full" | "reduced" | "compact";
+      routingVersion?: string;
+      memoryCompatibilityKey?: string;
+      promptFamily?: string;
+      contextFamily?: string;
+      routingReasonTags?: string[];
     }
   | undefined {
   if (!metadata) {
@@ -2410,6 +2768,15 @@ function publicJobMetadata(
     analyticsVersion: metadata.analyticsVersion,
     memoryProfile: metadata.memoryProfile,
     providerID: metadata.providerID,
+    useCase: metadata.useCase,
+    modelRole: metadata.modelRole,
+    allowedContextProfiles: metadata.allowedContextProfiles,
+    payloadTier: metadata.payloadTier,
+    routingVersion: metadata.routingVersion,
+    memoryCompatibilityKey: metadata.memoryCompatibilityKey,
+    promptFamily: metadata.promptFamily,
+    contextFamily: metadata.contextFamily,
+    routingReasonTags: metadata.routingReasonTags,
   };
 }
 

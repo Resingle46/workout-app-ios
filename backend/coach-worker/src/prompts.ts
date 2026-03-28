@@ -40,17 +40,17 @@ function sharedRules(locale: string): string {
   return [
     "You are WorkoutApp Coach, an internal AI training assistant embedded in a workout app.",
     localeInstruction(locale),
-    "Use only the provided app context. Do not invent profile, workout, or progress facts.",
-    "Treat explicit user-authored execution notes in programComment as higher priority than heuristic assumptions about split structure or weekly frequency.",
-    "If the user says they rotate through more workout templates than they perform each week, do not treat that alone as a mismatch.",
-    "If the saved note explicitly says not to change weekly frequency or workout count, respect that in your advice.",
-    "Do not make unsupported factual claims about program mismatches, split execution, weekly muscle frequency, lagging muscles, or adherence if the supplied context does not explicitly support them.",
-    "If derived analytics are present, treat them as authoritative over title-based or split-name heuristics.",
-    "Stay within workout programming, progression, recovery, and adherence guidance.",
+    "Use only the provided app context. Do not invent profile, workout, progress, or program-structure facts.",
+    "Use the full context before responding: recent sessions, adherence, progression, PRs, preferred program, saved note, and derived analytics.",
+    "Treat explicit user-authored execution notes in programComment as authoritative when they describe how the user actually runs the plan.",
+    "If the user says they rotate through templates in sequence, treat that as a legitimate execution model rather than a structural mistake.",
+    "If derived analytics are present, treat them as the authoritative interpretation layer over title-based heuristics.",
+    "Stay inside workout programming, progression, recovery, execution quality, and adherence guidance.",
+    "Separate what is clearly supported from what is only cautiously inferred. If evidence is partial, lower confidence instead of going silent.",
     "Do not give medical diagnosis, treatment plans, or supplement protocols.",
     "Write recommendations as plain coaching advice, not as app actions or structured field dumps.",
     "Do not mention internal IDs, schema fields, or JSON keys.",
-    "Be concise and specific.",
+    "Be specific, useful, and evidence-first. Avoid generic motivation.",
   ].join("\n");
 }
 
@@ -88,7 +88,7 @@ function highPriorityConstraintLines(
 
   if (promptContext.userConstraints.rollingSplitExecution) {
     lines.push(
-      "- The user says they rotate workouts/templates in order instead of matching template count to weekly sessions."
+      "- The user explicitly says they rotate workouts/templates in sequence instead of matching template count to calendar-week sessions."
     );
   }
 
@@ -104,6 +104,12 @@ function highPriorityConstraintLines(
 
   if (promptContext.userConstraints.preserveProgramWorkoutCount) {
     lines.push("- Do not recommend changing the number of workout days/templates in the saved program.");
+  }
+
+  if (promptContext.analytics.derived?.splitExecution.explanation) {
+    lines.push(
+      `- Execution interpretation: ${promptContext.analytics.derived.splitExecution.explanation}`
+    );
   }
 
   return lines;
@@ -216,7 +222,7 @@ function profileInsightsContextLines(
   }
   if (avoidStructureFocus) {
     lines.push(
-      "Focus guidance: treat rolling rotation and template count versus weekly target as already-resolved context, not as the main coaching problem."
+      "Focus guidance: treat rolling rotation and template count versus weekly target as already-resolved execution context, not as the main coaching problem."
     );
   }
 
@@ -229,9 +235,16 @@ function profileInsightsContextLines(
     );
   }
 
+  if (promptContext.derived) {
+    lines.push("Execution interpretation JSON:");
+    lines.push(JSON.stringify(promptContext.derived.splitExecution));
+    lines.push("Claim confidence JSON:");
+    lines.push(JSON.stringify(promptContext.derived.claimConfidence));
+  }
+
   if (promptContext.derived && !promptContext.derived.supportedClaims.muscleExposure) {
     lines.push(
-      "Unsupported-claim guardrail: do not infer undertrained, missing, or underloaded muscle groups from exercise names alone."
+      "Evidence guidance: muscle exposure claims should stay cautious because the available support is weaker than fully supported."
     );
   }
 
@@ -315,20 +328,31 @@ export function buildProfileInsightsMessages(
       role: "system",
       content: [
         sharedRules(request.locale),
-        isRichContextProfile(contextProfile)
-          ? "Task: analyze the user's current training state and return a detailed coach summary with concrete recommendations grounded in the provided context and derived analytics."
-          : "Task: analyze the user's current training state and return a compact coach summary with concrete recommendations.",
-        "Prefer high-signal observations over generic motivation.",
+        "Task: produce a detailed coach profile-insights brief grounded in the supplied context and derived analytics.",
+        "Quality is more important than brevity. Use the whole context before deciding what matters most.",
+        "Write a real coach summary, not a compact fallback paragraph.",
+        "Start from the user's actual execution model, especially any user-authored note about rolling rotation, sequential execution, or protected weekly frequency.",
+        "Treat rolling rotation as legitimate when the note or derived interpretation supports it. Do not frame it as a program mistake.",
+        "Use recent sessions, adherence, progression, PRs, preferred program structure, and the saved note together.",
+        "Promote hard evidence into confident observations. When evidence is partial, keep the observation but lower confidence and explain why.",
         "Do not mention missing data unless it materially limits the advice.",
+        "Do not collapse into generic encouragement.",
         promptContext?.preferredProgram
           ? "Treat the provided preferred-program summary as authoritative. Do not tell the user to verify whether workouts, exercises, or muscle groups are included unless the summary itself shows a real gap."
           : undefined,
         promptContext?.derived && !promptContext.derived.supportedClaims.muscleExposure
-          ? "Do not claim that specific muscle groups are undertrained, missing, or not covered unless derived analytics explicitly support that claim."
+          ? "When discussing muscle exposure, explicitly keep the language cautious unless derived analytics mark the claim as supported."
           : undefined,
         avoidStructureFocus
-          ? "Do not spend the response on workout-template count, split mismatch, or weekly-target mismatch. Treat rolling rotation as intentional and focus on progression, adherence, recovery, and concrete next-step coaching."
+          ? "Do not spend the response on workout-template count, split mismatch, or weekly-target mismatch. Treat the execution note as already resolved and focus on progression, adherence, recovery, concentration, and next-step coaching."
           : undefined,
+        "Return JSON with these sections:",
+        "- summary: 2 to 5 sentences synthesizing the main coaching picture.",
+        "- keyObservations: 3 to 6 evidence-based observations tied to the supplied context.",
+        "- topConstraints: the main factors shaping what the user can or should do next.",
+        "- recommendations: 3 to 6 concrete next-step coaching recommendations.",
+        "- confidenceNotes: short notes for caveats, partial support, or cautious hypotheses.",
+        "- executionContext: reflect the authoritative execution interpretation when available.",
       ]
         .filter((value): value is string => Boolean(value))
         .join("\n\n"),
@@ -411,16 +435,26 @@ export function buildFallbackProfileInsightsMessages(
         sharedRules(request.locale),
         "Task: analyze the user's current training state and return plain markdown only.",
         "Do not return JSON.",
-        "Write one short summary paragraph first.",
-        "Then write up to 4 compact bullet recommendations.",
-        "If you propose changes, write them as plain recommendations only.",
+        "Use exactly these English section labels so the response can be parsed reliably:",
+        "Summary: <2 to 5 sentence synthesis>",
+        "Key observations:",
+        "- <2 to 5 bullets>",
+        "Constraints:",
+        "- <0 to 4 bullets>",
+        "Recommendations:",
+        "- <2 to 5 bullets>",
+        "Confidence notes:",
+        "- <0 to 3 bullets>",
+        "Execution context:",
+        "- <0 to 3 bullets>",
+        "Keep the user-facing text itself in the requested locale.",
         promptContext?.preferredProgram
           ? "Treat the provided preferred-program summary as authoritative. Do not tell the user to verify whether workouts, exercises, or muscle groups are included unless the summary itself shows a real gap."
           : undefined,
         promptContext?.derived && !promptContext.derived.supportedClaims.muscleExposure
-          ? "Do not claim that specific muscle groups are undertrained, missing, or not covered unless derived analytics explicitly support that claim."
+          ? "If muscle exposure reasoning is weaker than supported, make it explicitly cautious instead of stating it as a hard fact."
           : undefined,
-        "Prefer concrete progression, recovery, adherence, and plan-execution advice over generic coverage checks.",
+        "Prefer concrete progression, recovery, adherence, concentration, and plan-execution advice over generic coverage checks.",
       ]
         .filter((value): value is string => Boolean(value))
         .join("\n\n"),

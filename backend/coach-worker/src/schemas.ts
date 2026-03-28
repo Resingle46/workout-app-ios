@@ -170,6 +170,12 @@ const relativeStrengthContextSchema = z
   })
   .strict();
 
+const claimConfidenceSchema = z.enum([
+  "supported",
+  "weakly_supported",
+  "unsupported",
+]);
+
 const splitExecutionInterpretationSchema = z
   .object({
     mode: z.enum([
@@ -178,11 +184,26 @@ const splitExecutionInterpretationSchema = z
       "program_count_mismatch",
       "unknown",
     ]),
+    effectiveWeeklyFrequency: z.number().finite().min(0),
     shouldTreatProgramCountAsMismatch: z.boolean(),
     programWorkoutCount: z.int().min(0).optional(),
     weeklyTarget: z.int().min(0),
     statedWeeklyFrequency: z.int().min(0).optional(),
+    observedAverageWorkoutsPerWeek: z.number().finite().min(0).optional(),
+    templateRotationSemantics: z.enum([
+      "rotate_through_templates",
+      "calendar_bound_templates",
+      "unresolved",
+    ]),
+    authoritativeSignal: z.enum([
+      "user_note",
+      "program_structure",
+      "weekly_target",
+      "unknown",
+    ]),
+    userNote: z.string().max(500).optional(),
     explanation: nonEmptyStringSchema,
+    evidence: z.array(nonEmptyStringSchema.max(240)).max(8).default([]),
   })
   .strict();
 
@@ -193,6 +214,18 @@ const muscleExposureContextSchema = z
     recentSessionsHit: z.int().min(0),
     plannedExerciseCount: z.int().min(0),
     lastHitDaysAgo: z.number().finite().min(0).optional(),
+    confidence: claimConfidenceSchema,
+    exposureLevel: z.enum(["high", "moderate", "low"]),
+    evidence: z.array(nonEmptyStringSchema.max(240)).max(6).default([]),
+  })
+  .strict();
+
+const derivedCandidateContextSchema = z
+  .object({
+    muscleGroup: nonEmptyStringSchema,
+    confidence: claimConfidenceSchema,
+    reason: nonEmptyStringSchema.max(280),
+    evidence: z.array(nonEmptyStringSchema.max(240)).max(6).default([]),
   })
   .strict();
 
@@ -215,12 +248,29 @@ const derivedAnalyticsSchema = z
       })
       .strict(),
     muscleExposure: z.array(muscleExposureContextSchema),
+    lowExposureCandidates: z.array(derivedCandidateContextSchema).default([]),
+    staleHitCandidates: z.array(derivedCandidateContextSchema).default([]),
+    imbalanceCandidates: z.array(derivedCandidateContextSchema).default([]),
+    laggingCandidates: z.array(derivedCandidateContextSchema).default([]),
     supportedClaims: z
       .object({
         splitExecution: z.boolean(),
         programFrequency: z.boolean(),
         muscleExposure: z.boolean(),
         laggingCandidates: z.boolean(),
+        staleHitCandidates: z.boolean(),
+        imbalanceCandidates: z.boolean(),
+      })
+      .strict(),
+    claimConfidence: z
+      .object({
+        splitExecution: claimConfidenceSchema,
+        programFrequency: claimConfidenceSchema,
+        muscleExposure: claimConfidenceSchema,
+        lowExposureCandidates: claimConfidenceSchema,
+        staleHitCandidates: claimConfidenceSchema,
+        imbalanceCandidates: claimConfidenceSchema,
+        laggingCandidates: claimConfidenceSchema,
       })
       .strict(),
   })
@@ -417,6 +467,21 @@ const jobMetadataSchema = z
     analyticsVersion: nonEmptyStringSchema.max(80).optional(),
     memoryProfile: nonEmptyStringSchema.max(80).optional(),
     providerID: providerIDSchema.optional(),
+    useCase: nonEmptyStringSchema.max(80).optional(),
+    modelRole: nonEmptyStringSchema.max(80).optional(),
+    allowedContextProfiles: z.array(nonEmptyStringSchema.max(80)).max(4).optional(),
+    payloadTier: z.enum(["full", "reduced", "compact"]).optional(),
+    routingVersion: nonEmptyStringSchema.max(120).optional(),
+    memoryCompatibilityKey: nonEmptyStringSchema.max(240).optional(),
+    promptFamily: nonEmptyStringSchema.max(120).optional(),
+    contextFamily: nonEmptyStringSchema.max(120).optional(),
+    routingReasonTags: z.array(nonEmptyStringSchema.max(120)).max(16).optional(),
+  })
+  .strict();
+
+export const profileInsightsJobCreateRequestSchema = profileInsightsRequestSchema
+  .extend({
+    clientRequestID: z.uuid(),
   })
   .strict();
 
@@ -665,8 +730,12 @@ export const profileInsightSourceSchema = z.enum([
 
 export const profileInsightsResponseSchema = z
   .object({
-    summary: nonEmptyStringSchema.max(1200),
-    recommendations: z.array(nonEmptyStringSchema.max(280)).max(8),
+    summary: nonEmptyStringSchema.max(2200),
+    keyObservations: z.array(nonEmptyStringSchema.max(320)).max(8).default([]),
+    topConstraints: z.array(nonEmptyStringSchema.max(320)).max(6).default([]),
+    recommendations: z.array(nonEmptyStringSchema.max(320)).max(8).default([]),
+    confidenceNotes: z.array(nonEmptyStringSchema.max(320)).max(6).default([]),
+    executionContext: splitExecutionInterpretationSchema.optional(),
     generationStatus: coachResponseGenerationStatusSchema.default("fallback"),
     insightSource: profileInsightSourceSchema.default("fallback"),
     selectedModel: nonEmptyStringSchema.max(200).optional(),
@@ -675,8 +744,12 @@ export const profileInsightsResponseSchema = z
 
 export const profileInsightsModelOutputSchema = z
   .object({
-    summary: nonEmptyStringSchema.max(1200),
-    recommendations: z.array(nonEmptyStringSchema.max(280)).max(8),
+    summary: nonEmptyStringSchema.max(2200),
+    keyObservations: z.array(nonEmptyStringSchema.max(320)).max(8).default([]),
+    topConstraints: z.array(nonEmptyStringSchema.max(320)).max(6).default([]),
+    recommendations: z.array(nonEmptyStringSchema.max(320)).max(8).default([]),
+    confidenceNotes: z.array(nonEmptyStringSchema.max(320)).max(6).default([]),
+    executionContext: splitExecutionInterpretationSchema.optional(),
     suggestedChanges: z.array(z.unknown()).max(5).optional(),
   });
 
@@ -836,6 +909,46 @@ export const workoutSummaryJobStatusResponseSchema = z
   })
   .strict();
 
+export const profileInsightsJobResultSchema = z
+  .object({
+    summary: nonEmptyStringSchema.max(2200),
+    keyObservations: z.array(nonEmptyStringSchema.max(320)).max(8).default([]),
+    topConstraints: z.array(nonEmptyStringSchema.max(320)).max(6).default([]),
+    recommendations: z.array(nonEmptyStringSchema.max(320)).max(8).default([]),
+    confidenceNotes: z.array(nonEmptyStringSchema.max(320)).max(6).default([]),
+    executionContext: splitExecutionInterpretationSchema.optional(),
+    generationStatus: coachResponseGenerationStatusSchema.default("fallback"),
+    insightSource: profileInsightSourceSchema.default("fallback"),
+    selectedModel: nonEmptyStringSchema.max(200).optional(),
+    inferenceMode: chatInferenceModeSchema,
+    modelDurationMs: z.int().min(0).optional(),
+    totalJobDurationMs: z.int().min(0).optional(),
+  })
+  .strict();
+
+export const profileInsightsJobCreateResponseSchema = z
+  .object({
+    jobID: nonEmptyStringSchema.max(200),
+    status: chatJobStatusSchema,
+    createdAt: isoDateTimeSchema,
+    pollAfterMs: z.int().min(0),
+    metadata: jobMetadataSchema.optional(),
+  })
+  .strict();
+
+export const profileInsightsJobStatusResponseSchema = z
+  .object({
+    jobID: nonEmptyStringSchema.max(200),
+    status: chatJobStatusSchema,
+    createdAt: isoDateTimeSchema,
+    startedAt: isoDateTimeSchema.optional(),
+    completedAt: isoDateTimeSchema.optional(),
+    result: profileInsightsJobResultSchema.optional(),
+    error: chatJobErrorSchema.optional(),
+    metadata: jobMetadataSchema.optional(),
+  })
+  .strict();
+
 export const chatResponseModelOutputSchema = z
   .object({
     answerMarkdown: nonEmptyStringSchema.max(COACH_CHAT_MARKDOWN_MAX_LENGTH),
@@ -846,6 +959,9 @@ export const chatResponseModelOutputSchema = z
 
 export type CoachProfileInsightsRequest = z.infer<
   typeof profileInsightsRequestSchema
+>;
+export type CoachProfileInsightsJobCreateRequest = z.infer<
+  typeof profileInsightsJobCreateRequestSchema
 >;
 export type CoachChatRequest = z.infer<typeof chatRequestSchema>;
 export type CoachChatJobCreateRequest = z.infer<typeof chatJobCreateRequestSchema>;
@@ -875,6 +991,15 @@ export type BackupDeleteRequest = z.infer<typeof backupDeleteRequestSchema>;
 export type CoachStateDeleteRequest = z.infer<typeof stateDeleteRequestSchema>;
 export type CoachProfileInsightsResponse = z.infer<
   typeof profileInsightsResponseSchema
+>;
+export type CoachProfileInsightsJobResult = z.infer<
+  typeof profileInsightsJobResultSchema
+>;
+export type CoachProfileInsightsJobCreateResponse = z.infer<
+  typeof profileInsightsJobCreateResponseSchema
+>;
+export type CoachProfileInsightsJobStatusResponse = z.infer<
+  typeof profileInsightsJobStatusResponseSchema
 >;
 export type CoachChatResponse = z.infer<typeof chatResponseSchema>;
 export type CoachChatJobStatus = z.infer<typeof chatJobStatusSchema>;

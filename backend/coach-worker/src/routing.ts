@@ -20,7 +20,7 @@ export const DEFAULT_GEMINI_CHAT_REDUCED_MODEL = "gemini-2.5-flash-lite";
 export const DEFAULT_GEMINI_SUMMARY_MODEL = "gemini-2.5-flash";
 export const DEFAULT_GEMINI_INSIGHTS_MODEL = "gemini-2.5-flash";
 export const DEFAULT_GEMINI_SYNC_FALLBACK_MODEL = "gemini-2.5-flash-lite";
-const PROFILE_INSIGHTS_ROUTING_REVISION = "profile-insights.v2";
+const PROFILE_INSIGHTS_ROUTING_REVISION = "profile-insights.v3.quality-first";
 
 export type CoachRoutingUseCase =
   | "simple_qna"
@@ -304,7 +304,7 @@ export function buildChatRoutingDecision(
   const promptFamily = metadata?.promptFamily ?? resolveChatPromptFamily(useCase, options);
   const routingVersion =
     metadata?.routingVersion ?? resolveModelRoutingVersion(env);
-  const memoryProfile = metadata?.memoryProfile ?? "compact_v1";
+  const memoryProfile = metadata?.memoryProfile ?? "rich_async_v1";
   const routingReasonTags =
     metadata?.routingReasonTags ??
     buildChatRoutingReasonTags(
@@ -396,12 +396,16 @@ export function buildProfileInsightsRoutingDecision(
   env: EnvLike,
   request: CoachProfileInsightsRequest & {
     metadata?: Partial<CoachExecutionMetadata>;
-  }
+  },
+  options: { timeoutProfile?: "sync" | "async_job" } = {}
 ): RoutingDecision {
   const metadata = request.metadata;
   const provider = resolveProvider(request.provider, metadata?.provider);
-  const executionProfile = resolveProfileInsightsExecutionProfile(provider);
-  const modelRole = coerceModelRole(metadata?.modelRole, "insights_fast");
+  const executionProfile = resolveProfileInsightsExecutionProfile();
+  const modelRole = coerceModelRole(
+    metadata?.modelRole,
+    defaultProfileInsightsModelRole(env, options.timeoutProfile)
+  );
   const selectedModel =
     metadata?.selectedModel ??
     resolveModelForRole(env, provider, modelRole, {
@@ -416,7 +420,9 @@ export function buildProfileInsightsRoutingDecision(
     buildProfileInsightsRoutingReasonTags(
       env,
       provider,
-      modelRole
+      modelRole,
+      options.timeoutProfile,
+      executionProfile
     );
 
   return {
@@ -715,13 +721,13 @@ export function buildWorkoutSummaryRoutingAttempts(
 
 export function buildProfileInsightsRoutingAttempts(
   env: EnvLike,
-  decision: RoutingDecision
+  decision: RoutingDecision,
+  options: { timeoutProfile?: "sync" | "async_job" } = {}
 ): ProfileInsightsRoutingAttempt[] {
   const memoryCompatibilityKey =
     decision.memoryCompatibilityKey ?? "profile-insights-memory";
-  const executionProfile = resolveProfileInsightsExecutionProfile(
-    decision.provider
-  );
+  const timeoutProfile = options.timeoutProfile ?? "sync";
+  const executionProfile = resolveProfileInsightsExecutionProfile();
   const balancedModel = resolveModelForRole(
     env,
     decision.provider,
@@ -733,31 +739,40 @@ export function buildProfileInsightsRoutingAttempts(
     "sync_fallback"
   );
   const profilePlainTextFallback =
-    decision.provider === "gemini"
-      ? resolveProfileInsightsGeminiPlainTextFallback(env, decision, balancedModel)
-      : {
-          modelRole: "sync_fallback" as const,
-          selectedModel: syncFallbackModel,
-        };
-  const attempts: ProfileInsightsRoutingAttempt[] = [
-    {
-      provider: decision.provider,
-      modelRole: decision.modelRole,
-      selectedModel: decision.selectedModel,
-      contextProfile: executionProfile.contextProfile,
-      promptProfile: executionProfile.promptProfile,
-      payloadTier: executionProfile.payloadTier,
-      mode: "structured",
-      fallbackStage: "primary",
-      structuredAdapter: decision.structuredAdapter,
-      memoryCompatibilityKey,
-      routingVersion: decision.routingVersion,
-      useCase: "profile_insights",
-      routingReasonTags: decision.routingReasonTags,
-      attemptReason: "primary_selected_route",
-      fallbackHopCount: 0,
-    },
-    {
+    timeoutProfile === "async_job"
+      ? resolveProfileInsightsAsyncPlainTextFallback(
+          env,
+          decision,
+          balancedModel
+        )
+      : decision.provider === "gemini"
+        ? resolveProfileInsightsGeminiPlainTextFallback(env, decision, balancedModel)
+        : {
+            modelRole: "sync_fallback" as const,
+            selectedModel: syncFallbackModel,
+          };
+  const attempts: ProfileInsightsRoutingAttempt[] = [];
+
+  attempts.push({
+    provider: decision.provider,
+    modelRole: decision.modelRole,
+    selectedModel: decision.selectedModel,
+    contextProfile: executionProfile.contextProfile,
+    promptProfile: executionProfile.promptProfile,
+    payloadTier: executionProfile.payloadTier,
+    mode: "structured",
+    fallbackStage: "primary",
+    structuredAdapter: decision.structuredAdapter,
+    memoryCompatibilityKey,
+    routingVersion: decision.routingVersion,
+    useCase: "profile_insights",
+    routingReasonTags: decision.routingReasonTags,
+    attemptReason: "primary_selected_route",
+    fallbackHopCount: 0,
+  });
+
+  if (decision.modelRole !== "insights_balanced") {
+    attempts.push({
       provider: decision.provider,
       modelRole: "insights_balanced",
       selectedModel: balancedModel,
@@ -774,18 +789,21 @@ export function buildProfileInsightsRoutingAttempts(
       routingVersion: decision.routingVersion,
       useCase: "profile_insights",
       routingReasonTags: decision.routingReasonTags,
-      attemptReason: "balanced_structured_after_fast_failure",
-      fallbackHopCount: 1,
-    },
-  ];
+      attemptReason:
+        timeoutProfile === "async_job"
+          ? "balanced_structured_after_quality_failure"
+          : "balanced_structured_after_primary_failure",
+      fallbackHopCount: attempts.length,
+    });
+  }
 
-  if (decision.escalationEligible) {
+  if (decision.escalationEligible && decision.modelRole !== "quality_escalation") {
     const escalationModel = resolveModelForRole(
       env,
       decision.provider,
       "quality_escalation"
     );
-    if (escalationModel !== balancedModel) {
+    if (escalationModel !== decision.selectedModel && escalationModel !== balancedModel) {
       attempts.push({
         modelRole: "quality_escalation",
         provider: decision.provider,
@@ -821,7 +839,7 @@ export function buildProfileInsightsRoutingAttempts(
     fallbackStage: "sync_fallback_plain_text",
     structuredAdapter: resolveModelCapability(
       decision.provider,
-      syncFallbackModel
+      profilePlainTextFallback.selectedModel
     ).structuredAdapter,
     memoryCompatibilityKey,
     routingVersion: decision.routingVersion,
@@ -832,6 +850,28 @@ export function buildProfileInsightsRoutingAttempts(
   });
 
   return dedupeProfileInsightsAttempts(attempts);
+}
+
+function resolveProfileInsightsAsyncPlainTextFallback(
+  env: EnvLike,
+  decision: RoutingDecision,
+  balancedModel: string
+): { modelRole: CoachModelRole; selectedModel: string } {
+  const qualityModel = decision.escalationEligible
+    ? resolveModelForRole(env, decision.provider, "quality_escalation")
+    : undefined;
+
+  if (qualityModel) {
+    return {
+      modelRole: "quality_escalation",
+      selectedModel: qualityModel,
+    };
+  }
+
+  return {
+    modelRole: "insights_balanced",
+    selectedModel: balancedModel,
+  };
 }
 
 function resolveProfileInsightsGeminiPlainTextFallback(
@@ -856,32 +896,53 @@ function resolveProfileInsightsGeminiPlainTextFallback(
   };
 }
 
-export function resolveProfileInsightsExecutionProfile(
-  provider: CoachAIProvider
-): {
+function defaultProfileInsightsModelRole(
+  env: EnvLike,
+  timeoutProfile: "sync" | "async_job" | undefined
+): CoachModelRole {
+  if (timeoutProfile === "async_job" && isQualityEscalationEnabled(env)) {
+    return "quality_escalation";
+  }
+
+  return "insights_balanced";
+}
+
+export function resolveProfileInsightsExecutionProfile(): {
   contextProfile: CoachContextProfile;
   promptProfile: string;
   payloadTier: CoachPayloadTier;
   promptFamily: string;
   contextFamily: string;
 } {
-  if (provider === "gemini") {
-    return {
-      contextProfile: "rich_async_analytics_v1",
-      promptProfile: "profile_rich_async_analytics_v1",
-      payloadTier: "full",
-      promptFamily: "profile_rich_async_analytics_v1",
-      contextFamily: "rich_async_family",
-    };
-  }
-
   return {
-    contextProfile: "compact_sync_v2",
-    promptProfile: "profile_compact_context_v2",
-    payloadTier: "compact",
-    promptFamily: "profile_sync_v1",
-    contextFamily: "compact_sync_family",
+    contextProfile: "rich_async_analytics_v1",
+    promptProfile: "profile_rich_async_analytics_v2",
+    payloadTier: "full",
+    promptFamily: "profile_quality_first_rich_async_v2",
+    contextFamily: "rich_async_analytics_family",
   };
+}
+
+function buildProfileInsightsRoutingReasonTags(
+  env: EnvLike,
+  provider: CoachAIProvider,
+  modelRole: CoachModelRole,
+  timeoutProfile: "sync" | "async_job" | undefined,
+  executionProfile: ReturnType<typeof resolveProfileInsightsExecutionProfile>
+): string[] {
+  return [
+    "operation:profile_insights",
+    `provider:${provider}`,
+    "use_case:profile_insights",
+    `model_role:${modelRole}`,
+    `timeout_profile:${timeoutProfile ?? "sync"}`,
+    `context_family:${executionProfile.contextFamily}`,
+    `primary_context:${executionProfile.contextProfile}`,
+    `prompt_family:${executionProfile.promptFamily}`,
+    "routing_mode:quality_first",
+    `routing_enabled:${isModelRoutingEnabled(env) ? "true" : "false"}`,
+    `quality_escalation_enabled:${isQualityEscalationEnabled(env) ? "true" : "false"}`,
+  ];
 }
 
 export function resolvePrimaryChatExecutionProfile(
@@ -1095,23 +1156,6 @@ function buildSummaryRoutingReasonTags(
     "timeout_profile:async_job",
     "context_family:rich_async_family",
     "primary_context:rich_async_v1",
-    `routing_enabled:${isModelRoutingEnabled(env) ? "true" : "false"}`,
-  ];
-}
-
-function buildProfileInsightsRoutingReasonTags(
-  env: EnvLike,
-  provider: CoachAIProvider,
-  modelRole: CoachModelRole
-): string[] {
-  return [
-    "operation:profile_insights",
-    `provider:${provider}`,
-    "use_case:profile_insights",
-    `model_role:${modelRole}`,
-    "timeout_profile:sync",
-    "context_family:compact_sync_family",
-    "primary_context:compact_sync_v2",
     `routing_enabled:${isModelRoutingEnabled(env) ? "true" : "false"}`,
   ];
 }
