@@ -47,6 +47,7 @@
 "action.done" = "Готово";
 
 "program.create" = "Новая программа";
+"program.edit" = "Изменить программу";
 "program.name" = "Название программы";
 "program.default_name" = "Моя программа";
 
@@ -97,6 +98,7 @@
 "workout.reps_compact_label" = "Повт.";
 "workout.weight" = "Вес, кг";
 "workout.name" = "Название тренировки";
+"workout.edit" = "Изменить тренировку";
 "workout.focus" = "Фокус / группы мышц";
 "workout.default_name" = "Новая тренировка";
 "workout.focus_empty" = "Фокус пока не задан.";

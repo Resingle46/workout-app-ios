@@ -5236,7 +5236,7 @@ private struct CoachConversationThread: View {
 
     @State private var contentHeight: CGFloat = 0
 
-    private let minConversationHeight: CGFloat = 270
+    private let minConversationHeight: CGFloat = 350
     private let maxConversationHeight: CGFloat = 2500
 
     private var resolvedConversationHeight: CGFloat {

@@ -9,6 +9,7 @@ struct WorkoutTemplateDetailView: View {
 
     @State private var showingAddExercise = false
     @State private var editingExercise: EditableTemplateExercise?
+    @State private var editingWorkoutMetadata: EditableWorkoutMetadata?
 
     private var workout: WorkoutTemplate? {
         store.workout(programID: programID, workoutID: workoutID)
@@ -56,6 +57,22 @@ struct WorkoutTemplateDetailView: View {
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .topBarTrailing) {
+                        Menu {
+                            Button {
+                                editingWorkoutMetadata = EditableWorkoutMetadata(
+                                    id: workout.id,
+                                    title: workout.title,
+                                    focus: workout.focus
+                                )
+                            } label: {
+                                Label("action.edit", systemImage: "pencil")
+                            }
+                        } label: {
+                            Image(systemName: "ellipsis.circle")
+                                .foregroundStyle(AppTheme.primaryText)
+                        }
+                    }
+                    ToolbarItem(placement: .topBarTrailing) {
                         Button {
                             showingAddExercise = true
                         } label: {
@@ -66,6 +83,14 @@ struct WorkoutTemplateDetailView: View {
                 }
                 .sheet(isPresented: $showingAddExercise) {
                     AddExerciseToWorkoutView(workoutID: workoutID)
+                }
+                .sheet(item: $editingWorkoutMetadata) { editableWorkout in
+                    CreateWorkoutView(
+                        programID: programID,
+                        workoutID: editableWorkout.id,
+                        initialTitle: editableWorkout.title,
+                        initialFocus: editableWorkout.focus
+                    )
                 }
                 .sheet(item: $editingExercise) { exercise in
                     TemplateExerciseConfigSheet(
@@ -276,6 +301,12 @@ private struct EditableTemplateExercise: Identifiable {
     let setsCount: Int
     let reps: Int
     let suggestedWeight: Double
+}
+
+private struct EditableWorkoutMetadata: Identifiable {
+    let id: UUID
+    let title: String
+    let focus: String
 }
 
 struct AddExerciseToWorkoutView: View {

@@ -985,6 +985,13 @@ final class WorkoutSummaryStore {
         }
     }
 
+    func discardSummary(for sessionID: UUID) {
+        cancelPrewarmTask(for: sessionID)
+        cancelPollTask(for: sessionID)
+        cancelDeferredResumeTask(for: sessionID)
+        sessionStates.removeValue(forKey: sessionID)
+    }
+
     private func executeDebouncedPrewarm(
         _ preparedRequest: WorkoutSummaryPreparedRequest,
         sessionID: UUID

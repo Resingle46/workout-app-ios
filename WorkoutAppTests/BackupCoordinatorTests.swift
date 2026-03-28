@@ -157,6 +157,103 @@ final class BackupCoordinatorTests: XCTestCase {
     }
 
     @MainActor
+    func testAppStoreUpdateProgramChangesStoredTitle() throws {
+        let seed = SeedData.make()
+        let programID = UUID(uuidString: "10000000-0000-0000-0000-000000000001")!
+        let workoutID = UUID(uuidString: "20000000-0000-0000-0000-000000000001")!
+        let snapshot = AppSnapshot(
+            programs: [
+                WorkoutProgram(
+                    id: programID,
+                    title: "Old Program",
+                    workouts: [
+                        WorkoutTemplate(
+                            id: workoutID,
+                            title: "Workout A",
+                            focus: "Chest",
+                            exercises: []
+                        )
+                    ]
+                )
+            ],
+            exercises: seed.exercises,
+            history: [],
+            profile: .empty
+        )
+
+        let store = AppStore()
+        store.apply(snapshot: snapshot)
+        store.updateProgram(id: programID, title: "Updated Program")
+
+        XCTAssertEqual(store.program(for: programID)?.title, "Updated Program")
+    }
+
+    @MainActor
+    func testAppStoreUpdateWorkoutChangesTemplateAndActiveSessionTitle() throws {
+        let seed = SeedData.make()
+        let programID = UUID(uuidString: "30000000-0000-0000-0000-000000000001")!
+        let workoutID = UUID(uuidString: "40000000-0000-0000-0000-000000000001")!
+        let snapshot = AppSnapshot(
+            programs: [
+                WorkoutProgram(
+                    id: programID,
+                    title: "Program",
+                    workouts: [
+                        WorkoutTemplate(
+                            id: workoutID,
+                            title: "Old Workout",
+                            focus: "Legs",
+                            exercises: []
+                        )
+                    ]
+                )
+            ],
+            exercises: seed.exercises,
+            history: [],
+            profile: .empty
+        )
+
+        let store = AppStore()
+        store.apply(snapshot: snapshot)
+        let workout = try XCTUnwrap(store.workout(programID: programID, workoutID: workoutID))
+        store.startWorkout(template: workout)
+
+        store.updateWorkout(
+            programID: programID,
+            workoutID: workoutID,
+            title: "Updated Workout",
+            focus: "Full body"
+        )
+
+        XCTAssertEqual(
+            store.workout(programID: programID, workoutID: workoutID)?.title,
+            "Updated Workout"
+        )
+        XCTAssertEqual(
+            store.workout(programID: programID, workoutID: workoutID)?.focus,
+            "Full body"
+        )
+        XCTAssertEqual(store.activeSession?.title, "Updated Workout")
+    }
+
+    @MainActor
+    func testAppStoreCancelActiveWorkoutClearsSession() throws {
+        let store = AppStore()
+        let workout = WorkoutTemplate(
+            title: "Temporary Workout",
+            focus: "",
+            exercises: []
+        )
+
+        store.startWorkout(template: workout)
+        XCTAssertNotNil(store.activeSession)
+
+        store.cancelActiveWorkout()
+
+        XCTAssertNil(store.activeSession)
+    }
+
+    @MainActor
     func testAppStoreApplyNormalizesLegacySeedCategoryIdentifierForCustomExercise() {
         let legacyBackCategoryID = UUID(uuidString: "A1000000-0000-0000-0000-000000000002")!
         let customID = UUID(uuidString: "ABABABAB-ABAB-4BAB-8BAB-ABABABABABAB")!

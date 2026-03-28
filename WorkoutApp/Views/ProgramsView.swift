@@ -140,6 +140,8 @@ struct ProgramDetailView: View {
 
     let programID: UUID
     @State private var showingCreateWorkout = false
+    @State private var editingProgram: EditableProgram?
+    @State private var editingWorkout: EditableWorkout?
 
     private var program: WorkoutProgram? {
         store.program(for: programID)
@@ -203,6 +205,16 @@ struct ProgramDetailView: View {
                                             Spacer()
 
                                             Menu {
+                                                Button {
+                                                    editingWorkout = EditableWorkout(
+                                                        id: workout.id,
+                                                        title: workout.title,
+                                                        focus: workout.focus
+                                                    )
+                                                } label: {
+                                                    Label("action.edit", systemImage: "pencil")
+                                                }
+
                                                 Button(role: .destructive) {
                                                     store.deleteWorkout(programID: programID, workoutID: workout.id)
                                                 } label: {
@@ -242,6 +254,15 @@ struct ProgramDetailView: View {
                     ToolbarItem(placement: .topBarTrailing) {
                         Menu {
                             Button {
+                                editingProgram = EditableProgram(
+                                    id: program.id,
+                                    title: program.title
+                                )
+                            } label: {
+                                Label("action.edit", systemImage: "pencil")
+                            }
+
+                            Button {
                                 showingCreateWorkout = true
                             } label: {
                                 Label("action.add_workout", systemImage: "plus")
@@ -262,6 +283,20 @@ struct ProgramDetailView: View {
                 .sheet(isPresented: $showingCreateWorkout) {
                     CreateWorkoutView(programID: programID)
                 }
+                .sheet(item: $editingProgram) { editableProgram in
+                    CreateProgramView(
+                        programID: editableProgram.id,
+                        initialTitle: editableProgram.title
+                    )
+                }
+                .sheet(item: $editingWorkout) { editableWorkout in
+                    CreateWorkoutView(
+                        programID: programID,
+                        workoutID: editableWorkout.id,
+                        initialTitle: editableWorkout.title,
+                        initialFocus: editableWorkout.focus
+                    )
+                }
                 .appScreenBackground()
             } else {
                 ContentUnavailableView("error.not_found", systemImage: "exclamationmark.triangle")
@@ -274,7 +309,17 @@ struct ProgramDetailView: View {
 struct CreateProgramView: View {
     @Environment(AppStore.self) private var store
     @Environment(\.dismiss) private var dismiss
-    @State private var title = ""
+    let programID: UUID?
+    @State private var title: String
+
+    private var isEditing: Bool {
+        programID != nil
+    }
+
+    init(programID: UUID? = nil, initialTitle: String = "") {
+        self.programID = programID
+        _title = State(initialValue: initialTitle)
+    }
 
     var body: some View {
         NavigationStack {
@@ -289,7 +334,7 @@ struct CreateProgramView: View {
                 }
                 .padding(20)
             }
-            .navigationTitle("program.create")
+            .navigationTitle(isEditing ? "program.edit" : "program.create")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -298,7 +343,15 @@ struct CreateProgramView: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("action.save") {
                         let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
-                        store.addProgram(title: trimmedTitle.isEmpty ? NSLocalizedString("program.default_name", comment: "") : trimmedTitle)
+                        let resolvedTitle = trimmedTitle.isEmpty
+                            ? NSLocalizedString("program.default_name", comment: "")
+                            : trimmedTitle
+
+                        if let programID {
+                            store.updateProgram(id: programID, title: resolvedTitle)
+                        } else {
+                            store.addProgram(title: resolvedTitle)
+                        }
                         dismiss()
                     }
                     .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -314,9 +367,26 @@ struct CreateWorkoutView: View {
     @Environment(\.dismiss) private var dismiss
 
     let programID: UUID
+    let workoutID: UUID?
 
-    @State private var title = ""
-    @State private var focus = ""
+    @State private var title: String
+    @State private var focus: String
+
+    private var isEditing: Bool {
+        workoutID != nil
+    }
+
+    init(
+        programID: UUID,
+        workoutID: UUID? = nil,
+        initialTitle: String = "",
+        initialFocus: String = ""
+    ) {
+        self.programID = programID
+        self.workoutID = workoutID
+        _title = State(initialValue: initialTitle)
+        _focus = State(initialValue: initialFocus)
+    }
 
     var body: some View {
         NavigationStack {
@@ -333,7 +403,7 @@ struct CreateWorkoutView: View {
                 }
                 .padding(20)
             }
-            .navigationTitle("action.add_workout")
+            .navigationTitle(isEditing ? "workout.edit" : "action.add_workout")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -343,11 +413,24 @@ struct CreateWorkoutView: View {
                     Button("action.save") {
                         let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
                         let trimmedFocus = focus.trimmingCharacters(in: .whitespacesAndNewlines)
-                        store.addWorkout(
-                            programID: programID,
-                            title: trimmedTitle.isEmpty ? NSLocalizedString("workout.default_name", comment: "") : trimmedTitle,
-                            focus: trimmedFocus
-                        )
+                        let resolvedTitle = trimmedTitle.isEmpty
+                            ? NSLocalizedString("workout.default_name", comment: "")
+                            : trimmedTitle
+
+                        if let workoutID {
+                            store.updateWorkout(
+                                programID: programID,
+                                workoutID: workoutID,
+                                title: resolvedTitle,
+                                focus: trimmedFocus
+                            )
+                        } else {
+                            store.addWorkout(
+                                programID: programID,
+                                title: resolvedTitle,
+                                focus: trimmedFocus
+                            )
+                        }
                         dismiss()
                     }
                     .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -356,6 +439,17 @@ struct CreateWorkoutView: View {
             .appScreenBackground()
         }
     }
+}
+
+private struct EditableProgram: Identifiable {
+    let id: UUID
+    let title: String
+}
+
+private struct EditableWorkout: Identifiable {
+    let id: UUID
+    let title: String
+    let focus: String
 }
 
 private struct AppInputField: View {

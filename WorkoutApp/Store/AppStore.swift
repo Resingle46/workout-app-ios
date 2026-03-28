@@ -309,8 +309,18 @@ final class AppStore {
         activeSession = session
     }
 
+    func cancelActiveWorkout() {
+        activeSession = nil
+    }
+
     func addProgram(title: String) {
         programs.insert(WorkoutProgram(title: title, workouts: []), at: 0)
+        save()
+    }
+
+    func updateProgram(id: UUID, title: String) {
+        guard let programIndex = programs.firstIndex(where: { $0.id == id }) else { return }
+        programs[programIndex].title = title
         save()
     }
 
@@ -322,6 +332,22 @@ final class AppStore {
     func addWorkout(programID: UUID, title: String, focus: String) {
         guard let programIndex = programs.firstIndex(where: { $0.id == programID }) else { return }
         programs[programIndex].workouts.append(WorkoutTemplate(title: title, focus: focus, exercises: []))
+        save()
+    }
+
+    func updateWorkout(programID: UUID, workoutID: UUID, title: String, focus: String) {
+        guard let programIndex = programs.firstIndex(where: { $0.id == programID }),
+              let workoutIndex = programs[programIndex].workouts.firstIndex(where: { $0.id == workoutID }) else {
+            return
+        }
+
+        programs[programIndex].workouts[workoutIndex].title = title
+        programs[programIndex].workouts[workoutIndex].focus = focus
+
+        if activeSession?.workoutTemplateID == workoutID {
+            activeSession?.title = title
+        }
+
         save()
     }
 

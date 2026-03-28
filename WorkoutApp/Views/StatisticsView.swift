@@ -345,6 +345,7 @@ struct WorkoutSummaryView: View {
     var mode: WorkoutSummaryMode = .history
     var onContinue: (() -> Void)? = nil
     var onDone: (() -> Void)? = nil
+    var onCancel: (() -> Void)? = nil
 
     var body: some View {
         ScrollView {
@@ -427,7 +428,7 @@ struct WorkoutSummaryView: View {
             if mode == .completion {
                 continueCTA
             } else if mode == .previousWorkout {
-                startWorkoutCTA
+                previousWorkoutCTAs
             }
         }
         .navigationTitle(mode == .history ? session.title : "")
@@ -466,10 +467,31 @@ struct WorkoutSummaryView: View {
         }
     }
 
-    private var startWorkoutCTA: some View {
-        summaryCTA("action.start_workout") {
+    private var startWorkoutCTAButton: some View {
+        Button("action.start_workout") {
             onDone?()
         }
+        .buttonStyle(AppPrimaryButtonStyle())
+    }
+
+    private var previousWorkoutCTAs: some View {
+        VStack(spacing: 0) {
+            Divider()
+                .overlay(AppTheme.stroke)
+
+            HStack(spacing: 12) {
+                Button("action.cancel") {
+                    onCancel?()
+                }
+                .buttonStyle(AppSecondaryButtonStyle())
+
+                startWorkoutCTAButton
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 14)
+            .padding(.bottom, 12)
+        }
+        .background(AppTheme.background)
     }
 
     private func summaryCTA(_ titleKey: LocalizedStringKey, action: @escaping () -> Void) -> some View {

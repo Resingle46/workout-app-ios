@@ -47,6 +47,7 @@
 "action.done" = "Done";
 
 "program.create" = "New Program";
+"program.edit" = "Edit Program";
 "program.name" = "Program name";
 "program.default_name" = "My Program";
 
@@ -97,6 +98,7 @@
 "workout.reps_compact_label" = "Reps";
 "workout.weight" = "Weight, kg";
 "workout.name" = "Workout name";
+"workout.edit" = "Edit Workout";
 "workout.focus" = "Focus / muscle groups";
 "workout.default_name" = "New Workout";
 "workout.focus_empty" = "Focus area is not set yet.";
