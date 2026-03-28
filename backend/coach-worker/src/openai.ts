@@ -496,8 +496,8 @@ export class WorkersAICoachService implements CoachInferenceService {
             ...parsePlainProfileInsights(
               extractPlainText(fallbackInvocation.rawResponse, "profile insights")
             ),
-            generationStatus: "fallback",
-            insightSource: "fallback",
+            generationStatus: "model",
+            insightSource: "fresh_model",
           },
           localFallback,
           attemptExecution.derivedAnalytics

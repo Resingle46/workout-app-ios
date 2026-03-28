@@ -2411,7 +2411,18 @@ function normalizeReusableProfileInsightsCacheEntry(
 function normalizeReusableDegradedProfileInsightsCacheEntry(
   response: CoachProfileInsightsResponse | null
 ): CoachProfileInsightsResponse | null {
-  return response;
+  if (!response) {
+    return null;
+  }
+
+  if (response.generationStatus !== "model") {
+    return response;
+  }
+
+  return {
+    ...response,
+    insightSource: "cached_model",
+  };
 }
 
 function resolveProfileInsightsResponseSource(

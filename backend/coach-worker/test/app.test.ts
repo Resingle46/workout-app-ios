@@ -1023,6 +1023,72 @@ describe("coach worker app", () => {
     });
   });
 
+  it("marks degraded sidecar model insights as cached without rerunning inference", async () => {
+    const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
+    let inferenceCalls = 0;
+    const body = makeProfileInsightsRequestFixture();
+    const context = await repository.resolveCoachContext(body);
+    const key = storageKeyFromMetadata(
+      context.contextHash,
+      {
+        contextProfile: "compact_sync_v2",
+        contextVersion: context.contextVersion,
+        analyticsVersion: context.analyticsVersion,
+        promptProfile: "profile_compact_context_v2",
+        memoryProfile: "compact_v1",
+      },
+      "test.v1",
+      DEFAULT_AI_MODEL
+    );
+    await repository.storeDegradedInsightsCache(body.installID, key, {
+      summary: "Cached degraded model summary",
+      recommendations: ["Cached degraded model recommendation"],
+      generationStatus: "model",
+      insightSource: "fresh_model",
+    });
+
+    const app = createApp({
+      createInferenceService: () => ({
+        async generateProfileInsights() {
+          inferenceCalls += 1;
+          return {
+            data: {
+              summary: "Should not run inference",
+              recommendations: ["Should not run inference"],
+              generationStatus: "model",
+              insightSource: "fresh_model",
+            },
+            model: DEFAULT_AI_MODEL,
+            mode: "structured",
+          };
+        },
+        async generateWorkoutSummary() {
+          throw new Error("not used");
+        },
+        async generateChat() {
+          throw new Error("not used");
+        },
+      }),
+      createStateRepository: () => repository,
+    });
+
+    const response = await app.fetch(
+      authedRequest("https://coach.example.workers.dev/v1/coach/profile-insights", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+      makeEnv()
+    );
+
+    expect(response.status).toBe(200);
+    expect(inferenceCalls).toBe(0);
+    await expect(response.json()).resolves.toMatchObject({
+      summary: "Cached degraded model summary",
+      generationStatus: "model",
+      insightSource: "cached_model",
+    });
+  });
+
   it("bypasses degraded sidecar cache on force refresh", async () => {
     const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
     const getInsightsCacheSpy = vi.spyOn(repository, "getInsightsCache");
@@ -1354,8 +1420,8 @@ describe("coach worker app", () => {
             data: {
               summary: "Plain text fallback summary",
               recommendations: ["Plain text fallback recommendation"],
-              generationStatus: "fallback",
-              insightSource: "fallback",
+              generationStatus: "model",
+              insightSource: "fresh_model",
             },
             model: "@cf/meta/llama-3.1-8b-instruct-fast",
             selectedModel: "@cf/meta/llama-3.1-8b-instruct-fast",
@@ -1385,8 +1451,8 @@ describe("coach worker app", () => {
       expect(response.status).toBe(200);
       await expect(response.json()).resolves.toMatchObject({
         summary: "Plain text fallback summary",
-        generationStatus: "fallback",
-        insightSource: "fallback",
+        generationStatus: "model",
+        insightSource: "fresh_model",
       });
       await expect(
         repository.getInsightsCache(body.installID, key)
@@ -1395,8 +1461,8 @@ describe("coach worker app", () => {
         repository.getDegradedInsightsCache(body.installID, key)
       ).resolves.toMatchObject({
         summary: "Plain text fallback summary",
-        generationStatus: "fallback",
-        insightSource: "fallback",
+        generationStatus: "model",
+        insightSource: "fresh_model",
       });
       expect(parseLoggedPayload(logSpy)).toMatchObject({
         responseSource: "live_fallback",
@@ -3552,8 +3618,8 @@ describe("WorkersAICoachService", () => {
     expect(result.data.recommendations).toEqual([
       "Keep volume stable this week.",
     ]);
-    expect(result.data.generationStatus).toBe("fallback");
-    expect(result.data.insightSource).toBe("fallback");
+    expect(result.data.generationStatus).toBe("model");
+    expect(result.data.insightSource).toBe("fresh_model");
   });
 
   it("uses responseJsonSchema for Gemini structured profile insights requests", async () => {
@@ -3985,8 +4051,8 @@ describe("WorkersAICoachService", () => {
     expect(result.data.recommendations).toEqual([
       "Hold volume steady for one more week.",
     ]);
-    expect(result.data.generationStatus).toBe("fallback");
-    expect(result.data.insightSource).toBe("fallback");
+    expect(result.data.generationStatus).toBe("model");
+    expect(result.data.insightSource).toBe("fresh_model");
   });
 
   it("drops to local fallback when the reserved plain-text budget is no longer available", async () => {
@@ -4063,8 +4129,8 @@ describe("WorkersAICoachService", () => {
     expect(result.data.recommendations).toEqual([
       "Keep weekly load stable for one more week.",
     ]);
-    expect(result.data.generationStatus).toBe("fallback");
-    expect(result.data.insightSource).toBe("fallback");
+    expect(result.data.generationStatus).toBe("model");
+    expect(result.data.insightSource).toBe("fresh_model");
   });
 
   it("keeps actual attempt-specific prompt and routing metadata in profile failure logs", async () => {
