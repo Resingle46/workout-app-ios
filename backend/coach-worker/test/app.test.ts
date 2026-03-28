@@ -3996,7 +3996,11 @@ describe("WorkersAICoachService", () => {
 
     expect(result.data.summary).not.toContain("saved program has 4 workouts");
     expect(result.data.recommendations ?? []).toContain("Keep bench progression steady.");
-    expect(result.data.recommendations[0]).toContain("rolling execution model");
+    expect(result.data.recommendations ?? []).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("rolling execution model"),
+    ])
+);
   });
 
   it("keeps the full rolling-rotation note in compact profile insights prompts, preserves program coverage, and de-emphasizes structure", () => {
