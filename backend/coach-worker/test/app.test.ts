@@ -29,6 +29,8 @@ import {
   buildProfileInsightsRoutingAttempts,
   buildProfileInsightsRoutingDecision,
   resolveModelForRole,
+} from "../src/routing";
+import {
   normalizeAsyncProfileInsightsResult,
 } from "../src/profile-insights-normalization";
 import {
@@ -5722,7 +5724,11 @@ describe("async profile insights job normalization", () => {
     };
 
     const normalized = normalizeAsyncProfileInsightsResult(oversizedResult);
-    
+
+    expect(normalized).not.toBeNull();
+    if (!normalized) {
+      throw new Error("Expected normalized async profile insights result");
+    }
     expect(normalized.topConstraints[0].length).toBeLessThanOrEqual(320);
     expect(normalized.topConstraints[0].length).toBeGreaterThan(0);
   });
@@ -5751,7 +5757,11 @@ describe("async profile insights job normalization", () => {
     };
 
     const normalized = normalizeAsyncProfileInsightsResult(oversizedResult);
-    
+
+    expect(normalized).not.toBeNull();
+    if (!normalized) {
+      throw new Error("Expected normalized async profile insights result");
+    }
     expect(normalized.executionContext?.evidence[0].length).toBeLessThanOrEqual(240);
     expect(normalized.executionContext?.evidence[0].length).toBeGreaterThan(0);
   });
@@ -5779,15 +5789,19 @@ describe("async profile insights job normalization", () => {
     };
 
     const normalized = normalizeAsyncProfileInsightsResult(oversizedResult);
-    
+
+    expect(normalized).not.toBeNull();
+    if (!normalized) {
+      throw new Error("Expected normalized async profile insights result");
+    }
     expect(normalized.summary).toHaveLength(2200);
     expect(normalized.executionContext?.userNote).toHaveLength(500);
   });
 
   it("handles null/undefined input gracefully", async () => {
     expect(normalizeAsyncProfileInsightsResult(null)).toBe(null);
-    expect(normalizeAsyncProfileInsightsResult(undefined)).toBe(undefined);
-    expect(normalizeAsyncProfileInsightsResult("not an object")).toBe("not an object");
+    expect(normalizeAsyncProfileInsightsResult(undefined)).toBe(null);
+    expect(normalizeAsyncProfileInsightsResult("not an object")).toBe(null);
   });
 
   it("normalizes all string arrays with correct limits", async () => {
@@ -5802,7 +5816,11 @@ describe("async profile insights job normalization", () => {
     };
 
     const normalized = normalizeAsyncProfileInsightsResult(oversizedResult);
-    
+
+    expect(normalized).not.toBeNull();
+    if (!normalized) {
+      throw new Error("Expected normalized async profile insights result");
+    }
     expect(normalized.keyObservations.length).toBeLessThanOrEqual(8); // max 8
     expect(normalized.topConstraints.length).toBeLessThanOrEqual(6); // max 6
     expect(normalized.recommendations.length).toBeLessThanOrEqual(8); // max 8

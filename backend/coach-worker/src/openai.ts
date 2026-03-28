@@ -2233,6 +2233,39 @@ function ensureTrailingPeriod(value: string): string {
   return /[.?!]$/.test(trimmed) ? trimmed : `${trimmed}.`;
 }
 
+function normalizeWorkoutSummaryStringArray(
+  value: string[] | undefined,
+  maxItems: number,
+  maxLength: number
+): string[] {
+  return dedupeText((value ?? []).map((item) => cleanPlainParagraph(item)))
+    .map((item) => item.slice(0, maxLength))
+    .filter(Boolean)
+    .slice(0, maxItems);
+}
+
+function normalizeWorkoutSummaryResponse(
+  response: Partial<CoachWorkoutSummaryContent> & {
+    headline: string;
+    summary: string;
+  }
+): CoachWorkoutSummaryContent {
+  return {
+    headline: cleanPlainParagraph(response.headline).slice(0, 160),
+    summary: cleanPlainParagraph(response.summary).slice(0, 900),
+    highlights: normalizeWorkoutSummaryStringArray(
+      response.highlights,
+      4,
+      240
+    ),
+    nextWorkoutFocus: normalizeWorkoutSummaryStringArray(
+      response.nextWorkoutFocus,
+      3,
+      220
+    ),
+  };
+}
+
 function normalizeProfileInsightsResponse(
   response: Partial<CoachProfileInsightsContent> & {
     summary: string;
@@ -2429,7 +2462,7 @@ function coerceProfileInsightsExecutionContext(
         : "unknown",
     userNote: firstNonEmptyText([value.userNote])?.slice(0, 500),
     explanation: explanation.slice(0, 1200),
-    evidence: coerceProfileInsightStrings(value.evidence, 8),
+    evidence: coerceProfileInsightStrings(value.evidence, 8, 240),
   };
 }
 
@@ -2525,9 +2558,13 @@ function coerceProfileInsightsFromPlainText(
   };
 }
 
-function coerceProfileInsightStrings(value: unknown, maxItems: number): string[] {
+function coerceProfileInsightStrings(
+  value: unknown,
+  maxItems: number,
+  maxLength = 320
+): string[] {
   if (typeof value === "string") {
-    return splitRecommendationText(value, maxItems);
+    return splitRecommendationText(value, maxItems, maxLength);
   }
 
   if (Array.isArray(value)) {
@@ -2552,7 +2589,7 @@ function coerceProfileInsightStrings(value: unknown, maxItems: number): string[]
         return text ? [text] : [];
       })
     )
-      .map((item) => item.slice(0, 320))
+      .map((item) => item.slice(0, maxLength))
       .filter(Boolean)
       .slice(0, maxItems);
   }
@@ -2564,14 +2601,19 @@ function coerceProfileInsightStrings(value: unknown, maxItems: number): string[]
         value.lines ??
         value.bullets ??
         value.recommendations,
-      maxItems
+      maxItems,
+      maxLength
     );
   }
 
   return [];
 }
 
-function splitRecommendationText(text: string, maxItems = 8): string[] {
+function splitRecommendationText(
+  text: string,
+  maxItems = 8,
+  maxLength = 320
+): string[] {
   const normalized = text.replace(/\r\n/g, "\n").trim();
   if (!normalized) {
     return [];
@@ -2583,7 +2625,7 @@ function splitRecommendationText(text: string, maxItems = 8): string[] {
     .filter((value): value is string => Boolean(value));
   if (bulletRecommendations.length > 0) {
     return dedupeText(bulletRecommendations)
-      .map((item) => item.slice(0, 320))
+      .map((item) => item.slice(0, maxLength))
       .filter(Boolean)
       .slice(0, maxItems);
   }
@@ -2594,7 +2636,7 @@ function splitRecommendationText(text: string, maxItems = 8): string[] {
       .map((paragraph) => cleanPlainParagraph(paragraph))
       .filter(Boolean)
   )
-    .map((item) => item.slice(0, 320))
+    .map((item) => item.slice(0, maxLength))
     .filter(Boolean)
     .slice(0, maxItems);
 }
@@ -2604,6 +2646,9 @@ function normalizeProfileInsightStringArray(
   maxItems: number
 ): string[] {
   return dedupeText((value ?? []).map((item) => cleanPlainParagraph(item)))
+    .map((item) => item.slice(0, 320))
+    .filter(Boolean)
+    .slice(0, maxItems);
 }
 
 export { normalizeProfileInsightStringArray, cleanPlainParagraph, coerceProfileInsightsExecutionContext };

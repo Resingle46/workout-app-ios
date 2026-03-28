@@ -1,5 +1,9 @@
 import { profileInsightsJobResultSchema } from "./schemas";
-import { normalizeProfileInsightStringArray, cleanPlainParagraph, coerceProfileInsightsExecutionContext } from "./openai";
+import {
+  cleanPlainParagraph,
+  coerceProfileInsightsExecutionContext,
+  normalizeProfileInsightStringArray,
+} from "./openai";
 import type { CoachProfileInsightsJobResult } from "./schemas";
 
 /**
@@ -88,10 +92,15 @@ export function normalizeAsyncProfileInsightsResult(
     }
 
     if (typeof (result as any).inferenceMode === "string") {
-      const validModes = ["structured", "plain_text"] as const;
-      cleanResult.inferenceMode = validModes.includes((result as any).inferenceMode as any)
-        ? (result as any).inferenceMode
-        : "structured";
+      const rawMode = (result as any).inferenceMode;
+      cleanResult.inferenceMode =
+        rawMode === "structured" ||
+        rawMode === "plain_text_fallback" ||
+        rawMode === "degraded_fallback"
+          ? rawMode
+          : rawMode === "plain_text"
+            ? "plain_text_fallback"
+            : "structured";
     } else {
       cleanResult.inferenceMode = "structured";
     }

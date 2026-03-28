@@ -151,10 +151,8 @@ export async function executeProfileInsightsJob(
           const inferenceMode =
             normalizeProfileInsightsInferenceMode(inferenceResult.mode) ??
             "degraded_fallback";
-
-          await stateRepository.completeProfileInsightsJob(jobID, {
-            completedAt,
-            result: normalizeAsyncProfileInsightsResult({
+          const normalizedResult =
+            normalizeAsyncProfileInsightsResult({
               summary: inferenceResult.data.summary,
               keyObservations: inferenceResult.data.keyObservations ?? [],
               topConstraints: inferenceResult.data.topConstraints ?? [],
@@ -170,7 +168,23 @@ export async function executeProfileInsightsJob(
                 inferenceResult.fallbackModelDurationMs ??
                 inferenceResult.modelDurationMs,
               totalJobDurationMs,
-            }),
+            }) ?? {
+              summary:
+                "Profile insights processing completed with validation issues.",
+              keyObservations: [],
+              topConstraints: [],
+              recommendations: [],
+              confidenceNotes: [],
+              generationStatus: "fallback" as const,
+              insightSource: "fallback" as const,
+              inferenceMode: "structured" as const,
+              modelDurationMs: 0,
+              totalJobDurationMs,
+            };
+
+          await stateRepository.completeProfileInsightsJob(jobID, {
+            completedAt,
+            result: normalizedResult,
             promptBytes: inferenceResult.promptBytes,
             fallbackPromptBytes: inferenceResult.fallbackPromptBytes,
             modelDurationMs:
