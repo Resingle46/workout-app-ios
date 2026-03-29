@@ -62,6 +62,13 @@ private let coachStatedWeeklyFrequencyPatterns: [NSRegularExpression] = [
     try! NSRegularExpression(pattern: #"(\d+)\s*(?:days?|sessions?|workouts?)\s*(?:per|a)\s*week"#, options: .caseInsensitive)
 ]
 
+private enum ProgressionInputBuilder {
+    static let maximumExposureCount = 4
+    static let minimumUsableCompletedSetCount = 2
+    static let maximumComparableSetCountDelta = 1
+    static let maximumWithinSessionWeightSpread = 5.0
+}
+
 private func nsRange(for text: String) -> NSRange {
     NSRange(text.startIndex..<text.endIndex, in: text)
 }
@@ -609,6 +616,61 @@ final class AppStore {
             }
             .prefix(limit)
             .map { $0 }
+    }
+
+    func progressionInputs(
+        for session: WorkoutSession,
+        maxHistoryCount: Int = ProgressionInputBuilder.maximumExposureCount
+    ) -> [ProgressionEngineInput] {
+        let cappedHistoryCount = max(1, maxHistoryCount)
+        let referenceDate = finishedSessionDate(session)
+        let calendar = Self.statisticsCalendar(locale: locale)
+        let weeklySummary = weeklyStrengthSummary(
+            referenceDate: referenceDate,
+            calendar: calendar
+        )
+        let weeklyContext = ProgressionWeeklyContext(
+            strengthPercentChange: weeklySummary.percentChange
+        )
+        let previousFinishedSessions = finishedSessionsSortedDescending().filter { $0.id != session.id }
+
+        return orderedUniqueExerciseIDs(in: session).compactMap { exerciseID in
+            guard let currentExposure = progressionExposure(
+                in: session,
+                exerciseID: exerciseID
+            ) else {
+                return nil
+            }
+
+            let previousExposures = previousFinishedSessions
+                .compactMap { progressionExposure(in: $0, exerciseID: exerciseID) }
+            let trimmedPreviousExposures = Array(previousExposures.prefix(max(cappedHistoryCount - 1, 0)))
+            let currentTemplateExerciseID = session.exercises.first { $0.exerciseID == exerciseID }?.templateExerciseID
+            let compatibility = progressionPrescriptionCompatibility(
+                currentExposure: currentExposure,
+                previousExposures: trimmedPreviousExposures,
+                currentTemplateExerciseID: currentTemplateExerciseID
+            )
+            let exposures = progressionExposures(
+                currentExposure: currentExposure,
+                previousExposures: trimmedPreviousExposures
+            )
+            let daysSincePreviousExposure = trimmedPreviousExposures.first.map {
+                max(
+                    calendar.dateComponents([.day], from: $0.performedAt, to: referenceDate).day ?? 0,
+                    0
+                )
+            }
+
+            return ProgressionEngineInput(
+                exerciseID: exerciseID,
+                currentTemplateExerciseID: currentTemplateExerciseID,
+                exposures: exposures,
+                prescriptionCompatibility: compatibility,
+                daysSincePreviousExposure: daysSincePreviousExposure,
+                weeklyContext: weeklyContext
+            )
+        }
     }
 
     func profileProgressSummary(
@@ -1337,6 +1399,137 @@ final class AppStore {
         programs.first { program in
             program.workouts.contains(where: { $0.id == workoutTemplateID })
         }
+    }
+
+    private func orderedUniqueExerciseIDs(in session: WorkoutSession) -> [UUID] {
+        var seen = Set<UUID>()
+        var orderedIDs: [UUID] = []
+
+        for exerciseLog in session.exercises where !seen.contains(exerciseLog.exerciseID) {
+            seen.insert(exerciseLog.exerciseID)
+            orderedIDs.append(exerciseLog.exerciseID)
+        }
+
+        return orderedIDs
+    }
+
+    private func progressionExposure(
+        in session: WorkoutSession,
+        exerciseID: UUID
+    ) -> ProgressionExerciseSession? {
+        let matchingLogs = session.exercises.filter { $0.exerciseID == exerciseID }
+        guard !matchingLogs.isEmpty else {
+            return nil
+        }
+
+        let completedSets = matchingLogs
+            .flatMap(\.sets)
+            .filter { $0.completedAt != nil }
+        let loadValues = completedSets
+            .map(\.weight)
+            .filter { $0 > 0 }
+        let repsValues = completedSets.map(\.reps)
+        let hasUsableLoadData = !completedSets.isEmpty && loadValues.count == completedSets.count
+        let averageWeight = loadValues.isEmpty
+            ? 0
+            : loadValues.reduce(0, +) / Double(loadValues.count)
+        let topWeight = loadValues.max() ?? 0
+        let minimumWeight = loadValues.min() ?? 0
+        let averageReps = repsValues.isEmpty
+            ? 0
+            : Double(repsValues.reduce(0, +)) / Double(repsValues.count)
+        let totalVolume = completedSets.reduce(0.0) { partialResult, set in
+            partialResult + (set.weight * Double(set.reps))
+        }
+        let metrics = ProgressionSessionMetrics(
+            completedSetCount: completedSets.count,
+            averageWeight: averageWeight,
+            topWeight: topWeight,
+            minimumWeight: minimumWeight,
+            averageReps: averageReps,
+            minimumReps: repsValues.min() ?? 0,
+            maximumReps: repsValues.max() ?? 0,
+            totalVolume: totalVolume,
+            hasUsableLoadData: hasUsableLoadData
+        )
+        let dataQuality: ProgressionDataQuality =
+            completedSets.count >= ProgressionInputBuilder.minimumUsableCompletedSetCount &&
+            hasUsableLoadData &&
+            metrics.weightSpread <= ProgressionInputBuilder.maximumWithinSessionWeightSpread &&
+            averageReps > 0
+            ? .usable
+            : .sparseOrNoisy
+
+        return ProgressionExerciseSession(
+            sessionID: session.id,
+            performedAt: finishedSessionDate(session),
+            templateExerciseIDs: matchingLogs.map(\.templateExerciseID),
+            metrics: metrics,
+            dataQuality: dataQuality,
+            comparability: dataQuality == .usable ? .comparable : .sparseOrNoisy
+        )
+    }
+
+    private func progressionExposures(
+        currentExposure: ProgressionExerciseSession,
+        previousExposures: [ProgressionExerciseSession]
+    ) -> [ProgressionExerciseSession] {
+        let currentSetCount = currentExposure.metrics.completedSetCount
+        let mappedPrevious = previousExposures.map { exposure -> ProgressionExerciseSession in
+            var comparableExposure = exposure
+
+            if exposure.dataQuality == .sparseOrNoisy {
+                comparableExposure.comparability = .sparseOrNoisy
+                return comparableExposure
+            }
+
+            let setCountDelta = abs(exposure.metrics.completedSetCount - currentSetCount)
+            comparableExposure.comparability = setCountDelta > ProgressionInputBuilder.maximumComparableSetCountDelta
+                ? .setShapeMismatch
+                : .comparable
+            return comparableExposure
+        }
+
+        return [currentExposure] + mappedPrevious
+    }
+
+    private func progressionPrescriptionCompatibility(
+        currentExposure: ProgressionExerciseSession,
+        previousExposures: [ProgressionExerciseSession],
+        currentTemplateExerciseID: UUID?
+    ) -> ProgressionPrescriptionCompatibility {
+        guard currentExposure.dataQuality == .usable else {
+            return .compatible
+        }
+
+        let usablePreviousExposures = previousExposures.filter { $0.dataQuality == .usable }
+        guard !usablePreviousExposures.isEmpty else {
+            return .compatible
+        }
+
+        let setCounts = usablePreviousExposures
+            .map { $0.metrics.completedSetCount }
+            .sorted()
+        let averageReps = usablePreviousExposures
+            .map { $0.metrics.averageReps }
+            .sorted()
+        let medianSetCount = setCounts[setCounts.count / 2]
+        let medianAverageReps = averageReps[averageReps.count / 2]
+        let setCountDelta = abs(currentExposure.metrics.completedSetCount - medianSetCount)
+        let repsDelta = abs(currentExposure.metrics.averageReps - medianAverageReps)
+        let hasTemplateMatch = currentTemplateExerciseID.map { currentTemplateExerciseID in
+            usablePreviousExposures.contains { $0.templateExerciseIDs.contains(currentTemplateExerciseID) }
+        } ?? false
+
+        if setCountDelta >= 2 && repsDelta >= 4 {
+            return hasTemplateMatch ? .partialMismatch : .mismatch
+        }
+
+        if setCountDelta >= 2 || repsDelta >= 3 {
+            return hasTemplateMatch ? .compatible : .partialMismatch
+        }
+
+        return .compatible
     }
 
     private func bestCompletedWeightByExercise(for exerciseIDs: Set<UUID>) -> [UUID: Double] {

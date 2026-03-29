@@ -131,6 +131,17 @@
 "stats.table_avg_reps" = "Avg reps";
 "stats.table_sets" = "Sets";
 
+"progression.card_title" = "Progression";
+"progression.action.insufficient_data" = "Insufficient data";
+"progression.action.hold" = "Hold";
+"progression.action.increase_weight" = "Increase";
+"progression.action.deload" = "Deload";
+"progression.message.insufficient_data" = "Need a bit more stable history before suggesting a load change.";
+"progression.message.hold" = "Keep this exercise steady for now.";
+"progression.message.hold_with_weight" = "Keep the load around %@ next time.";
+"progression.message.increase_weight" = "Trend looks solid. Try %@ next time.";
+"progression.message.deload" = "A lighter reset around %@ may help next time.";
+
 "profile.personal" = "Personal profile";
 "profile.card_title" = "Profile";
 "profile.card_description" = "Quick settings for the metrics used across your workouts.";

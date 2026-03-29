@@ -131,6 +131,17 @@
 "stats.table_avg_reps" = "Средние повторы";
 "stats.table_sets" = "Подходы";
 
+"progression.card_title" = "Прогрессия";
+"progression.action.insufficient_data" = "Мало данных";
+"progression.action.hold" = "Удержать";
+"progression.action.increase_weight" = "Повысить";
+"progression.action.deload" = "Делод";
+"progression.message.insufficient_data" = "Нужно чуть больше стабильной истории, чтобы рекомендовать изменение нагрузки.";
+"progression.message.hold" = "Пока лучше оставить это упражнение без изменений.";
+"progression.message.hold_with_weight" = "В следующий раз держитесь около %@.";
+"progression.message.increase_weight" = "Тренд выглядит стабильно. В следующий раз попробуйте %@.";
+"progression.message.deload" = "Лёгкий сброс к %@ может помочь на следующей тренировке.";
+
 "profile.personal" = "Личный профиль";
 "profile.card_title" = "Профиль";
 "profile.card_description" = "Быстрые настройки основных показателей, которые используются по всему приложению.";

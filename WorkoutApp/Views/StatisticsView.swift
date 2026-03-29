@@ -386,6 +386,10 @@ struct WorkoutSummaryView: View {
                     WorkoutSummaryMetricCard(titleKey: "summary.total_reps", value: "\(totalRepsCount)")
                 }
 
+                if mode == .completion {
+                    progressionCard
+                }
+
                 ForEach(session.exercises) { exercise in
                     if let item = store.exercise(for: exercise.exerciseID) {
                         AppCard {
@@ -521,6 +525,21 @@ struct WorkoutSummaryView: View {
         session.exercises.count
     }
 
+    private var progressionItems: [WorkoutProgressionDisplayItem] {
+        let engine = ProgressionEngine()
+        return store.progressionInputs(for: session).compactMap { input in
+            guard let exercise = store.exercise(for: input.exerciseID) else {
+                return nil
+            }
+
+            return WorkoutProgressionDisplayItem(
+                exerciseID: input.exerciseID,
+                exerciseName: exercise.localizedName,
+                decision: engine.evaluate(input)
+            )
+        }
+    }
+
     private var totalSetsCount: Int {
         session.exercises.reduce(0) { $0 + $1.sets.count }
     }
@@ -555,6 +574,26 @@ struct WorkoutSummaryView: View {
             Spacer()
             Text(value)
                 .foregroundStyle(AppTheme.secondaryText)
+        }
+    }
+
+    @ViewBuilder
+    private var progressionCard: some View {
+        if !progressionItems.isEmpty {
+            AppCard {
+                VStack(alignment: .leading, spacing: 14) {
+                    AppSectionTitle(titleKey: "progression.card_title")
+
+                    ForEach(Array(progressionItems.enumerated()), id: \.element.id) { index, item in
+                        WorkoutProgressionRow(item: item)
+
+                        if index < progressionItems.count - 1 {
+                            Divider()
+                                .overlay(AppTheme.stroke)
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -594,6 +633,129 @@ private struct WorkoutSummaryMetricCard: View {
             RoundedRectangle(cornerRadius: 22, style: .continuous)
                 .stroke(AppTheme.stroke, lineWidth: 1)
         )
+    }
+}
+
+private struct WorkoutProgressionDisplayItem: Identifiable {
+    var id: UUID { exerciseID }
+    var exerciseID: UUID
+    var exerciseName: String
+    var decision: ProgressionDecision
+}
+
+private struct WorkoutProgressionRow: View {
+    let item: WorkoutProgressionDisplayItem
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 12) {
+                Text(item.exerciseName)
+                    .font(AppTypography.body(size: 16, weight: .semibold, relativeTo: .subheadline))
+                    .foregroundStyle(AppTheme.primaryText)
+                    .lineLimit(2)
+
+                Spacer(minLength: 8)
+
+                WorkoutProgressionActionBadge(action: item.decision.action)
+            }
+
+            Text(message)
+                .font(AppTypography.body(size: 14, weight: .medium, relativeTo: .subheadline))
+                .foregroundStyle(AppTheme.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var message: String {
+        switch item.decision.action {
+        case .insufficientData:
+            return NSLocalizedString("progression.message.insufficient_data", comment: "")
+        case .hold:
+            if let referenceWeight = item.decision.referenceWeight,
+               item.decision.confidence.allowsNumericReference {
+                return String(
+                    format: NSLocalizedString("progression.message.hold_with_weight", comment: ""),
+                    formattedWeight(referenceWeight)
+                )
+            }
+            return NSLocalizedString("progression.message.hold", comment: "")
+        case .increaseWeight:
+            if let recommendedWeight = item.decision.recommendedWeight {
+                return String(
+                    format: NSLocalizedString("progression.message.increase_weight", comment: ""),
+                    formattedWeight(recommendedWeight)
+                )
+            }
+            return NSLocalizedString("progression.message.hold", comment: "")
+        case .deload:
+            if let recommendedWeight = item.decision.recommendedWeight {
+                return String(
+                    format: NSLocalizedString("progression.message.deload", comment: ""),
+                    formattedWeight(recommendedWeight)
+                )
+            }
+            return NSLocalizedString("progression.message.hold", comment: "")
+        }
+    }
+
+    private func formattedWeight(_ weight: Double) -> String {
+        String(format: NSLocalizedString("stats.weight_value", comment: ""), weight)
+    }
+}
+
+private struct WorkoutProgressionActionBadge: View {
+    let action: ProgressionAction
+
+    var body: some View {
+        Text(label)
+            .font(AppTypography.caption(size: 11, weight: .semibold))
+            .foregroundStyle(AppTheme.primaryText)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(backgroundColor, in: Capsule())
+            .overlay(
+                Capsule()
+                    .stroke(borderColor, lineWidth: 1)
+            )
+    }
+
+    private var label: LocalizedStringKey {
+        switch action {
+        case .insufficientData:
+            return "progression.action.insufficient_data"
+        case .hold:
+            return "progression.action.hold"
+        case .increaseWeight:
+            return "progression.action.increase_weight"
+        case .deload:
+            return "progression.action.deload"
+        }
+    }
+
+    private var backgroundColor: Color {
+        switch action {
+        case .insufficientData:
+            return AppTheme.surface
+        case .hold:
+            return AppTheme.surfaceElevated
+        case .increaseWeight:
+            return AppTheme.success.opacity(0.18)
+        case .deload:
+            return AppTheme.warning.opacity(0.18)
+        }
+    }
+
+    private var borderColor: Color {
+        switch action {
+        case .insufficientData:
+            return AppTheme.border
+        case .hold:
+            return AppTheme.stroke
+        case .increaseWeight:
+            return AppTheme.success.opacity(0.55)
+        case .deload:
+            return AppTheme.warning.opacity(0.55)
+        }
     }
 }
 
