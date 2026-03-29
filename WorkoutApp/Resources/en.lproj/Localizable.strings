@@ -14,7 +14,7 @@
 "header.profile.title" = "Profile";
 "header.profile.subtitle" = "Your training at a glance";
 "header.coach.title" = "Coach";
-"header.coach.subtitle" = "Ask for training guidance with your app context";
+"header.coach.subtitle" = "Full AI chat with your current training context";
 
 "programs.title" = "Programs";
 "programs.subtitle" = "Build plans, launch workouts, and keep every session ready.";
@@ -185,6 +185,14 @@
 "profile.settings.coach.saved" = "Coach settings saved.";
 "profile.settings.coach.reset" = "Reset local Coach config";
 "profile.settings.coach.reset_done" = "Local Coach config reset.";
+"profile.settings.coach_status.title" = "Coach & AI";
+"profile.settings.coach_status.ai_status" = "AI status";
+"profile.settings.coach_status.remote_context" = "Remote context";
+"profile.settings.coach_status.insights_source" = "Insights source";
+"profile.settings.coach_status.saved_context" = "Saved context";
+"profile.settings.coach.insights_loading" = "Refreshing insights...";
+"profile.settings.coach.insights_not_loaded" = "Not loaded yet";
+"profile.settings.coach.last_checked" = "Last checked %@";
 "developer.settings.section" = "App";
 "developer.settings.version" = "Version";
 "developer.settings.unlocked" = "Unlocked";
@@ -391,6 +399,8 @@
 "coach.quick_prompt.18" = "Which changes would give me the biggest benefit with minimal edits?";
 "coach.quick_prompt.19" = "Should I change my current split, or stay with it for now?";
 "coach.quick_prompt.20" = "What should I focus on over the next 2–3 weeks?";
+"coach.chat.empty.body" = "Ask about progression, recovery, split adjustments, or what to focus on next.";
+"coach.chat.settings_hint" = "Enable remote AI in Settings > Coach & AI to use chat.";
 "coach.chat.title" = "Conversation";
 "coach.chat.empty" = "Ask a question or use a quick prompt to start the conversation.";
 "coach.suggested_changes.title" = "Suggested changes";
@@ -647,3 +657,13 @@
 "today.attention.streak.body" = "%d weeks in a row at target.";
 "today.attention.strength.title" = "Weekly momentum";
 "today.attention.strength.body" = "%@ on matched lifts versus last week.";
+"today.insights.title" = "Profile insights";
+"today.insights.loading" = "Refreshing personalized insights...";
+"today.insights.empty" = "Insights will appear after Coach analyzes your profile. Today stays useful from local data in the meantime.";
+"today.insights.empty_local" = "Remote AI is unavailable, so Today stays focused on local-first guidance.";
+"today.insights.note.cached" = "Using the latest cached AI analysis.";
+"today.insights.note.local_first" = "Using local analysis so Today remains useful without remote AI.";
+"today.insights.note.local_fallback" = "Using local analysis while remote insights are unavailable.";
+"today.insights.focus.recommendation" = "Focus now";
+"today.insights.focus.constraint" = "Watch";
+"today.insights.focus.observation" = "Observed";

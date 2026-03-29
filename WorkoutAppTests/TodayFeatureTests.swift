@@ -187,6 +187,107 @@ final class TodayFeatureTests: XCTestCase {
         XCTAssertEqual(attention?.kind, .compatibility)
         XCTAssertEqual(attention?.message, ProfileCompatibilityMessageFormatter.message(for: issue))
     }
+
+
+    func testTodayCoachInsightsResolverBuildsCompactReadyState() {
+        let insights = CoachProfileInsights(
+            summary: "Your lower-body progress is mostly limited by missed sessions.",
+            keyObservations: ["Bench volume has stayed stable for two weeks."],
+            topConstraints: ["You missed two lower sessions in the last ten days."],
+            recommendations: ["Start with Lower A next and keep the top sets at RPE 7-8."],
+            confidenceNotes: ["Recent data is slightly sparse."],
+            executionContext: CoachProfileExecutionContext(
+                mode: "profile",
+                effectiveWeeklyFrequency: 2,
+                shouldTreatProgramCountAsMismatch: false,
+                programWorkoutCount: 4,
+                weeklyTarget: 3,
+                statedWeeklyFrequency: 3,
+                observedAverageWorkoutsPerWeek: 2,
+                templateRotationSemantics: "in_order",
+                authoritativeSignal: "history",
+                userNote: nil,
+                explanation: "Adherence is the main limiter right now.",
+                evidence: ["Last 4 weeks"]
+            ),
+            generationStatus: .model,
+            insightSource: .freshModel,
+            provider: nil,
+            selectedModel: "gpt-5.4-mini"
+        )
+
+        let state = TodayCoachInsightsResolver.resolve(
+            insights: insights,
+            origin: .freshModel,
+            isLoading: false,
+            canUseRemoteCoach: true,
+            lastErrorDescription: nil
+        )
+
+        switch state {
+        case let .ready(content):
+            XCTAssertEqual(content.summary, "Your lower-body progress is mostly limited by missed sessions.")
+            XCTAssertEqual(content.explanation, "Adherence is the main limiter right now.")
+            XCTAssertEqual(content.items.count, 3)
+            XCTAssertEqual(content.items[0].labelKey, "today.insights.focus.recommendation")
+            XCTAssertEqual(content.items[1].labelKey, "today.insights.focus.constraint")
+            XCTAssertEqual(content.items[2].labelKey, "today.insights.focus.observation")
+            XCTAssertEqual(content.modelLabel, "gpt-5.4-mini")
+            XCTAssertNil(content.noteKey)
+        default:
+            XCTFail("Expected ready insights state")
+        }
+    }
+
+    func testTodayCoachInsightsResolverReturnsLoadingWithoutInsights() {
+        let state = TodayCoachInsightsResolver.resolve(
+            insights: nil,
+            origin: .fallback,
+            isLoading: true,
+            canUseRemoteCoach: true,
+            lastErrorDescription: nil
+        )
+
+        XCTAssertEqual(state, .loading)
+    }
+
+    func testTodayCoachInsightsResolverUsesLocalFallbackUnavailableMessage() {
+        let state = TodayCoachInsightsResolver.resolve(
+            insights: nil,
+            origin: .fallback,
+            isLoading: false,
+            canUseRemoteCoach: false,
+            lastErrorDescription: nil
+        )
+
+        XCTAssertEqual(state, .unavailable("today.insights.empty_local"))
+    }
+
+    func testTodayCoachInsightsResolverAddsFallbackNoteWhenRemoteFails() {
+        let insights = CoachProfileInsights(
+            summary: "Local analytics suggest you should keep the next session simple.",
+            recommendations: ["Resume with the next workout in order."],
+            generationStatus: .fallback,
+            insightSource: .fallback,
+            provider: nil,
+            selectedModel: nil
+        )
+
+        let state = TodayCoachInsightsResolver.resolve(
+            insights: insights,
+            origin: .fallback,
+            isLoading: false,
+            canUseRemoteCoach: true,
+            lastErrorDescription: "Backend timeout"
+        )
+
+        switch state {
+        case let .ready(content):
+            XCTAssertEqual(content.noteKey, "today.insights.note.local_fallback")
+        default:
+            XCTFail("Expected ready fallback insights state")
+        }
+    }
 }
 
 private let fixedNow = Date(timeIntervalSince1970: 1_775_404_800)

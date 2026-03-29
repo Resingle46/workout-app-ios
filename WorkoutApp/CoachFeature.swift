@@ -3891,16 +3891,8 @@ final class CoachStore {
         }
     }
 
-    func handleCoachScreenDidBecomeVisible(using appStore: AppStore) async {
-        configureQuickPromptsIfNeeded()
+    func handleTodayScreenDidBecomeVisible(using appStore: AppStore) async {
         syncAnalysisSettingsDrafts(using: appStore)
-
-        if activeChatJobID != nil {
-            await resumePendingChatJobIfNeeded(using: appStore)
-            if activeChatJobID != nil {
-                return
-            }
-        }
 
         if activeProfileInsightsJobID != nil {
             await refreshProfileInsights(using: appStore)
@@ -3911,6 +3903,15 @@ final class CoachStore {
 
         if profileInsights == nil {
             await refreshProfileInsights(using: appStore)
+        }
+    }
+
+    func handleCoachScreenDidBecomeVisible(using appStore: AppStore) async {
+        configureQuickPromptsIfNeeded()
+        syncAnalysisSettingsDrafts(using: appStore)
+
+        if activeChatJobID != nil {
+            await resumePendingChatJobIfNeeded(using: appStore)
         }
     }
 
@@ -4581,283 +4582,396 @@ enum CoachFocusField: Hashable {
     case comment
 }
 
-@MainActor
-struct CoachView: View {
-    @Environment(AppStore.self) private var store
-    @Environment(CoachStore.self) private var coachStore
-    @Environment(\.appBottomRailInset) private var bottomRailInset
-    @State private var refreshButtonScale: CGFloat = 1
-    @State private var isEditingAnalysisContext = false
-    @FocusState private var focusedField: CoachFocusField?
+struct TodayCoachInsightItemState: Identifiable, Equatable {
+    let id: String
+    let labelKey: String
+    let message: String
+    let systemImage: String
+    let accent: TodayCardAccent
+}
 
-    private var availablePrograms: [WorkoutProgram] {
-        store.programs
+struct TodayCoachInsightsContentState: Equatable {
+    let summary: String
+    let explanation: String?
+    let items: [TodayCoachInsightItemState]
+    let sourceKey: String
+    let sourceAccent: TodayCardAccent
+    let modelLabel: String?
+    let noteKey: String?
+}
+
+enum TodayCoachInsightsState: Equatable {
+    case loading
+    case ready(TodayCoachInsightsContentState)
+    case unavailable(String)
+
+    var isReady: Bool {
+        if case .ready = self {
+            return true
+        }
+
+        return false
     }
+}
 
-    private var shouldShowQuickPrompts: Bool {
-        coachStore.messages.isEmpty
-    }
+struct TodayCoachInsightsResolver {
+    static func resolve(
+        insights: CoachProfileInsights?,
+        origin: CoachInsightsOrigin,
+        isLoading: Bool,
+        canUseRemoteCoach: Bool,
+        lastErrorDescription: String?
+    ) -> TodayCoachInsightsState {
+        if let insights {
+            let hasError = !(lastErrorDescription?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .isEmpty ?? true)
+            return .ready(
+                TodayCoachInsightsContentState(
+                    summary: summaryText(from: insights),
+                    explanation: normalizedText(insights.executionContext?.explanation)
+                        ?? normalizedText(insights.confidenceNotes.first),
+                    items: focusItems(from: insights),
+                    sourceKey: sourceKey(for: origin),
+                    sourceAccent: accent(for: origin),
+                    modelLabel: coachVisibleModelLabel(insights.selectedModel),
+                    noteKey: noteKey(for: origin, canUseRemoteCoach: canUseRemoteCoach, hasError: hasError)
+                )
+            )
+        }
 
-    private var hasInsightsStatusError: Bool {
-        !(coachStore.lastInsightsErrorDescription?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .isEmpty ?? true)
-    }
+        if isLoading {
+            return .loading
+        }
 
-    private var hasSavedCoachContext: Bool {
-        store.coachAnalysisSettings.selectedProgramID != nil ||
-        !store.coachAnalysisSettings.programComment
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .isEmpty
-    }
-
-    private var shouldShowCombinedCoachStatusCard: Bool {
-        coachStore.canUseRemoteCoach &&
-        hasSavedCoachContext &&
-        !isEditingAnalysisContext &&
-        !hasInsightsStatusError
-    }
-
-    private var shouldShowStandaloneCoachStatusCard: Bool {
-        !shouldShowCombinedCoachStatusCard &&
-        (
-            !coachStore.canUseRemoteCoach ||
-            !hasSavedCoachContext ||
-            hasInsightsStatusError
+        return .unavailable(
+            canUseRemoteCoach
+                ? "today.insights.empty"
+                : "today.insights.empty_local"
         )
     }
 
-    var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 20) {
-                AppPageHeaderModule(
-                    titleKey: "header.coach.title",
-                    subtitleKey: "header.coach.subtitle"
-                ) {
-                    Button {
-                        focusedField = nil
-                        animateRefreshTap()
-                        Task {
-                            await coachStore.refreshProfileInsights(
-                                using: store,
-                                forceRefresh: true
-                            )
-                        }
-                    } label: {
-                        ZStack {
-                            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .fill(AppTheme.surfaceElevated)
+    private static func summaryText(from insights: CoachProfileInsights) -> String {
+        normalizedText(insights.summary)
+            ?? normalizedText(insights.recommendations.first)
+            ?? normalizedText(insights.keyObservations.first)
+            ?? normalizedText(insights.topConstraints.first)
+            ?? coachLocalizedString("profile.card.ai.empty")
+    }
 
-                            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .stroke(AppTheme.border, lineWidth: 1)
+    private static func focusItems(from insights: CoachProfileInsights) -> [TodayCoachInsightItemState] {
+        typealias Source = (
+            prefix: String,
+            labelKey: String,
+            systemImage: String,
+            accent: TodayCardAccent,
+            values: [String]
+        )
 
-                            Image(systemName: "arrow.clockwise")
-                                .font(AppTypography.icon(size: 18, weight: .semibold))
-                                .foregroundStyle(AppTheme.primaryText)
-                                .rotationEffect(.degrees(coachStore.isLoadingProfileInsights ? 360 : 0))
-                                .animation(
-                                    coachStore.isLoadingProfileInsights
-                                    ? .linear(duration: 0.9).repeatForever(autoreverses: false)
-                                    : .easeOut(duration: 0.2),
-                                    value: coachStore.isLoadingProfileInsights
-                                )
-                        }
-                            .frame(width: 44, height: 44)
-                            .scaleEffect(refreshButtonScale)
+        let sources: [Source] = [
+            (
+                prefix: "recommendation",
+                labelKey: "today.insights.focus.recommendation",
+                systemImage: "bolt.fill",
+                accent: .accent,
+                values: insights.recommendations
+            ),
+            (
+                prefix: "constraint",
+                labelKey: "today.insights.focus.constraint",
+                systemImage: "shield.lefthalf.filled",
+                accent: .warning,
+                values: insights.topConstraints
+            ),
+            (
+                prefix: "observation",
+                labelKey: "today.insights.focus.observation",
+                systemImage: "waveform.path.ecg",
+                accent: .indigo,
+                values: insights.keyObservations
+            )
+        ]
+
+        var selectedItems: [TodayCoachInsightItemState] = []
+        var usedMessages = Set<String>()
+
+        func appendFirst(from source: Source) {
+            guard let item = source.values
+                .compactMap(normalizedText)
+                .first(where: { usedMessages.insert($0).inserted }) else {
+                return
+            }
+
+            selectedItems.append(
+                TodayCoachInsightItemState(
+                    id: "\(source.prefix)-primary",
+                    labelKey: source.labelKey,
+                    message: item,
+                    systemImage: source.systemImage,
+                    accent: source.accent
+                )
+            )
+        }
+
+        sources.forEach(appendFirst)
+
+        if selectedItems.count < 3 {
+            for source in sources {
+                for item in source.values.compactMap(normalizedText) {
+                    guard usedMessages.insert(item).inserted else {
+                        continue
                     }
-                    .buttonStyle(.plain)
-                    .disabled(coachStore.isLoadingProfileInsights || coachStore.isSendingMessage)
-                }
 
-                if shouldShowCombinedCoachStatusCard {
-                    CoachStatusContextSummaryCard {
-                        focusedField = nil
-                        withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) {
-                            isEditingAnalysisContext = true
-                        }
-                    }
-                } else {
-                    if shouldShowStandaloneCoachStatusCard {
-                        CoachStatusCard(
-                            isRemoteAvailable: coachStore.canUseRemoteCoach,
-                            lastErrorDescription: coachStore.lastInsightsErrorDescription
+                    selectedItems.append(
+                        TodayCoachInsightItemState(
+                            id: "\(source.prefix)-\(selectedItems.count)",
+                            labelKey: source.labelKey,
+                            message: item,
+                            systemImage: source.systemImage,
+                            accent: source.accent
                         )
-                    }
-
-                    CoachContextPreferencesCard(
-                        selectedProgramID: Binding(
-                            get: { coachStore.selectedProgramIDDraft },
-                            set: { coachStore.selectedProgramIDDraft = $0 }
-                        ),
-                        programComment: Binding(
-                            get: { coachStore.programCommentDraft },
-                            set: { coachStore.programCommentDraft = String($0.prefix(500)) }
-                        ),
-                        programs: availablePrograms,
-                        saveState: coachStore.analysisSettingsSaveState,
-                        isExpanded: isEditingAnalysisContext,
-                        savedSelectedProgramID: store.coachAnalysisSettings.selectedProgramID,
-                        savedProgramComment: store.coachAnalysisSettings.programComment,
-                        commentFieldFocus: $focusedField,
-                        onEdit: {
-                            focusedField = nil
-                            withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) {
-                                isEditingAnalysisContext = true
-                            }
-                        },
-                        onSave: {
-                            focusedField = nil
-                            Task {
-                                await coachStore.saveAnalysisSettings(using: store)
-                                withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
-                                    isEditingAnalysisContext = false
-                                }
-                            }
-                        }
                     )
-                }
 
-                if let profileInsights = coachStore.profileInsights {
-                    CoachInsightsOverviewCard(
-                        insights: profileInsights,
-                        origin: coachStore.profileInsightsOrigin
-                    ) {
-                        store.selectedTab = .profile
-                    }
-                } else if coachStore.isLoadingProfileInsights {
-                    AppCard {
-                        HStack(spacing: 12) {
-                            ProgressView()
-                                .tint(AppTheme.accent)
-                            Text("coach.loading.insights")
-                                .font(AppTypography.body(size: 16, weight: .medium))
-                                .foregroundStyle(AppTheme.secondaryText)
-                        }
+                    if selectedItems.count == 3 {
+                        break
                     }
                 }
 
-                AppCard {
+                if selectedItems.count == 3 {
+                    break
+                }
+            }
+        }
+
+        return Array(selectedItems.prefix(3))
+    }
+
+    private static func normalizedText(_ text: String?) -> String? {
+        guard let text else {
+            return nil
+        }
+
+        let normalized = coachNormalizedReadableText(text)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return normalized.isEmpty ? nil : normalized
+    }
+
+    private static func sourceKey(for origin: CoachInsightsOrigin) -> String {
+        switch origin {
+        case .freshModel:
+            return "coach.insights.source.fresh_model"
+        case .cachedModel:
+            return "coach.insights.source.cached_model"
+        case .fallback:
+            return "coach.insights.source.fallback"
+        }
+    }
+
+    private static func accent(for origin: CoachInsightsOrigin) -> TodayCardAccent {
+        switch origin {
+        case .freshModel:
+            return .success
+        case .cachedModel:
+            return .warning
+        case .fallback:
+            return .indigo
+        }
+    }
+
+    private static func noteKey(
+        for origin: CoachInsightsOrigin,
+        canUseRemoteCoach: Bool,
+        hasError: Bool
+    ) -> String? {
+        switch origin {
+        case .freshModel:
+            return nil
+        case .cachedModel:
+            return "today.insights.note.cached"
+        case .fallback:
+            return (canUseRemoteCoach || hasError)
+                ? "today.insights.note.local_fallback"
+                : "today.insights.note.local_first"
+        }
+    }
+}
+
+@MainActor
+struct TodayCoachInsightsCard: View {
+    let state: TodayCoachInsightsState
+
+    var body: some View {
+        AppCard {
+            VStack(alignment: .leading, spacing: 16) {
+                AppSectionTitle(titleKey: "today.insights.title")
+
+                switch state {
+                case .loading:
+                    HStack(spacing: 12) {
+                        ProgressView()
+                            .tint(AppTheme.accent)
+
+                        Text("today.insights.loading")
+                            .font(AppTypography.body(size: 15, weight: .medium, relativeTo: .subheadline))
+                            .foregroundStyle(AppTheme.secondaryText)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                case let .unavailable(messageKey):
+                    Text(LocalizedStringKey(messageKey))
+                        .font(AppTypography.body(size: 15, weight: .medium, relativeTo: .subheadline))
+                        .foregroundStyle(AppTheme.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                case let .ready(content):
                     VStack(alignment: .leading, spacing: 16) {
-                        AppSectionTitle(titleKey: "coach.ask.title")
+                        HStack(alignment: .firstTextBaseline, spacing: 12) {
+                            HStack(spacing: 8) {
+                                Circle()
+                                    .fill(content.sourceAccent.tint)
+                                    .frame(width: 8, height: 8)
 
-                        if !coachStore.messages.isEmpty {
-                            CoachConversationThread(messages: coachStore.messages) { followUp in
-                                sendQuestion(followUp)
-                            }
-                        }
-
-                        TextField("coach.ask.placeholder", text: Binding(
-                            get: { coachStore.draftQuestion },
-                            set: { coachStore.draftQuestion = $0 }
-                        ), axis: .vertical)
-                            .textFieldStyle(.plain)
-                            .font(AppTypography.body(size: 16))
-                            .foregroundStyle(AppTheme.primaryText)
-                            .focused($focusedField, equals: .question)
-                            .disabled(coachStore.isSendingMessage)
-                            .padding(16)
-                            .background(
-                                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                                    .fill(AppTheme.surface)
-                            )
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                                    .stroke(AppTheme.border, lineWidth: 1)
-                            )
-
-                        Button {
-                            focusedField = nil
-                            if coachStore.canResumePendingChatJob &&
-                                coachStore.draftQuestion.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                                Task {
-                                    await coachStore.resumePendingChatJobIfNeeded(using: store)
-                                }
-                            } else {
-                                sendQuestion(coachStore.draftQuestion)
-                            }
-                        } label: {
-                            HStack(spacing: 10) {
-                                if coachStore.isSendingMessage {
-                                    ProgressView()
-                                        .tint(.white)
-                                }
-
-                                if coachStore.isSendingMessage {
-                                    Text("coach.loading.response_short")
-                                } else if coachStore.canResumePendingChatJob &&
-                                    coachStore.draftQuestion.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                                    Text("coach.action.resume_waiting")
-                                } else {
-                                    Text("coach.action.send")
-                                }
-                            }
-                        }
-                        .buttonStyle(AppPrimaryButtonStyle())
-                        .disabled(
-                            (
-                                coachStore.draftQuestion.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-                                !coachStore.canResumePendingChatJob
-                            ) || coachStore.isSendingMessage || !coachStore.canUseRemoteCoach
-                        )
-                        .opacity(
-                            (
-                                coachStore.draftQuestion.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-                                !coachStore.canResumePendingChatJob
-                            ) || !coachStore.canUseRemoteCoach
-                            ? 0.55
-                                : 1
-                        )
-
-                        if shouldShowQuickPrompts {
-                            VStack(alignment: .leading, spacing: 10) {
-                                Text("coach.quick_prompt.title")
+                                Text(LocalizedStringKey(content.sourceKey))
                                     .font(AppTypography.caption(size: 13, weight: .semibold))
                                     .foregroundStyle(AppTheme.secondaryText)
+                            }
 
-                                VStack(alignment: .leading, spacing: 10) {
-                                    ForEach(coachStore.visibleQuickPromptKeys, id: \.self) { promptKey in
-                                        let prompt = coachLocalizedString(promptKey)
-                                        Button {
-                                            focusedField = nil
-                                            sendQuestion(prompt)
-                                        } label: {
-                                            Text(prompt)
-                                                .font(AppTypography.body(size: 15, weight: .semibold, relativeTo: .subheadline))
-                                                .foregroundStyle(AppTheme.primaryText)
-                                                .multilineTextAlignment(.leading)
-                                                .lineLimit(2)
-                                                .frame(maxWidth: .infinity, alignment: .leading)
-                                        }
-                                        .buttonStyle(CoachPromptButtonStyle())
-                                        .disabled(!coachStore.canUseRemoteCoach || coachStore.isSendingMessage)
-                                        .opacity(
-                                            coachStore.canUseRemoteCoach && !coachStore.isSendingMessage
-                                            ? 1
-                                            : 0.55
-                                        )
-                                    }
+                            Spacer(minLength: 12)
+
+                            if let modelLabel = content.modelLabel {
+                                Text(modelLabel)
+                                    .font(AppTypography.caption(size: 12, weight: .medium))
+                                    .foregroundStyle(AppTheme.secondaryText.opacity(0.88))
+                                    .lineLimit(1)
+                            }
+                        }
+
+                        Text(content.summary)
+                            .font(AppTypography.body(size: 19, weight: .semibold, relativeTo: .title3))
+                            .foregroundStyle(AppTheme.primaryText)
+                            .lineSpacing(2)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        if let explanation = content.explanation {
+                            Text(explanation)
+                                .font(AppTypography.body(size: 15, weight: .medium, relativeTo: .subheadline))
+                                .foregroundStyle(AppTheme.secondaryText)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+
+                        if !content.items.isEmpty {
+                            VStack(alignment: .leading, spacing: 12) {
+                                ForEach(content.items) { item in
+                                    TodayCoachInsightRow(item: item)
                                 }
                             }
                         }
 
-                        if let chatError = coachStore.lastChatErrorDescription, !chatError.isEmpty {
-                            Text(chatError)
-                                .font(AppTypography.caption(size: 13, weight: .medium))
-                                .foregroundStyle(AppTheme.warning)
+                        if let noteKey = content.noteKey {
+                            Text(LocalizedStringKey(noteKey))
+                                .font(AppTypography.caption(size: 12, weight: .medium))
+                                .foregroundStyle(AppTheme.secondaryText)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                     }
                 }
             }
-            .padding(.horizontal, 20)
-            .padding(.top, 0)
-            .padding(.bottom, 24 + bottomRailInset)
-            .contentShape(Rectangle())
-            .onTapGesture {
-                focusedField = nil
+        }
+    }
+}
+
+private struct TodayCoachInsightRow: View {
+    let item: TodayCoachInsightItemState
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: item.systemImage)
+                .font(AppTypography.icon(size: 15, weight: .semibold))
+                .foregroundStyle(item.accent.tint)
+                .frame(width: 34, height: 34)
+                .background(item.accent.subtleFill, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(LocalizedStringKey(item.labelKey))
+                    .font(AppTypography.caption(size: 12, weight: .semibold))
+                    .foregroundStyle(AppTheme.secondaryText)
+                    .textCase(.uppercase)
+                    .tracking(0.9)
+
+                Text(item.message)
+                    .font(AppTypography.body(size: 14, weight: .medium, relativeTo: .subheadline))
+                    .foregroundStyle(AppTheme.primaryText)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .scrollDismissesKeyboard(.immediately)
+    }
+}
+
+@MainActor
+struct CoachView: View {
+    @Environment(AppStore.self) private var store
+    @Environment(CoachStore.self) private var coachStore
+    @Environment(\.appBottomRailInset) private var bottomRailInset
+    @FocusState private var focusedField: CoachFocusField?
+
+    private var shouldShowQuickPrompts: Bool {
+        coachStore.messages.isEmpty && coachStore.canUseRemoteCoach
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            AppPageHeaderModule(
+                titleKey: "header.coach.title",
+                subtitleKey: "header.coach.subtitle"
+            )
+
+            Group {
+                if coachStore.messages.isEmpty {
+                    CoachChatEmptyState(
+                        canUseRemoteCoach: coachStore.canUseRemoteCoach,
+                        visibleQuickPromptKeys: shouldShowQuickPrompts ? coachStore.visibleQuickPromptKeys : [],
+                        isSendingMessage: coachStore.isSendingMessage
+                    ) { prompt in
+                        focusedField = nil
+                        sendQuestion(prompt)
+                    }
+                } else {
+                    CoachConversationPanel(messages: coachStore.messages) { followUp in
+                        focusedField = nil
+                        sendQuestion(followUp)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+
+            CoachChatComposerCard(
+                draftQuestion: Binding(
+                    get: { coachStore.draftQuestion },
+                    set: { coachStore.draftQuestion = $0 }
+                ),
+                canUseRemoteCoach: coachStore.canUseRemoteCoach,
+                canResumePendingChatJob: coachStore.canResumePendingChatJob,
+                isSendingMessage: coachStore.isSendingMessage,
+                lastErrorDescription: coachStore.lastChatErrorDescription,
+                focusedField: $focusedField
+            ) {
+                focusedField = nil
+                if coachStore.canResumePendingChatJob &&
+                    coachStore.draftQuestion.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Task {
+                        await coachStore.resumePendingChatJobIfNeeded(using: store)
+                    }
+                } else {
+                    sendQuestion(coachStore.draftQuestion)
+                }
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 0)
+        .padding(.bottom, 20 + bottomRailInset)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            focusedField = nil
+        }
         .task(id: store.selectedTab) {
             if store.selectedTab == .coach {
                 await coachStore.handleCoachScreenDidBecomeVisible(using: store)
@@ -4886,47 +5000,191 @@ struct CoachView: View {
             await coachStore.sendMessage(trimmedQuestion, using: store)
         }
     }
+}
 
-    private func animateRefreshTap() {
-        withAnimation(.easeOut(duration: 0.12)) {
-            refreshButtonScale = 0.88
+private struct CoachChatEmptyState: View {
+    let canUseRemoteCoach: Bool
+    let visibleQuickPromptKeys: [String]
+    let isSendingMessage: Bool
+    let onPromptTap: (String) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 10) {
+                    Image(systemName: canUseRemoteCoach ? "sparkles.rectangle.stack.fill" : "bolt.slash.circle.fill")
+                        .font(AppTypography.icon(size: 18, weight: .semibold))
+                        .foregroundStyle(canUseRemoteCoach ? AppTheme.accent : AppTheme.warning)
+
+                    Text(LocalizedStringKey(canUseRemoteCoach ? "coach.ask.title" : "coach.status.fallback"))
+                        .font(AppTypography.heading(size: 24))
+                        .foregroundStyle(AppTheme.primaryText)
+                }
+
+                Text(LocalizedStringKey(canUseRemoteCoach ? "coach.chat.empty.body" : "coach.error.chat_unavailable"))
+                    .font(AppTypography.body(size: 15, weight: .medium, relativeTo: .subheadline))
+                    .foregroundStyle(AppTheme.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if !canUseRemoteCoach {
+                    Text("coach.chat.settings_hint")
+                        .font(AppTypography.caption(size: 13, weight: .medium))
+                        .foregroundStyle(AppTheme.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            if canUseRemoteCoach && !visibleQuickPromptKeys.isEmpty {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("coach.quick_prompt.title")
+                        .font(AppTypography.caption(size: 13, weight: .semibold))
+                        .foregroundStyle(AppTheme.secondaryText)
+
+                    FlowLayout(spacing: 10) {
+                        ForEach(visibleQuickPromptKeys, id: \.self) { promptKey in
+                            let prompt = coachLocalizedString(promptKey)
+                            Button {
+                                onPromptTap(prompt)
+                            } label: {
+                                Text(prompt)
+                                    .multilineTextAlignment(.leading)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            .buttonStyle(CoachPromptButtonStyle())
+                            .disabled(isSendingMessage)
+                            .opacity(isSendingMessage ? 0.55 : 1)
+                        }
+                    }
+                }
+            }
+
+            Spacer(minLength: 0)
         }
+        .padding(20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(
+            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                .fill(AppTheme.surfaceElevated)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                .stroke(AppTheme.border, lineWidth: 1)
+        )
+    }
+}
 
-        withAnimation(.spring(response: 0.28, dampingFraction: 0.58).delay(0.12)) {
-            refreshButtonScale = 1
+private struct CoachConversationPanel: View {
+    let messages: [CoachChatMessage]
+    let onFollowUpTap: (String) -> Void
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    ForEach(messages) { message in
+                        CoachChatMessageCard(message: message) { followUp in
+                            onFollowUpTap(followUp)
+                        }
+                        .id(message.id)
+                    }
+                }
+                .padding(18)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .background(
+                RoundedRectangle(cornerRadius: 28, style: .continuous)
+                    .fill(AppTheme.surfaceElevated)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 28, style: .continuous)
+                    .stroke(AppTheme.border, lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
+            .onChange(of: messages.last?.id) { _, lastMessageID in
+                guard let lastMessageID else {
+                    return
+                }
+
+                withAnimation(.easeOut(duration: 0.2)) {
+                    proxy.scrollTo(lastMessageID, anchor: .bottom)
+                }
+            }
+            .task(id: messages.last?.id) {
+                guard let lastMessageID = messages.last?.id else {
+                    return
+                }
+
+                proxy.scrollTo(lastMessageID, anchor: .bottom)
+            }
         }
     }
 }
 
-private struct CoachStatusCard: View {
-    let isRemoteAvailable: Bool
-    let lastErrorDescription: String?
+private struct CoachChatComposerCard: View {
+    @Binding var draftQuestion: String
 
-    private var statusKey: LocalizedStringKey {
-        isRemoteAvailable ? "coach.status.remote" : "coach.status.fallback"
+    let canUseRemoteCoach: Bool
+    let canResumePendingChatJob: Bool
+    let isSendingMessage: Bool
+    let lastErrorDescription: String?
+    let focusedField: FocusState<CoachFocusField?>.Binding
+    let onSend: () -> Void
+
+    private var trimmedDraft: String {
+        draftQuestion.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private var descriptionKey: LocalizedStringKey {
-        isRemoteAvailable ? "coach.status.remote_description" : "coach.status.fallback_description"
+    private var sendButtonDisabled: Bool {
+        (trimmedDraft.isEmpty && !canResumePendingChatJob) ||
+        isSendingMessage ||
+        !canUseRemoteCoach
     }
 
     var body: some View {
         AppCard {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack(spacing: 10) {
-                    Circle()
-                        .fill(isRemoteAvailable ? AppTheme.success : AppTheme.warning)
-                        .frame(width: 10, height: 10)
+            VStack(alignment: .leading, spacing: 14) {
+                TextField("coach.ask.placeholder", text: $draftQuestion, axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .font(AppTypography.body(size: 16))
+                    .foregroundStyle(AppTheme.primaryText)
+                    .focused(focusedField, equals: .question)
+                    .disabled(isSendingMessage)
+                    .padding(16)
+                    .background(
+                        RoundedRectangle(cornerRadius: 20, style: .continuous)
+                            .fill(AppTheme.surface)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 20, style: .continuous)
+                            .stroke(AppTheme.border, lineWidth: 1)
+                    )
 
-                    Text(statusKey)
-                        .font(AppTypography.body(size: 16, weight: .semibold))
-                        .foregroundStyle(AppTheme.primaryText)
+                Button(action: onSend) {
+                    HStack(spacing: 10) {
+                        if isSendingMessage {
+                            ProgressView()
+                                .tint(.white)
+                        }
+
+                        if isSendingMessage {
+                            Text("coach.loading.response_short")
+                        } else if canResumePendingChatJob && trimmedDraft.isEmpty {
+                            Text("coach.action.resume_waiting")
+                        } else {
+                            Text("coach.action.send")
+                        }
+                    }
                 }
+                .buttonStyle(AppPrimaryButtonStyle())
+                .disabled(sendButtonDisabled)
+                .opacity(sendButtonDisabled ? 0.55 : 1)
 
-                Text(descriptionKey)
-                    .font(AppTypography.body(size: 15, weight: .medium, relativeTo: .subheadline))
-                    .foregroundStyle(AppTheme.secondaryText)
-                    .fixedSize(horizontal: false, vertical: true)
+                if !canUseRemoteCoach {
+                    Text("coach.chat.settings_hint")
+                        .font(AppTypography.caption(size: 13, weight: .medium))
+                        .foregroundStyle(AppTheme.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
 
                 if let lastErrorDescription, !lastErrorDescription.isEmpty {
                     Text(lastErrorDescription)
@@ -4939,154 +5197,7 @@ private struct CoachStatusCard: View {
     }
 }
 
-private struct CoachStatusContextSummaryCard: View {
-    let onEdit: () -> Void
-
-    var body: some View {
-        AppCard(padding: 14) {
-            HStack(alignment: .top, spacing: 16) {
-                VStack(alignment: .leading, spacing: 10) {
-                    statusRow(
-                        titleKey: "coach.status.remote",
-                        color: AppTheme.success
-                    )
-                    statusRow(
-                        titleKey: "coach.context.status.ready",
-                        color: AppTheme.success
-                    )
-                }
-
-                Spacer(minLength: 12)
-
-                Button("coach.context.edit") {
-                    onEdit()
-                }
-                .buttonStyle(CoachCompactPromptButtonStyle())
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func statusRow(titleKey: LocalizedStringKey, color: Color) -> some View {
-        HStack(spacing: 8) {
-            CoachStatusDot(color: color, size: 8)
-
-            Text(titleKey)
-                .font(AppTypography.body(size: 14, weight: .semibold, relativeTo: .subheadline))
-                .foregroundStyle(AppTheme.primaryText)
-        }
-    }
-}
-
-private struct CoachInsightsOverviewCard: View {
-    let insights: CoachProfileInsights
-    let origin: CoachInsightsOrigin
-    let onOpenProfile: () -> Void
-
-    private var sourceKey: LocalizedStringKey {
-        origin.coachSourceKey
-    }
-
-    private var visibleModelLabel: String? {
-        coachVisibleModelLabel(insights.selectedModel)
-    }
-
-    var body: some View {
-        AppCard {
-            VStack(alignment: .leading, spacing: 16) {
-                // Header - остается снаружи скролла
-                HStack(alignment: .firstTextBaseline, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack(spacing: 8) {
-                            AppSectionTitle(titleKey: "coach.insights.title")
-                            CoachInsightsSourceDot(origin: origin)
-                        }
-
-                        Text(sourceKey)
-                            .font(AppTypography.caption(size: 13, weight: .medium))
-                            .foregroundStyle(AppTheme.secondaryText)
-
-                        if let visibleModelLabel {
-                            Text(visibleModelLabel)
-                                .font(AppTypography.caption(size: 11, weight: .medium))
-                                .foregroundStyle(AppTheme.secondaryText.opacity(0.85))
-                        }
-                    }
-
-                    Spacer(minLength: 12)
-
-                    Button("coach.action.open_profile") {
-                        onOpenProfile()
-                    }
-                    .buttonStyle(CoachPromptButtonStyle())
-                }
-                
-                VStack(alignment: .leading, spacing: 16) {
-                    Text(coachNormalizedReadableText(insights.summary))
-                        .font(AppTypography.body(size: 19, weight: .semibold, relativeTo: .title3))
-                        .foregroundStyle(AppTheme.primaryText)
-                        .lineSpacing(2)
-                        .fixedSize(horizontal: false, vertical: true)
-
-                    insightsSection(
-                        titleKey: "coach.insights.section.observations",
-                        items: insights.keyObservations,
-                        bulletColor: AppTheme.primaryText.opacity(0.8)
-                    )
-
-                    insightsSection(
-                        titleKey: "coach.insights.section.constraints",
-                        items: insights.topConstraints,
-                        bulletColor: AppTheme.warning
-                    )
-
-                    insightsSection(
-                        titleKey: "coach.insights.section.recommendations",
-                        items: insights.recommendations,
-                        bulletColor: AppTheme.accent
-                    )
-
-                    insightsSection(
-                        titleKey: "coach.insights.section.confidence",
-                        items: insights.confidenceNotes,
-                        bulletColor: AppTheme.secondaryText.opacity(0.75)
-                    )
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func insightsSection(
-        titleKey: LocalizedStringKey,
-        items: [String],
-        bulletColor: Color
-    ) -> some View {
-        if !items.isEmpty {
-            VStack(alignment: .leading, spacing: 10) {
-                Text(titleKey)
-                    .font(AppTypography.caption(size: 12, weight: .semibold))
-                    .foregroundStyle(AppTheme.secondaryText)
-
-                ForEach(Array(items.enumerated()), id: \.offset) { _, item in
-                    HStack(alignment: .top, spacing: 10) {
-                        Circle()
-                            .fill(bulletColor)
-                            .frame(width: 7, height: 7)
-                            .padding(.top, 8)
-
-                        Text(coachNormalizedReadableText(item))
-                            .font(AppTypography.body(size: 15, weight: .medium, relativeTo: .subheadline))
-                            .foregroundStyle(AppTheme.secondaryText)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-            }
-        }
-    }
-}
-
-private struct CoachContextPreferencesCard: View {
+struct CoachContextPreferencesCard: View {
     @Binding var selectedProgramID: UUID?
     @Binding var programComment: String
 
@@ -5235,74 +5346,6 @@ private struct CoachContextPreferencesCard: View {
                 }
             }
         }
-    }
-}
-
-private struct CoachConversationThread: View {
-    let messages: [CoachChatMessage]
-    let onFollowUpTap: (String) -> Void
-
-    @State private var contentHeight: CGFloat = 0
-
-    private let minConversationHeight: CGFloat = 350
-    private let maxConversationHeight: CGFloat = 2500
-
-    private var resolvedConversationHeight: CGFloat {
-        let measuredHeight = contentHeight + 12
-        return min(max(measuredHeight, minConversationHeight), maxConversationHeight)
-    }
-
-    var body: some View {
-        GeometryReader { geometry in
-            let availableWidth = max(geometry.size.width, 1)
-
-            ScrollViewReader { proxy in
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 14) {
-                        ForEach(messages) { message in
-                            CoachChatMessageCard(message: message) { followUp in
-                                onFollowUpTap(followUp)
-                            }
-                            .id(message.id)
-                        }
-                    }
-                    .frame(width: availableWidth, alignment: .leading)
-                    .clipped()
-                    .contentShape(Rectangle())
-                    .background(
-                        GeometryReader { proxy in
-                            Color.clear
-                                .preference(
-                                    key: CoachConversationContentHeightPreferenceKey.self,
-                                    value: proxy.size.height
-                                )
-                        }
-                    )
-                }
-                .frame(width: availableWidth, height: resolvedConversationHeight, alignment: .topLeading)
-                .animation(.spring(response: 0.28, dampingFraction: 0.84), value: resolvedConversationHeight)
-                .onPreferenceChange(CoachConversationContentHeightPreferenceKey.self) { newHeight in
-                    contentHeight = newHeight
-                }
-                .onChange(of: messages.last?.id) { _, lastMessageID in
-                    guard let lastMessageID else {
-                        return
-                    }
-
-                    withAnimation(.easeOut(duration: 0.2)) {
-                        proxy.scrollTo(lastMessageID, anchor: .bottom)
-                    }
-                }
-                .task(id: messages.last?.id) {
-                    guard let lastMessageID = messages.last?.id else {
-                        return
-                    }
-
-                    proxy.scrollTo(lastMessageID, anchor: .bottom)
-                }
-            }
-        }
-        .frame(height: resolvedConversationHeight)
     }
 }
 

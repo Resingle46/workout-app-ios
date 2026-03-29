@@ -14,7 +14,7 @@
 "header.profile.title" = "Профиль";
 "header.profile.subtitle" = "Ваш прогресс и личные настройки";
 "header.coach.title" = "Coach";
-"header.coach.subtitle" = "Вопросы по тренировкам с учётом данных приложения";
+"header.coach.subtitle" = "Полноценный AI-чат с учётом ваших тренировочных данных";
 
 "programs.title" = "Программы";
 "programs.subtitle" = "Собирайте планы, быстро запускайте тренировки и держите весь цикл под рукой.";
@@ -185,6 +185,14 @@
 "profile.settings.coach.saved" = "Настройки Coach сохранены.";
 "profile.settings.coach.reset" = "Сбросить локальную конфигурацию Coach";
 "profile.settings.coach.reset_done" = "Локальная конфигурация Coach сброшена.";
+"profile.settings.coach_status.title" = "Coach & AI";
+"profile.settings.coach_status.ai_status" = "Статус AI";
+"profile.settings.coach_status.remote_context" = "Удалённый контекст";
+"profile.settings.coach_status.insights_source" = "Источник инсайтов";
+"profile.settings.coach_status.saved_context" = "Сохранённый контекст";
+"profile.settings.coach.insights_loading" = "Обновляем инсайты...";
+"profile.settings.coach.insights_not_loaded" = "Ещё не загружено";
+"profile.settings.coach.last_checked" = "Последняя проверка: %@";
 "developer.settings.section" = "Приложение";
 "developer.settings.version" = "Версия";
 "developer.settings.unlocked" = "Разблокировано";
@@ -391,6 +399,8 @@
 "coach.quick_prompt.18" = "Какие изменения дадут мне наибольший эффект при минимуме правок?";
 "coach.quick_prompt.19" = "Стоит ли мне менять текущий сплит или пока лучше оставить его?";
 "coach.quick_prompt.20" = "На чём мне сосредоточиться в ближайшие 2–3 недели?";
+"coach.chat.empty.body" = "Спросите про прогрессию, восстановление, корректировку сплита или на чём сосредоточиться дальше.";
+"coach.chat.settings_hint" = "Чтобы пользоваться чатом, включите удалённый AI в Настройки > Coach & AI.";
 "coach.chat.title" = "Диалог";
 "coach.chat.empty" = "Задайте вопрос или используйте быстрый запрос, чтобы начать диалог.";
 "coach.suggested_changes.title" = "Предлагаемые изменения";
@@ -646,3 +656,13 @@
 "today.attention.streak.body" = "%d недель подряд цель выполнена.";
 "today.attention.strength.title" = "Импульс недели";
 "today.attention.strength.body" = "%@ по совпадающим силовым к прошлой неделе.";
+"today.insights.title" = "Инсайты по профилю";
+"today.insights.loading" = "Обновляем персональные инсайты...";
+"today.insights.empty" = "Инсайты появятся после анализа профиля в Coach. Пока Today остаётся полезным за счёт локальных данных.";
+"today.insights.empty_local" = "Удалённый AI недоступен, поэтому Today опирается на локальные подсказки.";
+"today.insights.note.cached" = "Используется последняя кэшированная AI-сводка.";
+"today.insights.note.local_first" = "Используется локальный анализ, чтобы Today оставался полезным без удалённого AI.";
+"today.insights.note.local_fallback" = "Используется локальный анализ, пока удалённые инсайты недоступны.";
+"today.insights.focus.recommendation" = "Фокус сейчас";
+"today.insights.focus.constraint" = "Что мешает";
+"today.insights.focus.observation" = "Что видно";

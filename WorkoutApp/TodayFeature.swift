@@ -184,7 +184,7 @@ enum TodayAttentionKind {
     case weeklyStrength
 }
 
-enum TodayCardAccent {
+enum TodayCardAccent: Equatable {
     case accent
     case success
     case warning
@@ -616,11 +616,30 @@ struct TodayRecommendationBuilder {
 
 struct TodayDashboardView: View {
     @Environment(AppStore.self) private var store
+    @Environment(CoachStore.self) private var coachStore
     @Environment(\.appBottomRailInset) private var bottomRailInset
     @State private var showingCreateProgram = false
 
     private var state: TodayDashboardState {
         TodayRecommendationBuilder.build(from: store)
+    }
+
+    private var coachInsightsState: TodayCoachInsightsState {
+        TodayCoachInsightsResolver.resolve(
+            insights: coachStore.profileInsights,
+            origin: coachStore.profileInsightsOrigin,
+            isLoading: coachStore.isLoadingProfileInsights,
+            canUseRemoteCoach: coachStore.canUseRemoteCoach,
+            lastErrorDescription: coachStore.lastInsightsErrorDescription
+        )
+    }
+
+    private var shouldShowAttentionCard: Bool {
+        guard state.attention != nil else {
+            return false
+        }
+
+        return !coachInsightsState.isReady
     }
 
     var body: some View {
@@ -642,7 +661,9 @@ struct TodayDashboardView: View {
                     }
                 )
 
-                if let attention = state.attention {
+                TodayCoachInsightsCard(state: coachInsightsState)
+
+                if shouldShowAttentionCard, let attention = state.attention {
                     TodayAttentionCard(attention: attention)
                 }
 
@@ -670,6 +691,11 @@ struct TodayDashboardView: View {
             .padding(.horizontal, 20)
             .padding(.top, 0)
             .padding(.bottom, 28 + bottomRailInset)
+        }
+        .task(id: store.selectedTab) {
+            if store.selectedTab == .programs {
+                await coachStore.handleTodayScreenDidBecomeVisible(using: store)
+            }
         }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .navigationBar)

@@ -107,7 +107,15 @@ struct ProfileView: View {
 
 private struct ProfileSettingsView: View {
     @Environment(AppStore.self) private var store
+    @Environment(CoachStore.self) private var coachStore
+    @Environment(CloudSyncStore.self) private var cloudSyncStore
     @Environment(\.appBottomRailInset) private var bottomRailInset
+    @State private var isEditingCoachContext = false
+    @FocusState private var focusedCoachField: CoachFocusField?
+
+    private var availablePrograms: [WorkoutProgram] {
+        store.programs
+    }
 
     var body: some View {
         ScrollView {
@@ -128,15 +136,255 @@ private struct ProfileSettingsView: View {
                     }
                 }
 
+                CoachAIDiagnosticsCard()
+
+                CoachContextPreferencesCard(
+                    selectedProgramID: Binding(
+                        get: { coachStore.selectedProgramIDDraft },
+                        set: { coachStore.selectedProgramIDDraft = $0 }
+                    ),
+                    programComment: Binding(
+                        get: { coachStore.programCommentDraft },
+                        set: { coachStore.programCommentDraft = String($0.prefix(500)) }
+                    ),
+                    programs: availablePrograms,
+                    saveState: coachStore.analysisSettingsSaveState,
+                    isExpanded: isEditingCoachContext,
+                    savedSelectedProgramID: store.coachAnalysisSettings.selectedProgramID,
+                    savedProgramComment: store.coachAnalysisSettings.programComment,
+                    commentFieldFocus: $focusedCoachField,
+                    onEdit: {
+                        focusedCoachField = nil
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) {
+                            isEditingCoachContext = true
+                        }
+                    },
+                    onSave: {
+                        focusedCoachField = nil
+                        Task {
+                            await coachStore.saveAnalysisSettings(using: store)
+                            withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
+                                isEditingCoachContext = false
+                            }
+                        }
+                    }
+                )
+
                 DeveloperMenuSettingsCard()
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 20)
             .padding(.bottom, bottomRailInset)
         }
+        .task {
+            coachStore.syncAnalysisSettingsDrafts(using: store)
+            if cloudSyncStore.lastBackupStatus == nil && coachStore.canUseRemoteCoach {
+                _ = await cloudSyncStore.syncIfNeeded(using: store, allowUserPrompt: false)
+            }
+        }
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("action.done") {
+                    focusedCoachField = nil
+                }
+            }
+        }
         .navigationTitle("profile.settings.title")
         .navigationBarTitleDisplayMode(.inline)
         .appScreenBackground()
+    }
+}
+
+private struct CoachAIDiagnosticsCard: View {
+    @Environment(AppStore.self) private var store
+    @Environment(CoachStore.self) private var coachStore
+    @Environment(CloudSyncStore.self) private var cloudSyncStore
+
+    private var hasSavedContext: Bool {
+        store.coachAnalysisSettings.selectedProgramID != nil ||
+        !store.coachAnalysisSettings.programComment
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .isEmpty
+    }
+
+    private var remoteStatusText: String {
+        localizedString(coachStore.canUseRemoteCoach ? "coach.status.remote" : "coach.status.fallback")
+    }
+
+    private var remoteStatusColor: Color {
+        coachStore.canUseRemoteCoach ? AppTheme.success : AppTheme.warning
+    }
+
+    private var remoteContextText: String {
+        guard coachStore.canUseRemoteCoach else {
+            return localizedString("backup.context_state.remote_unavailable")
+        }
+
+        guard let status = cloudSyncStore.lastBackupStatus else {
+            return localizedString("backup.context_state.not_checked")
+        }
+
+        return localizedString("backup.context_state.\(status.contextState.rawValue)")
+    }
+
+    private var remoteContextColor: Color {
+        guard coachStore.canUseRemoteCoach else {
+            return AppTheme.warning
+        }
+
+        guard let status = cloudSyncStore.lastBackupStatus else {
+            return AppTheme.secondaryText
+        }
+
+        switch status.contextState {
+        case .contextReady:
+            return AppTheme.success
+        case .contextStale, .reconcileRequired:
+            return AppTheme.warning
+        case .remoteUnavailable:
+            return AppTheme.destructive
+        }
+    }
+
+    private var insightsSourceText: String {
+        if coachStore.isLoadingProfileInsights {
+            return localizedString("profile.settings.coach.insights_loading")
+        }
+
+        if coachStore.profileInsights != nil {
+            return localizedString(insightsSourceKey)
+        }
+
+        if !coachStore.canUseRemoteCoach {
+            return localizedString("coach.insights.source.fallback")
+        }
+
+        return localizedString("profile.settings.coach.insights_not_loaded")
+    }
+
+    private var insightsSourceColor: Color {
+        if coachStore.isLoadingProfileInsights {
+            return AppTheme.accent
+        }
+
+        if coachStore.profileInsights != nil {
+            return coachStore.profileInsightsOrigin.sourceColor
+        }
+
+        return AppTheme.secondaryText
+    }
+
+    private var savedContextText: String {
+        localizedString(hasSavedContext ? "coach.context.status.ready" : "coach.context.status.missing")
+    }
+
+    private var savedContextColor: Color {
+        hasSavedContext ? AppTheme.success : AppTheme.warning
+    }
+
+    private var insightsSourceKey: String {
+        switch coachStore.profileInsightsOrigin {
+        case .freshModel:
+            return "coach.insights.source.fresh_model"
+        case .cachedModel:
+            return "coach.insights.source.cached_model"
+        case .fallback:
+            return "coach.insights.source.fallback"
+        }
+    }
+
+    private var lastCheckedText: String? {
+        guard let lastStatusCheckedAt = cloudSyncStore.lastStatusCheckedAt else {
+            return nil
+        }
+
+        let formatted = lastStatusCheckedAt.formatted(
+            .dateTime
+                .day()
+                .month(.abbreviated)
+                .hour()
+                .minute()
+        )
+        return String(
+            format: localizedString("profile.settings.coach.last_checked"),
+            formatted
+        )
+    }
+
+    var body: some View {
+        AppCard {
+            VStack(alignment: .leading, spacing: 16) {
+                AppSectionTitle(titleKey: "profile.settings.coach_status.title")
+
+                diagnosticsRow(
+                    titleKey: "profile.settings.coach_status.ai_status",
+                    value: remoteStatusText,
+                    color: remoteStatusColor
+                )
+                diagnosticsRow(
+                    titleKey: "profile.settings.coach_status.remote_context",
+                    value: remoteContextText,
+                    color: remoteContextColor
+                )
+                diagnosticsRow(
+                    titleKey: "profile.settings.coach_status.insights_source",
+                    value: insightsSourceText,
+                    color: insightsSourceColor
+                )
+                diagnosticsRow(
+                    titleKey: "profile.settings.coach_status.saved_context",
+                    value: savedContextText,
+                    color: savedContextColor
+                )
+
+                if let lastCheckedText {
+                    Text(lastCheckedText)
+                        .font(AppTypography.caption(size: 12, weight: .medium))
+                        .foregroundStyle(AppTheme.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                if let insightsError = coachStore.lastInsightsErrorDescription, !insightsError.isEmpty {
+                    Text(insightsError)
+                        .font(AppTypography.caption(size: 13, weight: .medium))
+                        .foregroundStyle(AppTheme.warning)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                if let syncError = cloudSyncStore.lastSyncErrorDescription, !syncError.isEmpty {
+                    Text(syncError)
+                        .font(AppTypography.caption(size: 13, weight: .medium))
+                        .foregroundStyle(AppTheme.warning)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
+    private func diagnosticsRow(
+        titleKey: String,
+        value: String,
+        color: Color
+    ) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Text(LocalizedStringKey(titleKey))
+                .font(AppTypography.body(size: 16, weight: .medium, relativeTo: .subheadline))
+                .foregroundStyle(AppTheme.primaryText)
+
+            Spacer(minLength: 16)
+
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(color)
+                    .frame(width: 8, height: 8)
+
+                Text(value)
+                    .font(AppTypography.caption(size: 13, weight: .semibold))
+                    .foregroundStyle(AppTheme.secondaryText)
+                    .multilineTextAlignment(.trailing)
+            }
+        }
     }
 }
 
