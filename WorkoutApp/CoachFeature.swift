@@ -4637,14 +4637,23 @@ struct TodayCoachInsightsResolver {
         isLoading: Bool,
         canUseRemoteCoach: Bool,
         lastErrorDescription: String?,
-        languageCode: String
+        languageCode: String,
+        workoutsThisWeek: Int
     ) -> TodayCoachInsightsState {
         if let insights {
             let hasError = !(lastErrorDescription?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
                 .isEmpty ?? true)
-            let filteredItems = focusItems(from: insights, languageCode: languageCode)
-            let summary = normalizedText(insights.summary, languageCode: languageCode)
+            let filteredItems = focusItems(
+                from: insights,
+                languageCode: languageCode,
+                workoutsThisWeek: workoutsThisWeek
+            )
+            let summary = normalizedText(
+                insights.summary,
+                languageCode: languageCode,
+                workoutsThisWeek: workoutsThisWeek
+            )
                 ?? filteredItems.first?.message
             guard let summary else {
                 return .unavailable(unavailableMessageKey(canUseRemoteCoach: canUseRemoteCoach))
@@ -4658,7 +4667,8 @@ struct TodayCoachInsightsResolver {
                             insights.executionContext?.explanation,
                             insights.confidenceNotes.first
                         ],
-                        languageCode: languageCode
+                        languageCode: languageCode,
+                        workoutsThisWeek: workoutsThisWeek
                     ),
                     items: Array(filteredItems.filter { $0.message != summary }.prefix(2)),
                     sourceKey: sourceKey(for: origin),
@@ -4684,16 +4694,24 @@ struct TodayCoachInsightsResolver {
 
     private static func firstValidText(
         _ values: [String?],
-        languageCode: String
+        languageCode: String,
+        workoutsThisWeek: Int
     ) -> String? {
         values
-            .compactMap { normalizedText($0, languageCode: languageCode) }
+            .compactMap {
+                normalizedText(
+                    $0,
+                    languageCode: languageCode,
+                    workoutsThisWeek: workoutsThisWeek
+                )
+            }
             .first
     }
 
     private static func focusItems(
         from insights: CoachProfileInsights,
-        languageCode: String
+        languageCode: String,
+        workoutsThisWeek: Int
     ) -> [TodayCoachInsightItemState] {
         typealias Source = (
             prefix: String,
@@ -4728,7 +4746,13 @@ struct TodayCoachInsightsResolver {
 
         func appendFirst(from source: Source) {
             guard let item = source.values
-                .compactMap({ normalizedText($0, languageCode: languageCode) })
+                .compactMap({
+                    normalizedText(
+                        $0,
+                        languageCode: languageCode,
+                        workoutsThisWeek: workoutsThisWeek
+                    )
+                })
                 .first(where: { usedMessages.insert($0).inserted }) else {
                 return
             }
@@ -4747,7 +4771,13 @@ struct TodayCoachInsightsResolver {
 
         if selectedItems.count < 2 {
             for source in sources {
-                for item in source.values.compactMap({ normalizedText($0, languageCode: languageCode) }) {
+                for item in source.values.compactMap({
+                    normalizedText(
+                        $0,
+                        languageCode: languageCode,
+                        workoutsThisWeek: workoutsThisWeek
+                    )
+                }) {
                     guard usedMessages.insert(item).inserted else {
                         continue
                     }
@@ -4777,13 +4807,18 @@ struct TodayCoachInsightsResolver {
 
     private static func normalizedText(
         _ text: String?,
-        languageCode: String
+        languageCode: String,
+        workoutsThisWeek: Int
     ) -> String? {
         guard let text else {
             return nil
         }
 
-        let normalized = coachNormalizedReadableText(text)
+        let normalized = sanitizedWeeklyFrequencyText(
+            in: coachNormalizedReadableText(text),
+            languageCode: languageCode,
+            workoutsThisWeek: workoutsThisWeek
+        )
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalized.isEmpty else {
             return nil
@@ -4793,6 +4828,64 @@ struct TodayCoachInsightsResolver {
         }
 
         return normalized
+    }
+
+    private static func sanitizedWeeklyFrequencyText(
+        in text: String,
+        languageCode: String,
+        workoutsThisWeek: Int
+    ) -> String {
+        let normalizedCount = max(workoutsThisWeek, 0)
+        let replacement: String
+        let patterns: [String]
+
+        if languageCode.lowercased().hasPrefix("ru") {
+            replacement = "\(normalizedCount) \(russianWorkoutNoun(for: normalizedCount)) на этой неделе"
+            patterns = [
+                #"(?iu)(?:около|примерно|где-?то|почти)?\s*\d+[.,]\d+\s*(?:трен(?:ировка|ировки|ировок)?|трен\.|раз(?:а)?|занят(?:ие|ия|ий)?|сесс(?:ия|ии|ий)?)\s*(?:в\s+недел(?:ю|и)|/нед\.?)"#,
+                #"(?iu)(?:около|примерно|где-?то|почти)?\s*\d+[.,]\d+\s*(?:раз(?:а)?)\s*в\s*недел(?:ю|и)"#
+            ]
+        } else {
+            replacement = "\(normalizedCount) workout\(normalizedCount == 1 ? "" : "s") this week"
+            patterns = [
+                #"(?i)(?:about|around|roughly|nearly|almost)?\s*\d+[.,]\d+\s*(?:workouts?|sessions?)\s*(?:per\s+week|/week)"#
+            ]
+        }
+
+        var result = text
+        for pattern in patterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern) else {
+                continue
+            }
+
+            let range = NSRange(result.startIndex..<result.endIndex, in: result)
+            result = regex.stringByReplacingMatches(
+                in: result,
+                options: [],
+                range: range,
+                withTemplate: replacement
+            )
+        }
+
+        return result.replacingOccurrences(of: "  ", with: " ")
+    }
+
+    private static func russianWorkoutNoun(for count: Int) -> String {
+        let remainder100 = count % 100
+        let remainder10 = count % 10
+
+        if remainder100 >= 11 && remainder100 <= 14 {
+            return "тренировок"
+        }
+
+        switch remainder10 {
+        case 1:
+            return "тренировка"
+        case 2...4:
+            return "тренировки"
+        default:
+            return "тренировок"
+        }
     }
 
     private static func matchesPreferredLanguage(
