@@ -1102,7 +1102,12 @@ private struct TodayMetricCard: View {
                 .minimumScaleFactor(0.85)
         }
         .padding(18)
-        .frame(maxWidth: .infinity, height: 152, alignment: .topLeading)
+        .frame(
+            maxWidth: .infinity,
+            minHeight: 152,
+            maxHeight: 152,
+            alignment: .topLeading
+        )
         .background(
             RoundedRectangle(cornerRadius: 24, style: .continuous)
                 .fill(AppTheme.surfaceElevated)
