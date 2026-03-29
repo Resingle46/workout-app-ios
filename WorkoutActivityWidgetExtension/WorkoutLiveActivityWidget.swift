@@ -13,22 +13,21 @@ struct WorkoutLiveActivityWidget: Widget {
                 DynamicIslandExpandedRegion(.leading) {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(context.state.title)
-                            .font(.headline)
+                            .font(.headline.weight(.semibold))
                             .lineLimit(1)
                         Text(context.attributes.startedAt, style: .timer)
-                            .font(.title3.monospacedDigit())
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
                     }
                 }
 
                 DynamicIslandExpandedRegion(.trailing) {
                     VStack(alignment: .trailing, spacing: 4) {
-                        Text(progressText(for: context.state))
+                        Text(progressShortText(for: context.state))
                             .font(.headline.monospacedDigit())
-                        if let currentSetLabel = context.state.currentSetLabel {
-                            Text(currentSetLabel)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
+                        Text(setLabelText(for: context.state))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                 }
 
@@ -38,13 +37,11 @@ struct WorkoutLiveActivityWidget: Widget {
                             .font(.subheadline.weight(.semibold))
                             .lineLimit(1)
                         if let lastCompletedSetAt = context.state.lastCompletedSetAt {
-                            HStack(spacing: 6) {
-                                Text("Rest")
-                                    .foregroundStyle(.secondary)
-                                Text(lastCompletedSetAt, style: .timer)
-                                    .monospacedDigit()
-                            }
-                            .font(.caption)
+                            restBadge(from: lastCompletedSetAt)
+                        } else {
+                            Text("Active")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -53,7 +50,7 @@ struct WorkoutLiveActivityWidget: Widget {
                 Text(context.attributes.startedAt, style: .timer)
                     .monospacedDigit()
             } compactTrailing: {
-                Text(progressText(for: context.state))
+                Text(progressShortText(for: context.state))
                     .font(.caption2.monospacedDigit())
             } minimal: {
                 Image(systemName: "figure.strengthtraining.traditional")
@@ -61,8 +58,30 @@ struct WorkoutLiveActivityWidget: Widget {
         }
     }
 
-    private func progressText(for state: WorkoutActivityAttributes.ContentState) -> String {
-        "\(state.completedSetCount)/\(state.totalSetCount)"
+    private func progressShortText(for state: WorkoutActivityAttributes.ContentState) -> String {
+        if state.totalSetCount > 0 {
+            return "\(state.completedSetCount)/\(state.totalSetCount)"
+        }
+        return "\(state.completedSetCount)"
+    }
+
+    private func setLabelText(for state: WorkoutActivityAttributes.ContentState) -> String {
+        state.currentSetLabel ?? "Set"
+    }
+
+    private func restBadge(from date: Date) -> some View {
+        HStack(spacing: 6) {
+            Text("Rest")
+                .font(.caption.weight(.semibold))
+            Text(date, style: .timer)
+                .monospacedDigit()
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(
+            Capsule(style: .continuous)
+                .fill(Color.white.opacity(0.15))
+        )
     }
 }
 
@@ -70,47 +89,57 @@ private struct WorkoutLiveActivityLockScreenView: View {
     let context: ActivityViewContext<WorkoutActivityAttributes>
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(context.state.title)
-                        .font(.headline)
-                        .lineLimit(1)
-                    Text(context.state.currentExerciseName)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-
-                Spacer(minLength: 12)
-
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(context.state.title)
+                    .font(.headline.weight(.semibold))
+                    .lineLimit(1)
+                Spacer(minLength: 8)
                 Text(context.attributes.startedAt, style: .timer)
-                    .font(.title3.monospacedDigit())
+                    .font(.subheadline.monospacedDigit())
+                    .foregroundStyle(.secondary)
             }
 
-            HStack(spacing: 12) {
-                Label(progressText, systemImage: "checkmark.circle.fill")
-                    .font(.subheadline.weight(.semibold))
-                if let currentSetLabel = context.state.currentSetLabel {
-                    Text(currentSetLabel)
-                        .font(.subheadline.weight(.semibold))
-                }
-            }
+            Text(context.state.currentExerciseName)
+                .font(.title3.weight(.semibold))
+                .lineLimit(1)
+
+            Text(progressLine)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
 
             if let lastCompletedSetAt = context.state.lastCompletedSetAt {
-                HStack(spacing: 6) {
-                    Text("Rest")
-                        .foregroundStyle(.secondary)
-                    Text(lastCompletedSetAt, style: .timer)
-                        .monospacedDigit()
-                }
-                .font(.caption)
+                restBadge(from: lastCompletedSetAt)
+            } else {
+                Text("Active")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 6)
     }
 
-    private var progressText: String {
-        "\(context.state.completedSetCount)/\(context.state.totalSetCount)"
+    private var progressLine: String {
+        let setLabel = context.state.currentSetLabel ?? "Set"
+        if context.state.totalSetCount > 0 {
+            return "\(setLabel) | \(context.state.completedSetCount) of \(context.state.totalSetCount) sets"
+        }
+        return "\(setLabel) | \(context.state.completedSetCount) sets"
+    }
+
+    private func restBadge(from date: Date) -> some View {
+        HStack(spacing: 6) {
+            Text("Rest")
+                .font(.caption.weight(.semibold))
+            Text(date, style: .timer)
+                .monospacedDigit()
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.white.opacity(0.15))
+        )
     }
 }
