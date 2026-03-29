@@ -8,6 +8,8 @@ struct WorkoutAppApp: App {
     @State private var workoutSummaryStore: WorkoutSummaryStore
     @State private var cloudSyncStore: CloudSyncStore
     @State private var debugDiagnosticsController: DebugDiagnosticsController
+    @State private var activeWorkoutDraftCoordinator = ActiveWorkoutDraftCoordinator()
+    @State private var workoutLiveActivityManager = WorkoutLiveActivityManager()
 
     private let debugRecorder: DebugEventRecorder
 
@@ -96,13 +98,18 @@ struct WorkoutAppApp: App {
                 .environment(workoutSummaryStore)
                 .environment(cloudSyncStore)
                 .environment(debugDiagnosticsController)
+                .environment(activeWorkoutDraftCoordinator)
                 .preferredColorScheme(.dark)
                 .task {
                     await store.handleAppLaunch()
+                    await workoutLiveActivityManager.reconcile(activeSession: store.activeSession, using: store)
                     await cloudSyncStore.handleAppLaunch(using: store)
                     await workoutSummaryStore.resumePendingJobsIfNeeded()
                     await coachStore.resumePendingChatJobIfNeeded(using: store)
                     debugDiagnosticsController.refreshReport()
+                }
+                .task(id: store.activeSession) {
+                    await workoutLiveActivityManager.sync(activeSession: store.activeSession, using: store)
                 }
         }
         .onChange(of: scenePhase) { _, newPhase in
@@ -114,15 +121,24 @@ struct WorkoutAppApp: App {
             Task {
                 switch newPhase {
                 case .active:
+                    await workoutLiveActivityManager.reconcile(activeSession: store.activeSession, using: store)
                     if store.selectedTab == .coach {
                         await coachStore.resumePendingChatJobIfNeeded(using: store)
                     }
                     await workoutSummaryStore.resumePendingJobsIfNeeded()
-                case .background:
-                    await cloudSyncStore.handleSceneDidEnterBackground(using: store)
-                    await store.handleSceneDidEnterBackground()
                 case .inactive:
-                    break
+                    await MainActor.run {
+                        activeWorkoutDraftCoordinator.flushAll()
+                    }
+                    await store.handleSceneWillResignActive()
+                    await workoutLiveActivityManager.sync(activeSession: store.activeSession, using: store)
+                case .background:
+                    await MainActor.run {
+                        activeWorkoutDraftCoordinator.flushAll()
+                    }
+                    await store.handleSceneDidEnterBackground()
+                    await workoutLiveActivityManager.sync(activeSession: store.activeSession, using: store)
+                    await cloudSyncStore.handleSceneDidEnterBackground(using: store)
                 @unknown default:
                     break
                 }

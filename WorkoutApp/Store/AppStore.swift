@@ -69,6 +69,36 @@ private enum ProgressionInputBuilder {
     static let maximumWithinSessionWeightSpread = 5.0
 }
 
+private let activeWorkoutCheckpointFreshnessInterval: TimeInterval = 24 * 60 * 60
+private let activeWorkoutCheckpointWriteDebounceDuration: Duration = .milliseconds(350)
+
+struct ActiveWorkoutRestoreBanner: Equatable, Identifiable, Sendable {
+    let id = UUID()
+    let sessionID: UUID
+}
+
+struct PendingStaleWorkoutCheckpoint: Equatable, Identifiable, Sendable {
+    let id = UUID()
+    let checkpoint: ActiveWorkoutCheckpoint
+
+    var session: WorkoutSession {
+        checkpoint.session
+    }
+}
+
+struct PendingWorkoutStartConflict: Equatable, Identifiable, Sendable {
+    enum Source: String, Equatable, Sendable {
+        case activeSession
+        case recoveredCheckpoint
+    }
+
+    let id = UUID()
+    let template: WorkoutTemplate
+    let existingSessionID: UUID
+    let existingSessionTitle: String
+    let source: Source
+}
+
 private func nsRange(for text: String) -> NSRange {
     NSRange(text.startIndex..<text.endIndex, in: text)
 }
@@ -85,6 +115,9 @@ final class AppStore {
     var profile: UserProfile
     var coachAnalysisSettings: CoachAnalysisSettings
     var selectedTab: RootTab = .programs
+    var restoredWorkoutBanner: ActiveWorkoutRestoreBanner?
+    var pendingStaleWorkoutCheckpoint: PendingStaleWorkoutCheckpoint?
+    var pendingWorkoutStartConflict: PendingWorkoutStartConflict?
 
     var localStateUpdatedAt: Date? {
         localSnapshotModifiedAt
@@ -102,14 +135,22 @@ final class AppStore {
         isSeedBaselineSnapshot ? .seed : .userData
     }
 
-    private let persistence = PersistenceController()
+    @ObservationIgnored private let persistence: PersistenceController
+    @ObservationIgnored private let activeWorkoutCheckpointStore: ActiveWorkoutCheckpointStore
     @ObservationIgnored private let debugRecorder: any DebugEventRecording
+    @ObservationIgnored private var activeWorkoutCheckpointWriteTask: Task<Void, Never>?
     private var hasPersistedSnapshot: Bool
     private var localSnapshotModifiedAt: Date?
     private var localSnapshotBackupHash: String?
 
-    init(debugRecorder: any DebugEventRecording = NoopDebugEventRecorder()) {
+    init(
+        debugRecorder: any DebugEventRecording = NoopDebugEventRecorder(),
+        persistence: PersistenceController = PersistenceController(),
+        activeWorkoutCheckpointStore: ActiveWorkoutCheckpointStore = ActiveWorkoutCheckpointStore()
+    ) {
         let seed = SeedData.make()
+        self.persistence = persistence
+        self.activeWorkoutCheckpointStore = activeWorkoutCheckpointStore
         let storedSnapshot = persistence.loadStoredSnapshot() ?? persistence.loadRollbackCheckpoint()
         let baseSnapshot = storedSnapshot?.snapshot ?? AppSnapshot(
             programs: seed.programs,
@@ -158,16 +199,21 @@ final class AppStore {
     }
 
     func apply(snapshot: AppSnapshot) {
+        cancelPendingCheckpointWrite()
         let normalizedSnapshot = Self.normalizedSnapshot(from: snapshot)
         programs = normalizedSnapshot.programs
         exercises = normalizedSnapshot.exercises
         history = normalizedSnapshot.history.sorted { $0.startedAt > $1.startedAt }
         lastFinishedSession = history.first(where: { $0.isFinished })
         activeSession = nil
+        restoredWorkoutBanner = nil
+        pendingStaleWorkoutCheckpoint = nil
+        pendingWorkoutStartConflict = nil
         profile = normalizedSnapshot.profile
         coachAnalysisSettings = normalizedSnapshot.coachAnalysisSettings
         Bundle.overrideLocalization(languageCode: selectedLanguageCode)
         persistSnapshot(normalizedSnapshot)
+        clearActiveWorkoutCheckpoint(reason: "snapshot_applied")
         hasPersistedSnapshot = true
     }
 
@@ -196,14 +242,28 @@ final class AppStore {
                 "hasRollbackCheckpoint": hadRollbackCheckpoint ? "true" : "false"
             ]
         )
+        restoreActiveWorkoutIfNeeded()
+    }
+
+    func handleSceneWillResignActive() async {
+        flushActiveWorkoutCheckpointNow()
+        debugRecorder.log(
+            category: .appLifecycle,
+            message: "scene_inactive",
+            metadata: [
+                "hasActiveWorkout": activeSession != nil ? "true" : "false"
+            ]
+        )
     }
 
     func handleSceneDidEnterBackground() async {
+        flushActiveWorkoutCheckpointNow()
         debugRecorder.log(
             category: .appLifecycle,
             message: "scene_background",
             metadata: [
-                "localCacheAvailable": hasPersistedSnapshot ? "true" : "false"
+                "localCacheAvailable": hasPersistedSnapshot ? "true" : "false",
+                "hasActiveWorkout": activeSession != nil ? "true" : "false"
             ]
         )
     }
@@ -264,28 +324,91 @@ final class AppStore {
     }
 
     func startWorkout(template: WorkoutTemplate) {
-        let normalizedExercises = Self.normalizedSupersetTemplateExercises(template.exercises)
-        let logs = normalizedExercises.map { item in
-            WorkoutExerciseLog(
-                templateExerciseID: item.id,
-                exerciseID: item.exerciseID,
-                groupKind: item.groupKind,
-                groupID: item.groupID,
-                sets: item.sets.map { WorkoutSetLog(reps: $0.reps, weight: $0.suggestedWeight) }
+        if let currentSession = activeSession {
+            pendingWorkoutStartConflict = PendingWorkoutStartConflict(
+                template: template,
+                existingSessionID: currentSession.id,
+                existingSessionTitle: currentSession.title,
+                source: .activeSession
             )
+            return
         }
-        activeSession = WorkoutSession(workoutTemplateID: template.id, title: template.title, exercises: logs)
-        selectedTab = .workout
+
+        if let pendingCheckpoint = pendingStaleWorkoutCheckpoint {
+            pendingWorkoutStartConflict = PendingWorkoutStartConflict(
+                template: template,
+                existingSessionID: pendingCheckpoint.session.id,
+                existingSessionTitle: pendingCheckpoint.session.title,
+                source: .recoveredCheckpoint
+            )
+            return
+        }
+
+        beginWorkout(template: template)
+    }
+
+    func resumePendingRecoveredWorkout() {
+        guard let pendingCheckpoint = pendingStaleWorkoutCheckpoint else { return }
+        restoreActiveWorkout(from: pendingCheckpoint.checkpoint, showBanner: true)
+        pendingStaleWorkoutCheckpoint = nil
+        pendingWorkoutStartConflict = nil
+    }
+
+    @discardableResult
+    func discardRecoveredWorkout() -> UUID? {
+        if activeSession != nil {
+            flushActiveWorkoutCheckpointNow()
+        }
+
+        return discardRecoveredOrActiveWorkout()
+    }
+
+    func dismissRestoredWorkoutBanner() {
+        restoredWorkoutBanner = nil
+    }
+
+    func resolvePendingWorkoutStartConflictByResumingCurrentWorkout() {
+        guard let conflict = pendingWorkoutStartConflict else { return }
+        pendingWorkoutStartConflict = nil
+
+        switch conflict.source {
+        case .activeSession:
+            selectedTab = .workout
+        case .recoveredCheckpoint:
+            resumePendingRecoveredWorkout()
+        }
+    }
+
+    @discardableResult
+    func resolvePendingWorkoutStartConflictByDiscardingCurrentWorkout() -> UUID? {
+        guard let conflict = pendingWorkoutStartConflict else { return nil }
+        pendingWorkoutStartConflict = nil
+        let discardedSessionID = discardRecoveredWorkout()
+        beginWorkout(template: conflict.template)
+        return discardedSessionID
     }
 
     func finishActiveWorkout() {
         guard var session = activeSession else { return }
+        flushActiveWorkoutCheckpointNow()
         session.endedAt = .now
+
+        if history.contains(where: { $0.id == session.id && $0.isFinished }) {
+            activeSession = nil
+            restoredWorkoutBanner = nil
+            pendingWorkoutStartConflict = nil
+            clearActiveWorkoutCheckpoint(reason: "duplicate_finished_session")
+            return
+        }
+
         history.insert(session, at: 0)
         history.sort { $0.startedAt > $1.startedAt }
         lastFinishedSession = session
-        activeSession = nil
         save()
+        activeSession = nil
+        restoredWorkoutBanner = nil
+        pendingWorkoutStartConflict = nil
+        clearActiveWorkoutCheckpoint(reason: "finished_workout")
     }
 
     func applyRemoteRestore(snapshot: AppSnapshot, remoteBackupHash: String? = nil) {
@@ -301,6 +424,7 @@ final class AppStore {
             )
         }
         apply(snapshot: snapshot)
+        pendingStaleWorkoutCheckpoint = nil
         if let remoteBackupHash {
             adoptRemoteBackupHash(remoteBackupHash)
         }
@@ -314,10 +438,24 @@ final class AppStore {
         guard var session = activeSession else { return }
         updater(&session)
         activeSession = session
+        scheduleActiveWorkoutCheckpointWrite()
     }
 
     func cancelActiveWorkout() {
-        activeSession = nil
+        _ = discardRecoveredWorkout()
+    }
+
+    func flushActiveWorkoutCheckpointNow() {
+        cancelPendingCheckpointWrite()
+
+        guard let activeSession else {
+            if pendingStaleWorkoutCheckpoint == nil {
+                clearActiveWorkoutCheckpoint(reason: "no_active_session")
+            }
+            return
+        }
+
+        saveActiveWorkoutCheckpoint(for: activeSession, reason: "forced_flush")
     }
 
     func addProgram(title: String) {
@@ -353,6 +491,7 @@ final class AppStore {
 
         if activeSession?.workoutTemplateID == workoutID {
             activeSession?.title = title
+            scheduleActiveWorkoutCheckpointWrite()
         }
 
         save()
@@ -1278,28 +1417,10 @@ final class AppStore {
     }
 
     private func preferredProgramForProfileInsights() -> WorkoutProgram? {
-        if let selectedProgramID = coachAnalysisSettings.selectedProgramID,
-           let selectedProgram = program(for: selectedProgramID),
-           !selectedProgram.workouts.isEmpty {
-            return selectedProgram
-        }
-
-        if let workoutTemplateID = activeSession?.workoutTemplateID,
-           let program = program(containingWorkoutTemplateID: workoutTemplateID) {
-            return program
-        }
-
-        if let workoutTemplateID = lastFinishedSession?.workoutTemplateID,
-           let program = program(containingWorkoutTemplateID: workoutTemplateID) {
-            return program
-        }
-
-        if let workoutTemplateID = history.first(where: \.isFinished)?.workoutTemplateID,
-           let program = program(containingWorkoutTemplateID: workoutTemplateID) {
-            return program
-        }
-
-        return programs.first(where: { !$0.workouts.isEmpty })
+        PreferredProgramResolver.resolve(
+            from: self,
+            preferredProgramID: coachAnalysisSettings.selectedProgramID
+        )
     }
 
     private func programCommentConstraints() -> CoachProgramCommentConstraints {
@@ -1574,6 +1695,205 @@ final class AppStore {
         let metadata = persistence.save(snapshot: snapshot)
         localSnapshotModifiedAt = metadata?.modifiedAt
         localSnapshotBackupHash = metadata?.backupHash
+    }
+
+    private func beginWorkout(template: WorkoutTemplate) {
+        let normalizedExercises = Self.normalizedSupersetTemplateExercises(template.exercises)
+        let logs = normalizedExercises.map { item in
+            WorkoutExerciseLog(
+                templateExerciseID: item.id,
+                exerciseID: item.exerciseID,
+                groupKind: item.groupKind,
+                groupID: item.groupID,
+                sets: item.sets.map { WorkoutSetLog(reps: $0.reps, weight: $0.suggestedWeight) }
+            )
+        }
+
+        activeSession = WorkoutSession(workoutTemplateID: template.id, title: template.title, exercises: logs)
+        restoredWorkoutBanner = nil
+        pendingStaleWorkoutCheckpoint = nil
+        pendingWorkoutStartConflict = nil
+        selectedTab = .workout
+        scheduleActiveWorkoutCheckpointWrite()
+    }
+
+    private func restoreActiveWorkoutIfNeeded() {
+        guard let checkpoint = loadActiveWorkoutCheckpoint() else {
+            return
+        }
+
+        guard checkpoint.schemaVersion == ActiveWorkoutCheckpoint.currentSchemaVersion else {
+            clearActiveWorkoutCheckpoint(reason: "schema_mismatch")
+            return
+        }
+
+        guard checkpoint.session.endedAt == nil else {
+            clearActiveWorkoutCheckpoint(reason: "finished_checkpoint")
+            return
+        }
+
+        guard !history.contains(where: { $0.id == checkpoint.session.id && $0.isFinished }) else {
+            clearActiveWorkoutCheckpoint(reason: "session_already_finished")
+            return
+        }
+
+        guard validateRecoveredWorkoutSession(checkpoint.session) else {
+            clearActiveWorkoutCheckpoint(reason: "invalid_session_references")
+            return
+        }
+
+        let checkpointAge = max(0, Date().timeIntervalSince(checkpoint.savedAt))
+        if checkpointAge > activeWorkoutCheckpointFreshnessInterval {
+            activeSession = nil
+            restoredWorkoutBanner = nil
+            pendingStaleWorkoutCheckpoint = PendingStaleWorkoutCheckpoint(checkpoint: checkpoint)
+            return
+        }
+
+        restoreActiveWorkout(from: checkpoint, showBanner: true)
+    }
+
+    private func restoreActiveWorkout(from checkpoint: ActiveWorkoutCheckpoint, showBanner: Bool) {
+        activeSession = checkpoint.session
+        restoredWorkoutBanner = showBanner ? ActiveWorkoutRestoreBanner(sessionID: checkpoint.session.id) : nil
+        pendingStaleWorkoutCheckpoint = nil
+        pendingWorkoutStartConflict = nil
+        selectedTab = .workout
+    }
+
+    private func loadActiveWorkoutCheckpoint() -> ActiveWorkoutCheckpoint? {
+        do {
+            return try activeWorkoutCheckpointStore.load()
+        } catch {
+            debugRecorder.log(
+                category: .backup,
+                level: .warning,
+                message: "active_workout_checkpoint_load_failed",
+                metadata: ["error": String(describing: error)]
+            )
+            clearActiveWorkoutCheckpoint(reason: "load_failed")
+            return nil
+        }
+    }
+
+    private func scheduleActiveWorkoutCheckpointWrite() {
+        guard let session = activeSession else {
+            cancelPendingCheckpointWrite()
+            return
+        }
+
+        cancelPendingCheckpointWrite()
+        activeWorkoutCheckpointWriteTask = Task { [weak self, session] in
+            do {
+                try await Task.sleep(for: activeWorkoutCheckpointWriteDebounceDuration)
+            } catch {
+                return
+            }
+
+            await MainActor.run {
+                guard let self, self.activeSession?.id == session.id else { return }
+                self.saveActiveWorkoutCheckpoint(for: session, reason: "debounced")
+            }
+        }
+    }
+
+    private func cancelPendingCheckpointWrite() {
+        activeWorkoutCheckpointWriteTask?.cancel()
+        activeWorkoutCheckpointWriteTask = nil
+    }
+
+    private func saveActiveWorkoutCheckpoint(for session: WorkoutSession, reason: String) {
+        do {
+            _ = try activeWorkoutCheckpointStore.save(
+                ActiveWorkoutCheckpoint(savedAt: .now, session: session)
+            )
+            debugRecorder.log(
+                category: .backup,
+                message: "active_workout_checkpoint_saved",
+                metadata: [
+                    "reason": reason,
+                    "sessionID": session.id.uuidString
+                ]
+            )
+        } catch {
+            debugRecorder.log(
+                category: .backup,
+                level: .warning,
+                message: "active_workout_checkpoint_save_failed",
+                metadata: [
+                    "reason": reason,
+                    "sessionID": session.id.uuidString,
+                    "error": String(describing: error)
+                ]
+            )
+        }
+    }
+
+    private func clearActiveWorkoutCheckpoint(reason: String) {
+        cancelPendingCheckpointWrite()
+
+        do {
+            try activeWorkoutCheckpointStore.clear()
+            debugRecorder.log(
+                category: .backup,
+                message: "active_workout_checkpoint_cleared",
+                metadata: ["reason": reason]
+            )
+        } catch {
+            debugRecorder.log(
+                category: .backup,
+                level: .warning,
+                message: "active_workout_checkpoint_clear_failed",
+                metadata: [
+                    "reason": reason,
+                    "error": String(describing: error)
+                ]
+            )
+        }
+    }
+
+    @discardableResult
+    private func discardRecoveredOrActiveWorkout() -> UUID? {
+        let discardedSessionID = activeSession?.id ?? pendingStaleWorkoutCheckpoint?.session.id
+        activeSession = nil
+        restoredWorkoutBanner = nil
+        pendingStaleWorkoutCheckpoint = nil
+        pendingWorkoutStartConflict = nil
+        clearActiveWorkoutCheckpoint(reason: "discarded")
+        return discardedSessionID
+    }
+
+    private func validateRecoveredWorkoutSession(_ session: WorkoutSession) -> Bool {
+        guard !session.exercises.isEmpty,
+              let workoutTemplate = programs
+                .flatMap(\.workouts)
+                .first(where: { $0.id == session.workoutTemplateID }) else {
+            return false
+        }
+
+        guard session.exercises.count == workoutTemplate.exercises.count else {
+            return false
+        }
+
+        let templateExercisesByID = Dictionary(uniqueKeysWithValues: workoutTemplate.exercises.map { ($0.id, $0) })
+        let sessionTemplateExerciseIDs = Set(session.exercises.map(\.templateExerciseID))
+        let templateExerciseIDs = Set(workoutTemplate.exercises.map(\.id))
+        guard sessionTemplateExerciseIDs == templateExerciseIDs else {
+            return false
+        }
+
+        for exerciseLog in session.exercises {
+            guard let templateExercise = templateExercisesByID[exerciseLog.templateExerciseID],
+                  exercise(for: exerciseLog.exerciseID) != nil,
+                  templateExercise.exerciseID == exerciseLog.exerciseID,
+                  templateExercise.groupKind == exerciseLog.groupKind,
+                  templateExercise.groupID == exerciseLog.groupID,
+                  !exerciseLog.sets.isEmpty else {
+                return false
+            }
+        }
+
+        return true
     }
 
     func adoptRemoteBackupHash(_ backupHash: String) {

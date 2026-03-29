@@ -26,6 +26,8 @@
     <string>$(COACH_INTERNAL_BEARER_TOKEN)</string>
     <key>LSRequiresIPhoneOS</key>
     <true/>
+    <key>NSSupportsLiveActivities</key>
+    <true/>
     <key>UIAppFonts</key>
     <array>
         <string>PlayfairDisplaySC-Regular.ttf</string>

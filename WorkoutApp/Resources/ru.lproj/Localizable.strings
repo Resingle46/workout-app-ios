@@ -45,6 +45,10 @@
 "action.edit" = "Изменить";
 "action.collapse" = "Свернуть";
 "action.done" = "Готово";
+"workout.recovery.resume_action" = "Продолжить тренировку";
+"workout.recovery.discard_action" = "Сбросить тренировку";
+"workout.recovery.resume_current_action" = "Продолжить текущую";
+"workout.recovery.discard_and_start_action" = "Сбросить и начать";
 
 "program.create" = "Новая программа";
 "program.edit" = "Изменить программу";
@@ -105,6 +109,13 @@
 "workout.done_badge" = "Готово";
 "workout.progress_title" = "Прогресс тренировки";
 "workout.progress_value" = "%d готово | %d осталось";
+"workout.recovery.banner_title" = "Тренировка восстановлена";
+"workout.recovery.banner_message" = "Незавершённая тренировка была восстановлена на этом устройстве.";
+"workout.recovery.stale_title" = "Продолжить прошлую тренировку?";
+"workout.recovery.stale_message" = "Сохранённая тренировка \"%@\" была найдена из более старой сессии. Продолжить её или сбросить?";
+"workout.recovery.stale_fallback_message" = "Найдено старое сохранение тренировки. Продолжить его или сбросить?";
+"workout.recovery.start_conflict_title" = "Есть незавершённая тренировка";
+"workout.recovery.start_conflict_message" = "Тренировка \"%@\" ещё не завершена. Продолжить её или сбросить и начать \"%@\"?";
 
 "stats.exercise_picker" = "Аналитика упражнения";
 "stats.exercise" = "Упражнение";

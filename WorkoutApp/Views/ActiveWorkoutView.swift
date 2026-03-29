@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ActiveWorkoutView: View {
     @Environment(AppStore.self) private var store
+    @Environment(ActiveWorkoutDraftCoordinator.self) private var draftCoordinator
     @Environment(WorkoutSummaryStore.self) private var workoutSummaryStore
     @Environment(\.appBottomRailInset) private var bottomRailInset
 
@@ -69,6 +70,7 @@ struct ActiveWorkoutView: View {
                     onCancel: {
                         let activeSessionID = store.activeSession?.id
                         presentedSummary = nil
+                        draftCoordinator.flushAll()
                         store.cancelActiveWorkout()
                         store.selectedTab = .programs
 
@@ -368,6 +370,7 @@ struct ActiveWorkoutView: View {
 
     private var finishWorkoutCTA: some View {
         Button(role: .destructive) {
+            draftCoordinator.flushAll()
             store.finishActiveWorkout()
         } label: {
             Label("action.finish_workout", systemImage: "stop.fill")
@@ -510,6 +513,7 @@ private struct WorkoutExerciseInfoRow: View {
 
 private struct WorkoutSetRow: View {
     @Environment(AppStore.self) private var store
+    @Environment(ActiveWorkoutDraftCoordinator.self) private var draftCoordinator
 
     let exerciseIndex: Int
     let setIndex: Int
@@ -647,6 +651,9 @@ private struct WorkoutSetRow: View {
         .shadow(color: cardShadowColor, radius: isCurrent ? 12 : 0, y: isCurrent ? 6 : 0)
         .onAppear {
             synchronizeDraftFromStore()
+            draftCoordinator.registerFlushAction(id: set.id) {
+                flushDraftCommit()
+            }
         }
         .onChange(of: syncToken) { _, _ in
             synchronizeDraftFromStore()
@@ -657,6 +664,7 @@ private struct WorkoutSetRow: View {
             }
         }
         .onDisappear {
+            draftCoordinator.unregisterFlushAction(id: set.id)
             if hasPendingDraftChanges {
                 flushDraftCommit()
             } else {

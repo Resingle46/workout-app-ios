@@ -151,7 +151,9 @@ struct RootTabBarPresentationResolver {
 struct RootTabView: View {
     @Environment(AppStore.self) private var store
     @Environment(CloudSyncStore.self) private var cloudSyncStore
+    @Environment(WorkoutSummaryStore.self) private var workoutSummaryStore
     @State private var workoutTabsExpanded = false
+    @State private var isShowingStaleWorkoutAlert = false
 
     private var tabBarPresentationMode: TabBarPresentationMode {
         RootTabBarPresentationResolver.resolve(
@@ -181,6 +183,12 @@ struct RootTabView: View {
                 if newValue == nil {
                     workoutTabsExpanded = false
                 }
+            }
+            .onChange(of: store.pendingStaleWorkoutCheckpoint?.session.id, initial: true) { _, newValue in
+                isShowingStaleWorkoutAlert = newValue != nil
+            }
+            .safeAreaInset(edge: .top, spacing: 0) {
+                restoredWorkoutBanner
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 bottomRail
@@ -214,6 +222,52 @@ struct RootTabView: View {
             } message: { pending in
                 Text(cloudRestoreAlertMessage(for: pending))
             }
+            .alert(
+                Text("workout.recovery.stale_title"),
+                isPresented: $isShowingStaleWorkoutAlert
+            ) {
+                Button("workout.recovery.resume_action") {
+                    store.resumePendingRecoveredWorkout()
+                    isShowingStaleWorkoutAlert = false
+                }
+                Button("workout.recovery.discard_action", role: .destructive) {
+                    if let discardedSessionID = store.discardRecoveredWorkout() {
+                        workoutSummaryStore.discardSummary(for: discardedSessionID)
+                    }
+                    isShowingStaleWorkoutAlert = false
+                }
+                Button("action.cancel", role: .cancel) {
+                    isShowingStaleWorkoutAlert = false
+                }
+            } message: {
+                Text(staleWorkoutAlertMessage)
+            }
+            .alert(
+                workoutStartConflictAlertTitle,
+                isPresented: Binding(
+                    get: { store.pendingWorkoutStartConflict != nil },
+                    set: { isPresented in
+                        if !isPresented {
+                            store.pendingWorkoutStartConflict = nil
+                        }
+                    }
+                ),
+                presenting: store.pendingWorkoutStartConflict
+            ) { _ in
+                Button("workout.recovery.resume_current_action") {
+                    store.resolvePendingWorkoutStartConflictByResumingCurrentWorkout()
+                }
+                Button("workout.recovery.discard_and_start_action", role: .destructive) {
+                    if let discardedSessionID = store.resolvePendingWorkoutStartConflictByDiscardingCurrentWorkout() {
+                        workoutSummaryStore.discardSummary(for: discardedSessionID)
+                    }
+                }
+                Button("action.cancel", role: .cancel) {
+                    store.pendingWorkoutStartConflict = nil
+                }
+            } message: { conflict in
+                Text(workoutStartConflictAlertMessage(for: conflict))
+            }
         }
     }
 
@@ -224,7 +278,7 @@ struct RootTabView: View {
         NavigationStack {
             switch tab {
             case .programs:
-                ProgramsView()
+                TodayDashboardView()
             case .workout:
                 ActiveWorkoutView()
             case .statistics:
@@ -288,6 +342,25 @@ struct RootTabView: View {
         }
     }
 
+    @ViewBuilder
+    private var restoredWorkoutBanner: some View {
+        if store.restoredWorkoutBanner != nil {
+            ActiveWorkoutRecoveryBanner(
+                onDismiss: {
+                    store.dismissRestoredWorkoutBanner()
+                },
+                onDiscard: {
+                    if let discardedSessionID = store.discardRecoveredWorkout() {
+                        workoutSummaryStore.discardSummary(for: discardedSessionID)
+                    }
+                    store.selectedTab = .programs
+                }
+            )
+            .padding(.horizontal, 16)
+            .padding(.top, 10)
+        }
+    }
+
     private var cloudRestoreAlertTitle: String {
         guard let pending = cloudSyncStore.pendingRemoteRestore else {
             return "Cloud Backup"
@@ -318,6 +391,72 @@ struct RootTabView: View {
         case .conflict:
             return "The cloud backup from \(uploadedAt) differs from the local data on this device. Restore the remote backup now?"
         }
+    }
+
+    private var staleWorkoutAlertMessage: String {
+        guard let pending = store.pendingStaleWorkoutCheckpoint else {
+            return NSLocalizedString("workout.recovery.stale_fallback_message", comment: "")
+        }
+
+        return String(
+            format: NSLocalizedString("workout.recovery.stale_message", comment: ""),
+            pending.session.title
+        )
+    }
+
+    private var workoutStartConflictAlertTitle: String {
+        NSLocalizedString("workout.recovery.start_conflict_title", comment: "")
+    }
+
+    private func workoutStartConflictAlertMessage(for conflict: PendingWorkoutStartConflict) -> String {
+        String(
+            format: NSLocalizedString("workout.recovery.start_conflict_message", comment: ""),
+            conflict.existingSessionTitle,
+            conflict.template.title
+        )
+    }
+}
+
+private struct ActiveWorkoutRecoveryBanner: View {
+    let onDismiss: () -> Void
+    let onDiscard: () -> Void
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("workout.recovery.banner_title")
+                    .font(AppTypography.body(size: 15, weight: .semibold, relativeTo: .headline))
+                    .foregroundStyle(AppTheme.primaryText)
+                Text("workout.recovery.banner_message")
+                    .font(AppTypography.caption(size: 13, weight: .medium))
+                    .foregroundStyle(AppTheme.secondaryText)
+                    .lineLimit(2)
+            }
+
+            Spacer(minLength: 12)
+
+            Button("workout.recovery.discard_action", role: .destructive, action: onDiscard)
+                .font(AppTypography.label(size: 12, weight: .semibold))
+
+            Button(action: onDismiss) {
+                Image(systemName: "xmark")
+                    .font(AppTypography.icon(size: 13, weight: .bold))
+                    .foregroundStyle(AppTheme.secondaryText)
+                    .frame(width: 28, height: 28)
+                    .background(AppTheme.surfaceElevated, in: Circle())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .fill(AppTheme.backgroundRaised.opacity(0.98))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .stroke(AppTheme.border, lineWidth: 1)
+                )
+                .shadow(color: AppTheme.shadowSubtle, radius: 14, y: 8)
+        )
     }
 }
 
@@ -776,7 +915,7 @@ private extension RootTab {
     var systemImage: String {
         switch self {
         case .programs:
-            return "list.clipboard"
+            return "sun.max.fill"
         case .workout:
             return "timer"
         case .statistics:
@@ -791,7 +930,7 @@ private extension RootTab {
     var titleKey: LocalizedStringKey {
         switch self {
         case .programs:
-            return "tab.programs"
+            return "tab.today"
         case .workout:
             return "tab.workout"
         case .statistics:

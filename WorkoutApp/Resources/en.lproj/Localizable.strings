@@ -45,6 +45,10 @@
 "action.edit" = "Edit";
 "action.collapse" = "Collapse";
 "action.done" = "Done";
+"workout.recovery.resume_action" = "Resume workout";
+"workout.recovery.discard_action" = "Discard workout";
+"workout.recovery.resume_current_action" = "Resume current";
+"workout.recovery.discard_and_start_action" = "Discard and start";
 
 "program.create" = "New Program";
 "program.edit" = "Edit Program";
@@ -105,6 +109,13 @@
 "workout.done_badge" = "Done";
 "workout.progress_title" = "Workout progress";
 "workout.progress_value" = "%d done | %d left";
+"workout.recovery.banner_title" = "Workout restored";
+"workout.recovery.banner_message" = "Your in-progress workout was recovered on this device.";
+"workout.recovery.stale_title" = "Resume previous workout?";
+"workout.recovery.stale_message" = "\"%@\" was recovered from an older session. Resume it or discard it?";
+"workout.recovery.stale_fallback_message" = "An older workout checkpoint is available. Resume it or discard it?";
+"workout.recovery.start_conflict_title" = "Current workout in progress";
+"workout.recovery.start_conflict_message" = "\"%@\" is still in progress. Resume it, or discard it and start \"%@\"?";
 
 "stats.exercise_picker" = "Exercise analytics";
 "stats.exercise" = "Exercise";
