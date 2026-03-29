@@ -43,6 +43,7 @@ enum DebugLogCategory: String, Codable, Hashable, Sendable {
     case backup = "backup"
     case cloudSync = "cloud_sync"
     case coach = "coach"
+    case liveActivity = "live_activity"
     case network = "network"
     case developerMenu = "developer_menu"
 }
@@ -475,10 +476,28 @@ struct DebugDiagnosticsReport: Codable, Hashable, Sendable {
         var lastWorkoutSummaryProvider: String?
     }
 
+    struct LiveActivitySection: Codable, Hashable, Sendable {
+        var runtimeSupported: Bool
+        var infoPlistSupportsLiveActivities: Bool
+        var embeddedExtensionBundleIDs: [String]
+        var areActivitiesEnabled: Bool?
+        var activeSessionID: String?
+        var knownActivityCount: Int
+        var startedActivityID: String?
+        var lastRequestStatus: String?
+        var lastUpdateStatus: String?
+        var lastEndStatus: String?
+        var lastReconcileStatus: String?
+        var lastSnapshotStatus: String?
+        var lastErrorOrReason: String?
+        var lastEventAt: Date?
+    }
+
     var generatedAt: Date
     var runtime: RuntimeSection
     var cloudSync: CloudSyncSection
     var coach: CoachSection
+    var liveActivity: LiveActivitySection
     var network: [DebugNetworkTrace]
     var logs: [DebugLogEntry]
 
@@ -512,6 +531,22 @@ struct DebugDiagnosticsReport: Codable, Hashable, Sendable {
             lastInsightsError: nil,
             lastInsightsProvider: nil,
             lastWorkoutSummaryProvider: nil
+        ),
+        liveActivity: LiveActivitySection(
+            runtimeSupported: false,
+            infoPlistSupportsLiveActivities: false,
+            embeddedExtensionBundleIDs: [],
+            areActivitiesEnabled: nil,
+            activeSessionID: nil,
+            knownActivityCount: 0,
+            startedActivityID: nil,
+            lastRequestStatus: nil,
+            lastUpdateStatus: nil,
+            lastEndStatus: nil,
+            lastReconcileStatus: nil,
+            lastSnapshotStatus: nil,
+            lastErrorOrReason: nil,
+            lastEventAt: nil
         ),
         network: [],
         logs: []
@@ -551,10 +586,28 @@ struct DebugDiagnosticsExportPayload: Codable, Hashable, Sendable {
         var lastWorkoutSummaryProvider: String?
     }
 
+    struct LiveActivitySection: Codable, Hashable, Sendable {
+        var runtimeSupported: Bool
+        var infoPlistSupportsLiveActivities: Bool
+        var embeddedExtensionBundleIDs: [String]
+        var areActivitiesEnabled: Bool?
+        var activeSessionID: String?
+        var knownActivityCount: Int
+        var startedActivityID: String?
+        var lastRequestStatus: String?
+        var lastUpdateStatus: String?
+        var lastEndStatus: String?
+        var lastReconcileStatus: String?
+        var lastSnapshotStatus: String?
+        var lastErrorOrReason: String?
+        var lastEventAt: Date?
+    }
+
     var generatedAt: Date
     var runtime: RuntimeSection
     var cloudSync: CloudSyncSection
     var coach: CoachSection
+    var liveActivity: LiveActivitySection
     var network: [DebugNetworkTrace]
     var logs: [DebugLogEntry]
 }
@@ -567,6 +620,7 @@ final class DebugDiagnosticsReportBuilder {
     private let workoutSummaryStoreProvider: @MainActor () -> WorkoutSummaryStore
     private let cloudSyncStoreProvider: @MainActor () -> CloudSyncStore
     private let coachLocalStateStoreProvider: () -> CoachLocalStateStore
+    private let liveActivityDiagnosticsProvider: @MainActor () -> WorkoutLiveActivityDiagnostics
     private let runtimeConfigurationProvider: () -> CoachRuntimeConfiguration
 
     init(
@@ -576,6 +630,10 @@ final class DebugDiagnosticsReportBuilder {
         workoutSummaryStoreProvider: @escaping @MainActor () -> WorkoutSummaryStore,
         cloudSyncStoreProvider: @escaping @MainActor () -> CloudSyncStore,
         coachLocalStateStoreProvider: @escaping () -> CoachLocalStateStore,
+        cloudSyncLocalStateStoreProvider _: (() -> CloudSyncLocalStateStore)? = nil,
+        liveActivityDiagnosticsProvider: @escaping @MainActor () -> WorkoutLiveActivityDiagnostics = {
+            WorkoutLiveActivityDiagnostics()
+        },
         runtimeConfigurationProvider: @escaping () -> CoachRuntimeConfiguration
     ) {
         self.eventStore = eventStore
@@ -584,17 +642,23 @@ final class DebugDiagnosticsReportBuilder {
         self.workoutSummaryStoreProvider = workoutSummaryStoreProvider
         self.cloudSyncStoreProvider = cloudSyncStoreProvider
         self.coachLocalStateStoreProvider = coachLocalStateStoreProvider
+        self.liveActivityDiagnosticsProvider = liveActivityDiagnosticsProvider
         self.runtimeConfigurationProvider = runtimeConfigurationProvider
     }
 
     func buildReport() -> DebugDiagnosticsReport {
         let snapshot = eventStore.snapshot()
-        _ = appStoreProvider()
+        let appStore = appStoreProvider()
         let runtimeConfiguration = runtimeConfigurationProvider()
         let coachStore = coachStoreProvider()
         let workoutSummaryStore = workoutSummaryStoreProvider()
         let cloudSyncStore = cloudSyncStoreProvider()
         let coachLocalStateStore = coachLocalStateStoreProvider()
+        let liveActivitySnapshot = liveActivityDiagnosticsProvider().snapshot()
+        let infoPlistSupportsLiveActivities = Bundle.main.object(
+            forInfoDictionaryKey: "NSSupportsLiveActivities"
+        ) as? Bool ?? false
+        let embeddedExtensionBundleIDs = embeddedExtensionBundleIdentifiers()
 
         return DebugDiagnosticsReport(
             generatedAt: .now,
@@ -633,6 +697,22 @@ final class DebugDiagnosticsReportBuilder {
                 lastInsightsProvider: coachStore.lastInsightsProvider?.rawValue,
                 lastWorkoutSummaryProvider: workoutSummaryStore.lastSummaryProvider?.rawValue
             ),
+            liveActivity: DebugDiagnosticsReport.LiveActivitySection(
+                runtimeSupported: liveActivitySnapshot.runtimeSupported,
+                infoPlistSupportsLiveActivities: infoPlistSupportsLiveActivities,
+                embeddedExtensionBundleIDs: embeddedExtensionBundleIDs,
+                areActivitiesEnabled: liveActivitySnapshot.areActivitiesEnabled,
+                activeSessionID: appStore.activeSession?.id.uuidString ?? liveActivitySnapshot.activeSessionID,
+                knownActivityCount: liveActivitySnapshot.knownActivityCount,
+                startedActivityID: liveActivitySnapshot.startedActivityID,
+                lastRequestStatus: liveActivitySnapshot.lastRequestStatus,
+                lastUpdateStatus: liveActivitySnapshot.lastUpdateStatus,
+                lastEndStatus: liveActivitySnapshot.lastEndStatus,
+                lastReconcileStatus: liveActivitySnapshot.lastReconcileStatus,
+                lastSnapshotStatus: liveActivitySnapshot.lastSnapshotStatus,
+                lastErrorOrReason: liveActivitySnapshot.lastErrorOrReason,
+                lastEventAt: liveActivitySnapshot.lastEventAt
+            ),
             network: Array(snapshot.networkTraces.reversed()),
             logs: Array(snapshot.logs.reversed())
         )
@@ -640,12 +720,17 @@ final class DebugDiagnosticsReportBuilder {
 
     func buildExportPayload() -> DebugDiagnosticsExportPayload {
         let snapshot = eventStore.snapshot()
-        _ = appStoreProvider()
+        let appStore = appStoreProvider()
         let runtimeConfiguration = runtimeConfigurationProvider()
         let coachStore = coachStoreProvider()
         let workoutSummaryStore = workoutSummaryStoreProvider()
         let cloudSyncStore = cloudSyncStoreProvider()
         let coachLocalStateStore = coachLocalStateStoreProvider()
+        let liveActivitySnapshot = liveActivityDiagnosticsProvider().snapshot()
+        let infoPlistSupportsLiveActivities = Bundle.main.object(
+            forInfoDictionaryKey: "NSSupportsLiveActivities"
+        ) as? Bool ?? false
+        let embeddedExtensionBundleIDs = embeddedExtensionBundleIdentifiers()
 
         return DebugDiagnosticsExportPayload(
             generatedAt: .now,
@@ -684,6 +769,22 @@ final class DebugDiagnosticsReportBuilder {
                 lastInsightsProvider: coachStore.lastInsightsProvider?.rawValue,
                 lastWorkoutSummaryProvider: workoutSummaryStore.lastSummaryProvider?.rawValue
             ),
+            liveActivity: DebugDiagnosticsExportPayload.LiveActivitySection(
+                runtimeSupported: liveActivitySnapshot.runtimeSupported,
+                infoPlistSupportsLiveActivities: infoPlistSupportsLiveActivities,
+                embeddedExtensionBundleIDs: embeddedExtensionBundleIDs,
+                areActivitiesEnabled: liveActivitySnapshot.areActivitiesEnabled,
+                activeSessionID: appStore.activeSession?.id.uuidString ?? liveActivitySnapshot.activeSessionID,
+                knownActivityCount: liveActivitySnapshot.knownActivityCount,
+                startedActivityID: liveActivitySnapshot.startedActivityID,
+                lastRequestStatus: liveActivitySnapshot.lastRequestStatus,
+                lastUpdateStatus: liveActivitySnapshot.lastUpdateStatus,
+                lastEndStatus: liveActivitySnapshot.lastEndStatus,
+                lastReconcileStatus: liveActivitySnapshot.lastReconcileStatus,
+                lastSnapshotStatus: liveActivitySnapshot.lastSnapshotStatus,
+                lastErrorOrReason: liveActivitySnapshot.lastErrorOrReason,
+                lastEventAt: liveActivitySnapshot.lastEventAt
+            ),
             network: Array(snapshot.networkTraces.reversed()),
             logs: Array(snapshot.logs.reversed())
         )
@@ -715,6 +816,21 @@ final class DebugDiagnosticsReportBuilder {
         }
 
         return "\(modeDescription)@v\(pending.response.remote.backupVersion)"
+    }
+
+    private func embeddedExtensionBundleIdentifiers() -> [String] {
+        guard let pluginsURL = Bundle.main.builtInPlugInsURL,
+              let pluginURLs = try? FileManager.default.contentsOfDirectory(
+                  at: pluginsURL,
+                  includingPropertiesForKeys: nil
+              ) else {
+            return []
+        }
+
+        return pluginURLs
+            .filter { $0.pathExtension == "appex" }
+            .compactMap { Bundle(url: $0)?.bundleIdentifier ?? $0.lastPathComponent }
+            .sorted()
     }
 }
 

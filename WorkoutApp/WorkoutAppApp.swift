@@ -8,8 +8,9 @@ struct WorkoutAppApp: App {
     @State private var workoutSummaryStore: WorkoutSummaryStore
     @State private var cloudSyncStore: CloudSyncStore
     @State private var debugDiagnosticsController: DebugDiagnosticsController
+    @State private var workoutLiveActivityDiagnostics: WorkoutLiveActivityDiagnostics
     @State private var activeWorkoutDraftCoordinator = ActiveWorkoutDraftCoordinator()
-    @State private var workoutLiveActivityManager = WorkoutLiveActivityManager()
+    @State private var workoutLiveActivityManager: WorkoutLiveActivityManager
 
     private let debugRecorder: DebugEventRecorder
 
@@ -18,6 +19,14 @@ struct WorkoutAppApp: App {
         let debugEventStore = DebugEventStore()
         let debugRecorder = DebugEventRecorder(store: debugEventStore)
         self.debugRecorder = debugRecorder
+        let workoutLiveActivityDiagnostics = WorkoutLiveActivityDiagnostics()
+        _workoutLiveActivityDiagnostics = State(initialValue: workoutLiveActivityDiagnostics)
+        _workoutLiveActivityManager = State(
+            initialValue: WorkoutLiveActivityManager(
+                diagnostics: workoutLiveActivityDiagnostics,
+                debugRecorder: debugRecorder
+            )
+        )
 
         let store = AppStore(debugRecorder: debugRecorder)
         _store = State(initialValue: store)
@@ -67,6 +76,7 @@ struct WorkoutAppApp: App {
             workoutSummaryStoreProvider: { workoutSummaryStore },
             cloudSyncStoreProvider: { cloudSyncStore },
             coachLocalStateStoreProvider: { localStateStore },
+            liveActivityDiagnosticsProvider: { workoutLiveActivityDiagnostics },
             runtimeConfigurationProvider: runtimeConfigurationProvider
         )
         let healthCheckService = DebugHealthCheckService(
@@ -110,6 +120,9 @@ struct WorkoutAppApp: App {
                 }
                 .task(id: store.activeSession) {
                     await workoutLiveActivityManager.sync(activeSession: store.activeSession, using: store)
+                    await MainActor.run {
+                        debugDiagnosticsController.refreshReport()
+                    }
                 }
         }
         .onChange(of: scenePhase) { _, newPhase in

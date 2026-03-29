@@ -111,6 +111,7 @@ struct DeveloperMenuView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 runtimeCard
+                liveActivityCard
                 CoachBackendSettingsCard()
                 backupCard
                 coachCard
@@ -158,6 +159,15 @@ struct DeveloperMenuView: View {
             debugController.refreshReport()
         }
         .appScreenBackground()
+    }
+
+    private var liveActivityLogs: [DebugLogEntry] {
+        Array(
+            debugController.report.logs
+                .lazy
+                .filter { $0.category == .liveActivity }
+                .prefix(25)
+        )
     }
 
     private var runtimeCard: some View {
@@ -220,6 +230,93 @@ struct DeveloperMenuView: View {
             coachStore.updateConfiguration(configuration)
             workoutSummaryStore.updateConfiguration(configuration)
             debugController.refreshReport()
+        }
+    }
+
+    private var liveActivityCard: some View {
+        AppCard {
+            VStack(alignment: .leading, spacing: 14) {
+                AppSectionTitle(titleKey: "developer.section.live_activity")
+                DeveloperMenuValueRow(
+                    titleKey: "developer.live_activity.info_plist_enabled",
+                    value: boolValue(debugController.report.liveActivity.infoPlistSupportsLiveActivities)
+                )
+                DeveloperMenuValueRow(
+                    titleKey: "developer.live_activity.runtime_supported",
+                    value: boolValue(debugController.report.liveActivity.runtimeSupported)
+                )
+                DeveloperMenuValueRow(
+                    titleKey: "developer.live_activity.activities_enabled",
+                    value: boolValue(debugController.report.liveActivity.areActivitiesEnabled)
+                )
+                DeveloperMenuValueRow(
+                    titleKey: "developer.live_activity.embedded_extensions",
+                    value: debugController.report.liveActivity.embeddedExtensionBundleIDs.nilIfEmpty?
+                        .joined(separator: ", ")
+                        ?? localized("developer.value.none"),
+                    allowsWrap: true
+                )
+                DeveloperMenuValueRow(
+                    titleKey: "developer.live_activity.active_session_id",
+                    value: debugController.report.liveActivity.activeSessionID
+                        ?? localized("developer.value.none"),
+                    copyValue: debugController.report.liveActivity.activeSessionID
+                )
+                DeveloperMenuValueRow(
+                    titleKey: "developer.live_activity.known_activity_count",
+                    value: String(debugController.report.liveActivity.knownActivityCount)
+                )
+                DeveloperMenuValueRow(
+                    titleKey: "developer.live_activity.started_activity_id",
+                    value: debugController.report.liveActivity.startedActivityID
+                        ?? localized("developer.value.none"),
+                    copyValue: debugController.report.liveActivity.startedActivityID
+                )
+                DeveloperMenuValueRow(
+                    titleKey: "developer.live_activity.last_request_status",
+                    value: debugController.report.liveActivity.lastRequestStatus
+                        ?? localized("developer.value.none")
+                )
+                DeveloperMenuValueRow(
+                    titleKey: "developer.live_activity.last_update_status",
+                    value: debugController.report.liveActivity.lastUpdateStatus
+                        ?? localized("developer.value.none")
+                )
+                DeveloperMenuValueRow(
+                    titleKey: "developer.live_activity.last_end_status",
+                    value: debugController.report.liveActivity.lastEndStatus
+                        ?? localized("developer.value.none")
+                )
+                DeveloperMenuValueRow(
+                    titleKey: "developer.live_activity.last_reconcile_status",
+                    value: debugController.report.liveActivity.lastReconcileStatus
+                        ?? localized("developer.value.none")
+                )
+                DeveloperMenuValueRow(
+                    titleKey: "developer.live_activity.last_snapshot_status",
+                    value: debugController.report.liveActivity.lastSnapshotStatus
+                        ?? localized("developer.value.none")
+                )
+                DeveloperMenuValueRow(
+                    titleKey: "developer.live_activity.last_error_reason",
+                    value: debugController.report.liveActivity.lastErrorOrReason
+                        ?? localized("developer.value.none"),
+                    allowsWrap: true
+                )
+                DeveloperMenuValueRow(
+                    titleKey: "developer.live_activity.last_event_at",
+                    value: debugController.report.liveActivity.lastEventAt.map(formattedDate)
+                        ?? localized("developer.value.none")
+                )
+
+                if liveActivityLogs.isEmpty {
+                    DeveloperMenuEmptyState(textKey: "developer.live_activity.events_empty")
+                } else {
+                    ForEach(liveActivityLogs) { entry in
+                        DeveloperMenuLogCard(entry: entry, locale: locale)
+                    }
+                }
+            }
         }
     }
 
@@ -367,12 +464,36 @@ struct DeveloperMenuView: View {
         value ? localized("developer.value.yes") : localized("developer.value.no")
     }
 
+    private func boolValue(_ value: Bool?) -> String {
+        guard let value else {
+            return localized("developer.value.none")
+        }
+
+        return boolValue(value)
+    }
+
     private func valueOrNone(_ value: Int?) -> String {
         value.map(String.init) ?? localized("developer.value.none")
     }
 
+    private func formattedDate(_ date: Date) -> String {
+        date.formatted(
+            .dateTime
+                .hour()
+                .minute()
+                .second()
+                .locale(locale)
+        )
+    }
+
     private func localized(_ key: String) -> String {
         Bundle.main.localizedString(forKey: key, value: nil, table: nil)
+    }
+}
+
+private extension Array where Element == String {
+    var nilIfEmpty: [String]? {
+        isEmpty ? nil : self
     }
 }
 
