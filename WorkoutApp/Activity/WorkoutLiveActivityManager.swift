@@ -223,7 +223,7 @@ final class WorkoutLiveActivityManager {
     private var lastRenderedSnapshot: WorkoutLiveActivitySnapshot?
 
     init(
-        diagnostics: WorkoutLiveActivityDiagnostics = WorkoutLiveActivityDiagnostics(),
+        diagnostics: WorkoutLiveActivityDiagnostics,
         debugRecorder: any DebugEventRecording = NoopDebugEventRecorder()
     ) {
         self.diagnostics = diagnostics
