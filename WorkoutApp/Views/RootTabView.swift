@@ -278,7 +278,7 @@ struct RootTabView: View {
         NavigationStack {
             switch tab {
             case .programs:
-                TodayDashboardView()
+                ProgramsView()
             case .workout:
                 ActiveWorkoutView()
             case .statistics:

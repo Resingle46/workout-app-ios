@@ -1417,10 +1417,28 @@ final class AppStore {
     }
 
     private func preferredProgramForProfileInsights() -> WorkoutProgram? {
-        PreferredProgramResolver.resolve(
-            from: self,
-            preferredProgramID: coachAnalysisSettings.selectedProgramID
-        )
+        if let selectedProgramID = coachAnalysisSettings.selectedProgramID,
+           let selectedProgram = program(for: selectedProgramID),
+           !selectedProgram.workouts.isEmpty {
+            return selectedProgram
+        }
+
+        if let workoutTemplateID = activeSession?.workoutTemplateID,
+           let program = program(containingWorkoutTemplateID: workoutTemplateID) {
+            return program
+        }
+
+        if let workoutTemplateID = lastFinishedSession?.workoutTemplateID,
+           let program = program(containingWorkoutTemplateID: workoutTemplateID) {
+            return program
+        }
+
+        if let workoutTemplateID = history.first(where: \.isFinished)?.workoutTemplateID,
+           let program = program(containingWorkoutTemplateID: workoutTemplateID) {
+            return program
+        }
+
+        return programs.first(where: { !$0.workouts.isEmpty })
     }
 
     private func programCommentConstraints() -> CoachProgramCommentConstraints {
