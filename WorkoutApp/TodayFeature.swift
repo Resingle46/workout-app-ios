@@ -629,7 +629,7 @@ struct TodayDashboardView: View {
 
     private var coachInsightsState: TodayCoachInsightsState {
         let workoutsThisWeek = store.profileConsistencySummary().workoutsThisWeek
-        TodayCoachInsightsResolver.resolve(
+        return TodayCoachInsightsResolver.resolve(
             insights: coachStore.profileInsights,
             origin: coachStore.profileInsightsOrigin,
             isLoading: coachStore.isLoadingProfileInsights,
