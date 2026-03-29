@@ -4880,6 +4880,7 @@ struct TodayCoachInsightsCard: View {
                     .font(AppTypography.heading(size: 20))
                     .foregroundStyle(AppTheme.primaryText)
                     .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
 
                 switch state {
                 case .loading:
@@ -4891,12 +4892,15 @@ struct TodayCoachInsightsCard: View {
                             .font(AppTypography.body(size: 15, weight: .medium, relativeTo: .subheadline))
                             .foregroundStyle(AppTheme.secondaryText)
                             .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 case let .unavailable(messageKey):
                     Text(LocalizedStringKey(messageKey))
                         .font(AppTypography.body(size: 15, weight: .medium, relativeTo: .subheadline))
                         .foregroundStyle(AppTheme.secondaryText)
                         .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 case let .ready(content):
                     VStack(alignment: .leading, spacing: 14) {
                         HStack(alignment: .center, spacing: 10) {
@@ -4939,13 +4943,19 @@ struct TodayCoachInsightsCard: View {
                             .font(AppTypography.body(size: 18, weight: .semibold, relativeTo: .title3))
                             .foregroundStyle(AppTheme.primaryText)
                             .lineSpacing(2)
+                            .multilineTextAlignment(.leading)
                             .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .layoutPriority(1)
 
                         if let explanation = content.explanation {
                             Text(explanation)
                                 .font(AppTypography.body(size: 15, weight: .medium, relativeTo: .subheadline))
                                 .foregroundStyle(AppTheme.secondaryText)
+                                .multilineTextAlignment(.leading)
                                 .fixedSize(horizontal: false, vertical: true)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .layoutPriority(1)
                         }
 
                         if !content.items.isEmpty {
@@ -4954,6 +4964,7 @@ struct TodayCoachInsightsCard: View {
                                     TodayCoachInsightRow(item: item)
                                 }
                             }
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         }
 
                         if let noteKey = content.noteKey {
@@ -4961,10 +4972,13 @@ struct TodayCoachInsightsCard: View {
                                 .font(AppTypography.caption(size: 12, weight: .medium))
                                 .foregroundStyle(AppTheme.secondaryText)
                                 .fixedSize(horizontal: false, vertical: true)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                         }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 }
@@ -4983,9 +4997,12 @@ private struct TodayCoachInsightRow: View {
             Text(item.message)
                 .font(AppTypography.body(size: 14, weight: .medium, relativeTo: .subheadline))
                 .foregroundStyle(AppTheme.primaryText)
+                .multilineTextAlignment(.leading)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .layoutPriority(1)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
