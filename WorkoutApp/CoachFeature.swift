@@ -2315,7 +2315,7 @@ struct CoachContextBuilder {
         let consistencySummary = store.profileConsistencySummary()
         let recentPersonalRecords = store.recentPersonalRecords()
         let relativeStrengthSummary = store.profileStrengthToBodyweightSummary()
-        let preferredProgram = CoachPreferredProgramResolver.resolve(
+        let preferredProgram = PreferredProgramResolver.resolve(
             from: store,
             preferredProgramID: store.coachAnalysisSettings.selectedProgramID
         )
@@ -2398,7 +2398,7 @@ struct CoachContextBuilder {
                     issues: compatibilitySummary.issues.map { issue in
                         CoachCompatibilityIssueContext(
                             kind: issue.kind.rawValue,
-                            message: coachCompatibilityMessage(issue)
+                            message: ProfileCompatibilityMessageFormatter.message(for: issue)
                         )
                     }
                 ),
@@ -2602,42 +2602,6 @@ private enum CoachProgramCommentConstraintExtractor {
             preserveWeeklyFrequency: matchesAny(preserveWeeklyFrequencyPatterns),
             preserveProgramWorkoutCount: matchesAny(preserveProgramWorkoutCountPatterns)
         )
-    }
-}
-
-private struct CoachPreferredProgramResolver {
-    @MainActor
-    static func resolve(
-        from store: AppStore,
-        preferredProgramID: UUID? = nil
-    ) -> WorkoutProgram? {
-        if let preferredProgramID,
-           let preferredProgram = store.program(for: preferredProgramID) {
-            return preferredProgram
-        }
-
-        if let workoutTemplateID = store.activeSession?.workoutTemplateID,
-           let program = program(containing: workoutTemplateID, in: store.programs) {
-            return program
-        }
-
-        if let workoutTemplateID = store.lastFinishedSession?.workoutTemplateID,
-           let program = program(containing: workoutTemplateID, in: store.programs) {
-            return program
-        }
-
-        if let workoutTemplateID = store.history.first(where: \.isFinished)?.workoutTemplateID,
-           let program = program(containing: workoutTemplateID, in: store.programs) {
-            return program
-        }
-
-        return store.programs.first(where: { !$0.workouts.isEmpty })
-    }
-
-    private static func program(containing workoutTemplateID: UUID, in programs: [WorkoutProgram]) -> WorkoutProgram? {
-        programs.first { program in
-            program.workouts.contains { $0.id == workoutTemplateID }
-        }
     }
 }
 
@@ -3197,7 +3161,7 @@ final class CoachStore {
         }
 
         let savedSettings = appStore.coachAnalysisSettings
-        let resolvedProgram = CoachPreferredProgramResolver.resolve(
+        let resolvedProgram = PreferredProgramResolver.resolve(
             from: appStore,
             preferredProgramID: savedSettings.selectedProgramID
         )
@@ -5866,43 +5830,6 @@ private func coachSplitIdentifier(_ split: ProfileTrainingSplitRecommendation) -
         return "upper_lower_plus_specialization"
     case .highFrequencySplit:
         return "high_frequency_split"
-    }
-}
-
-private func coachCompatibilityMessage(_ issue: ProfileGoalCompatibilityIssue) -> String {
-    switch issue.kind {
-    case .missingGoal:
-        return coachLocalizedString("profile.card.compatibility.issue_missing_goal")
-    case .goalTargetMismatch:
-        return coachLocalizedString("profile.card.compatibility.issue_goal_target")
-    case .frequencyTooLow:
-        return String(
-            format: coachLocalizedString("profile.card.compatibility.issue_frequency_low"),
-            issue.recommendedWeeklyTargetLowerBound ?? 0,
-            issue.currentWeeklyTarget ?? 0
-        )
-    case .frequencyTooHighForBeginner:
-        return String(
-            format: coachLocalizedString("profile.card.compatibility.issue_frequency_high_beginner"),
-            issue.currentWeeklyTarget ?? 0
-        )
-    case .programFrequencyMismatch:
-        return String(
-            format: coachLocalizedString("profile.card.compatibility.issue_program_frequency_mismatch"),
-            issue.programWorkoutCount ?? 0,
-            issue.currentWeeklyTarget ?? 0
-        )
-    case .adherenceGap:
-        return String(
-            format: coachLocalizedString("profile.card.compatibility.issue_adherence_gap"),
-            issue.observedWorkoutsPerWeek?.appNumberText ?? coachLocalizedString("common.no_data"),
-            issue.currentWeeklyTarget ?? 0
-        )
-    case .longGoalTimeline:
-        return String(
-            format: coachLocalizedString("profile.card.compatibility.issue_long_eta"),
-            issue.etaWeeksUpperBound ?? 0
-        )
     }
 }
 

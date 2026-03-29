@@ -1091,40 +1091,7 @@ private struct ProfileCompatibilityIssueRow: View {
     let issue: ProfileGoalCompatibilityIssue
 
     private var message: String {
-        switch issue.kind {
-        case .missingGoal:
-            return localizedString("profile.card.compatibility.issue_missing_goal")
-        case .goalTargetMismatch:
-            return localizedString("profile.card.compatibility.issue_goal_target")
-        case .frequencyTooLow:
-            return String(
-                format: localizedString("profile.card.compatibility.issue_frequency_low"),
-                issue.recommendedWeeklyTargetLowerBound ?? 0,
-                issue.currentWeeklyTarget ?? 0
-            )
-        case .frequencyTooHighForBeginner:
-            return String(
-                format: localizedString("profile.card.compatibility.issue_frequency_high_beginner"),
-                issue.currentWeeklyTarget ?? 0
-            )
-        case .programFrequencyMismatch:
-            return String(
-                format: localizedString("profile.card.compatibility.issue_program_frequency_mismatch"),
-                issue.programWorkoutCount ?? 0,
-                issue.currentWeeklyTarget ?? 0
-            )
-        case .adherenceGap:
-            return String(
-                format: localizedString("profile.card.compatibility.issue_adherence_gap"),
-                issue.observedWorkoutsPerWeek?.appNumberText ?? localizedString("common.no_data"),
-                issue.currentWeeklyTarget ?? 0
-            )
-        case .longGoalTimeline:
-            return String(
-                format: localizedString("profile.card.compatibility.issue_long_eta"),
-                issue.etaWeeksUpperBound ?? 0
-            )
-        }
+        ProfileCompatibilityMessageFormatter.message(for: issue)
     }
 
     var body: some View {

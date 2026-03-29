@@ -1417,28 +1417,10 @@ final class AppStore {
     }
 
     private func preferredProgramForProfileInsights() -> WorkoutProgram? {
-        if let selectedProgramID = coachAnalysisSettings.selectedProgramID,
-           let selectedProgram = program(for: selectedProgramID),
-           !selectedProgram.workouts.isEmpty {
-            return selectedProgram
-        }
-
-        if let workoutTemplateID = activeSession?.workoutTemplateID,
-           let program = program(containingWorkoutTemplateID: workoutTemplateID) {
-            return program
-        }
-
-        if let workoutTemplateID = lastFinishedSession?.workoutTemplateID,
-           let program = program(containingWorkoutTemplateID: workoutTemplateID) {
-            return program
-        }
-
-        if let workoutTemplateID = history.first(where: \.isFinished)?.workoutTemplateID,
-           let program = program(containingWorkoutTemplateID: workoutTemplateID) {
-            return program
-        }
-
-        return programs.first(where: { !$0.workouts.isEmpty })
+        PreferredProgramResolver.resolve(
+            from: self,
+            preferredProgramID: coachAnalysisSettings.selectedProgramID
+        )
     }
 
     private func programCommentConstraints() -> CoachProgramCommentConstraints {
@@ -1534,11 +1516,6 @@ final class AppStore {
         )
     }
 
-    private func program(containingWorkoutTemplateID workoutTemplateID: UUID) -> WorkoutProgram? {
-        programs.first { program in
-            program.workouts.contains(where: { $0.id == workoutTemplateID })
-        }
-    }
 
     private func orderedUniqueExerciseIDs(in session: WorkoutSession) -> [UUID] {
         var seen = Set<UUID>()

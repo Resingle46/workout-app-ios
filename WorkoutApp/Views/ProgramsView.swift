@@ -1,6 +1,12 @@
 import SwiftUI
 
 struct ProgramsView: View {
+    var body: some View {
+        ProgramsLibraryView()
+    }
+}
+
+struct ProgramsLibraryView: View {
     @Environment(AppStore.self) private var store
     @Environment(\.appBottomRailInset) private var bottomRailInset
     @State private var showingCreateProgram = false
