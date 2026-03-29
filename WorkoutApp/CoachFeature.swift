@@ -844,12 +844,58 @@ struct CoachChatJobCreateRequest: Codable, Sendable {
     var providerID: String?
 }
 
-enum CoachChatJobStatus: String, Codable, Hashable, Sendable {
+enum CoachChatJobStatus: String, Hashable, Sendable {
     case queued
     case running
     case completed
     case failed
     case canceled
+
+    var normalizedUserFacingStatus: CoachChatJobStatus {
+        self == .canceled ? .failed : self
+    }
+
+    var isPending: Bool {
+        self == .queued || self == .running
+    }
+
+    var isCompletedForUserFlow: Bool {
+        normalizedUserFacingStatus == .completed
+    }
+
+    var isFailureForUserFlow: Bool {
+        normalizedUserFacingStatus == .failed
+    }
+
+    var isTerminalForUserFlow: Bool {
+        isCompletedForUserFlow || isFailureForUserFlow
+    }
+}
+
+extension CoachChatJobStatus: Codable {
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let rawValue = try container.decode(String.self)
+
+        if rawValue == Self.canceled.rawValue {
+            self = .failed
+            return
+        }
+
+        guard let status = Self(rawValue: rawValue) else {
+            throw DecodingError.dataCorruptedError(
+                in: container,
+                debugDescription: "Invalid CoachChatJobStatus value: \(rawValue)"
+            )
+        }
+
+        self = status
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(normalizedUserFacingStatus.rawValue)
+    }
 }
 
 enum CoachChatInferenceMode: String, Codable, Hashable, Sendable {
@@ -3431,8 +3477,7 @@ final class CoachStore {
                     jobID: jobID,
                     installID: installID
                 )
-                switch response.status {
-                case .completed:
+                if response.status.isCompletedForUserFlow {
                     clearActiveProfileInsightsJob()
                     guard let result = response.result else {
                         throw CoachClientError.invalidResponse
@@ -3449,7 +3494,9 @@ final class CoachStore {
                         provider: response.metadata?.provider ?? activeProfileInsightsProvider,
                         selectedModel: result.selectedModel ?? response.metadata?.selectedModel
                     )
-                case .failed, .canceled:
+                }
+
+                if response.status.isFailureForUserFlow {
                     clearActiveProfileInsightsJob()
                     throw CoachClientError.api(
                         statusCode: 500,
@@ -3459,8 +3506,6 @@ final class CoachStore {
                         jobID: response.jobID,
                         provider: response.metadata?.provider ?? activeProfileInsightsProvider
                     )
-                case .queued, .running:
-                    break
                 }
             }
 
@@ -3497,9 +3542,10 @@ final class CoachStore {
     private func profileInsightsJobFailureDescription(
         from jobResponse: CoachProfileInsightsJobStatusResponse
     ) -> String {
-        if let message = jobResponse.error?.message
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-           !message.isEmpty {
+        if let message = coachUserFacingJobFailureMessage(
+            status: jobResponse.status,
+            error: jobResponse.error
+        ) {
             return message
         }
 
@@ -3970,10 +4016,11 @@ final class CoachStore {
                     ]
                 )
 
-                switch response.status {
-                case .completed, .failed, .canceled:
+                if response.status.isTerminalForUserFlow {
                     return response
-                case .queued, .running:
+                }
+
+                if response.status.isPending {
                     ensureActiveChatPlaceholder(
                         id: placeholderID,
                         content: coachLocalizedString("coach.loading.response"),
@@ -4026,7 +4073,8 @@ final class CoachStore {
     private func completedChatResponse(
         from jobResponse: CoachChatJobStatusResponse
     ) -> CoachChatResponse? {
-        guard jobResponse.status == .completed, let result = jobResponse.result else {
+        guard jobResponse.status.isCompletedForUserFlow,
+              let result = jobResponse.result else {
             return nil
         }
 
@@ -4043,9 +4091,10 @@ final class CoachStore {
     private func chatJobFailureDescription(
         from jobResponse: CoachChatJobStatusResponse
     ) -> String {
-        if let message = jobResponse.error?.message
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-           !message.isEmpty {
+        if let message = coachUserFacingJobFailureMessage(
+            status: jobResponse.status,
+            error: jobResponse.error
+        ) {
             return message
         }
 
@@ -5008,42 +5057,37 @@ private struct CoachInsightsOverviewCard: View {
                     .buttonStyle(CoachPromptButtonStyle())
                 }
                 
-                // Scrollable content area
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 16) {
-                        Text(coachNormalizedReadableText(insights.summary))
-                            .font(AppTypography.body(size: 19, weight: .semibold, relativeTo: .title3))
-                            .foregroundStyle(AppTheme.primaryText)
-                            .lineSpacing(2)
-                            .fixedSize(horizontal: false, vertical: true)
+                VStack(alignment: .leading, spacing: 16) {
+                    Text(coachNormalizedReadableText(insights.summary))
+                        .font(AppTypography.body(size: 19, weight: .semibold, relativeTo: .title3))
+                        .foregroundStyle(AppTheme.primaryText)
+                        .lineSpacing(2)
+                        .fixedSize(horizontal: false, vertical: true)
 
-                        insightsSection(
-                            titleKey: "coach.insights.section.observations",
-                            items: insights.keyObservations,
-                            bulletColor: AppTheme.primaryText.opacity(0.8)
-                        )
+                    insightsSection(
+                        titleKey: "coach.insights.section.observations",
+                        items: insights.keyObservations,
+                        bulletColor: AppTheme.primaryText.opacity(0.8)
+                    )
 
-                        insightsSection(
-                            titleKey: "coach.insights.section.constraints",
-                            items: insights.topConstraints,
-                            bulletColor: AppTheme.warning
-                        )
+                    insightsSection(
+                        titleKey: "coach.insights.section.constraints",
+                        items: insights.topConstraints,
+                        bulletColor: AppTheme.warning
+                    )
 
-                        insightsSection(
-                            titleKey: "coach.insights.section.recommendations",
-                            items: insights.recommendations,
-                            bulletColor: AppTheme.accent
-                        )
+                    insightsSection(
+                        titleKey: "coach.insights.section.recommendations",
+                        items: insights.recommendations,
+                        bulletColor: AppTheme.accent
+                    )
 
-                        insightsSection(
-                            titleKey: "coach.insights.section.confidence",
-                            items: insights.confidenceNotes,
-                            bulletColor: AppTheme.secondaryText.opacity(0.75)
-                        )
-                    }
-                    .padding(.bottom, 8) // Добавим небольшой отступ снизу
+                    insightsSection(
+                        titleKey: "coach.insights.section.confidence",
+                        items: insights.confidenceNotes,
+                        bulletColor: AppTheme.secondaryText.opacity(0.75)
+                    )
                 }
-                .frame(maxHeight: 400) // Разумный лимит высоты для скролла
             }
         }
     }
@@ -5769,6 +5813,18 @@ private struct CoachConversationContentHeightPreferenceKey: PreferenceKey {
 
 private func coachLocalizedString(_ key: String) -> String {
     Bundle.main.localizedString(forKey: key, value: nil, table: nil)
+}
+
+private func coachUserFacingJobFailureMessage(
+    status: CoachChatJobStatus,
+    error: CoachChatJobError?
+) -> String? {
+    if status == .canceled || error?.code == "workflow_canceled" {
+        return nil
+    }
+
+    let message = error?.message.trimmingCharacters(in: .whitespacesAndNewlines)
+    return message?.isEmpty == false ? message : nil
 }
 
 private func coachNormalizedReadableText(_ text: String) -> String {

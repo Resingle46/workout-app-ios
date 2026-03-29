@@ -1645,6 +1645,53 @@ final class BackupCoordinatorTests: XCTestCase {
         XCTAssertNil(coachStore.activeChatJobID)
     }
 
+    func testCoachChatJobStatusDecodesLegacyCanceledAsFailed() throws {
+        let decoded = try JSONDecoder().decode(
+            CoachChatJobStatus.self,
+            from: Data(#""canceled""#.utf8)
+        )
+
+        XCTAssertEqual(decoded, .failed)
+
+        let encoded = try JSONEncoder().encode(CoachChatJobStatus.canceled)
+        XCTAssertEqual(String(decoding: encoded, as: UTF8.self), #""failed""#)
+    }
+
+    @MainActor
+    func testCoachStoreTreatsLegacyCanceledJobAsFailure() async {
+        let store = AppStore()
+        store.apply(snapshot: makeSnapshot())
+
+        let coachStore = CoachStore(
+            client: StubCoachAPIClient(
+                shouldFailInsights: false,
+                shouldFailChat: false,
+                jobResponses: ChatJobStatusSequence([
+                    SequencedChatJobStep(
+                        response: makeLegacyCanceledChatJobStatusResponse()
+                    )
+                ])
+            ),
+            configuration: CoachRuntimeConfiguration(
+                isFeatureEnabled: true,
+                backendBaseURL: URL(string: "https://example.com"),
+                internalBearerToken: "internal-token"
+            )
+        )
+
+        await coachStore.sendMessage("How should I progress?", using: store)
+
+        XCTAssertEqual(
+            coachStore.messages.last?.content,
+            coachLocalizedString("coach.error.invalid_response")
+        )
+        XCTAssertEqual(
+            coachStore.lastChatErrorDescription,
+            coachLocalizedString("coach.error.invalid_response")
+        )
+        XCTAssertNil(coachStore.activeChatJobID)
+    }
+
     @MainActor
     func testCoachStoreResumesExistingJobAfterCreateConflict() async {
         let store = AppStore()
@@ -3022,6 +3069,27 @@ private func makeFailedChatJobStatusResponse(
         error: CoachChatJobError(
             code: "failed_chat",
             message: message,
+            retryable: true
+        ),
+        metadata: CoachJobMetadata(provider: provider)
+    )
+}
+
+private func makeLegacyCanceledChatJobStatusResponse(
+    jobID: String = "job-1",
+    provider: CoachAIProvider = .workersAI
+) -> CoachChatJobStatusResponse {
+    let completedAt = Date()
+    return CoachChatJobStatusResponse(
+        jobID: jobID,
+        status: .canceled,
+        createdAt: completedAt,
+        startedAt: completedAt,
+        completedAt: completedAt,
+        result: nil,
+        error: CoachChatJobError(
+            code: "workflow_canceled",
+            message: "Workflow execution was canceled before completion.",
             retryable: true
         ),
         metadata: CoachJobMetadata(provider: provider)

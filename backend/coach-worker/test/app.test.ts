@@ -2692,7 +2692,7 @@ describe("coach worker app", () => {
     }
   });
 
-  it("normalizes cancellation-like inference errors to workflow_canceled", async () => {
+  it("normalizes cancellation-like inference errors to workflow_runtime_interrupted", async () => {
     const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
     const workflowCreate = vi.fn().mockResolvedValue(makeWorkflowInstanceStub());
     const app = createApp({
@@ -2727,7 +2727,7 @@ describe("coach worker app", () => {
 
       expect(failed?.status).toBe("failed");
       expect(failed?.error).toMatchObject({
-        code: "workflow_canceled",
+        code: "workflow_runtime_interrupted",
         retryable: true,
       });
 
@@ -2737,7 +2737,7 @@ describe("coach worker app", () => {
       expect(diagnosticsLog).toMatchObject({
         phase: "inference",
         failureOrigin: "inference",
-        errorCode: "workflow_canceled",
+        errorCode: "workflow_runtime_interrupted",
         errorName: "AbortError",
         wasRecognizedAsInferenceError: false,
         wasRecognizedAsPersistenceError: false,
@@ -2746,7 +2746,7 @@ describe("coach worker app", () => {
 
       const storedJob = await repository.getChatJob(created.jobID, createRequest.installID);
       expect(storedJob?.error).toMatchObject({
-        code: "workflow_canceled",
+        code: "workflow_runtime_interrupted",
         retryable: true,
       });
     } finally {

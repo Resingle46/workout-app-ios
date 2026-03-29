@@ -548,10 +548,10 @@ function normalizeChatJobExecutionError(error: unknown): CoachChatJobError {
     };
   }
 
-  if (isRuntimeCancellationError(cause)) {
+  if (isRuntimeInterruptionLikeError(cause)) {
     return {
-      code: "workflow_canceled",
-      message: "Workflow execution was canceled before completion.",
+      code: "workflow_runtime_interrupted",
+      message: "Workflow runtime was interrupted before completion.",
       retryable: true,
     };
   }
@@ -717,7 +717,7 @@ function summarizeExecutionError(error: unknown): ChatJobExecutionDiagnostics {
         : undefined,
     wasRecognizedAsInferenceError: recognizedInferenceError,
     wasRecognizedAsPersistenceError: recognizedPersistenceError,
-    inferredCancellation: isRuntimeCancellationError(cause),
+    inferredCancellation: isRuntimeInterruptionLikeError(cause),
   };
 }
 
@@ -746,7 +746,7 @@ function extractInferenceErrorDiagnostics(
   };
 }
 
-function isRuntimeCancellationError(error: unknown): boolean {
+function isRuntimeInterruptionLikeError(error: unknown): boolean {
   if (!(error instanceof Error)) {
     return false;
   }

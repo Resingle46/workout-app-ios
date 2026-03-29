@@ -1568,11 +1568,11 @@ final class WorkoutSummaryStore {
     }
 
     private func isPending(_ status: CoachChatJobStatus?) -> Bool {
-        status == .queued || status == .running
+        status?.isPending == true
     }
 
     private func isTerminal(_ status: CoachChatJobStatus) -> Bool {
-        status == .completed || status == .failed || status == .canceled
+        status.isTerminalForUserFlow
     }
 
     private func isTransientPollingError(_ error: Error) -> Bool {
