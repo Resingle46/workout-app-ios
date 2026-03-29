@@ -3053,6 +3053,7 @@ private struct PendingProfileInsightsJobState: Codable, Hashable, Sendable {
 final class CoachStore {
     private static let initialChatPollAfterMs = 1_500
     private static let initialProfileInsightsPollAfterMs = 1_500
+    private static let profileInsightsResumeCooldown: TimeInterval = 20
 
     var profileInsights: CoachProfileInsights?
     var profileInsightsOrigin: CoachInsightsOrigin = .fallback
@@ -3084,6 +3085,7 @@ final class CoachStore {
     @ObservationIgnored private var activeChatPlaceholderID: String?
     @ObservationIgnored private var activeChatPollingStartedAt: Date?
     @ObservationIgnored private var activeChatNextPollAfterMs = CoachStore.initialChatPollAfterMs
+    @ObservationIgnored private var activeProfileInsightsRetryNotBefore: Date?
     @ObservationIgnored private var activeChatPollTask: Task<Void, Never>?
     @ObservationIgnored private var activeChatPollTaskJobID: String?
     @ObservationIgnored private var hasHydratedAnalysisSettingsDrafts = false
@@ -3413,6 +3415,7 @@ final class CoachStore {
         activeProfileInsightsJobID = jobID
         activeProfileInsightsInstallID = installID
         activeProfileInsightsProvider = provider
+        activeProfileInsightsRetryNotBefore = nil
         persistPendingProfileInsightsJobState()
     }
 
@@ -3420,6 +3423,7 @@ final class CoachStore {
         activeProfileInsightsJobID = nil
         activeProfileInsightsInstallID = nil
         activeProfileInsightsProvider = nil
+        activeProfileInsightsRetryNotBefore = nil
         persistPendingProfileInsightsJobState()
     }
 
@@ -3894,16 +3898,29 @@ final class CoachStore {
     func handleTodayScreenDidBecomeVisible(using appStore: AppStore) async {
         syncAnalysisSettingsDrafts(using: appStore)
 
-        if activeProfileInsightsJobID != nil {
-            await refreshProfileInsights(using: appStore)
-            if activeProfileInsightsJobID != nil {
-                return
-            }
+        if isLoadingProfileInsights {
+            return
         }
 
-        if profileInsights == nil {
+        if activeProfileInsightsJobID != nil {
+            if let retryNotBefore = activeProfileInsightsRetryNotBefore,
+               retryNotBefore > Date() {
+                return
+            }
+
             await refreshProfileInsights(using: appStore)
+            if activeProfileInsightsJobID != nil {
+                activeProfileInsightsRetryNotBefore = Date()
+                    .addingTimeInterval(Self.profileInsightsResumeCooldown)
+            }
+            return
         }
+
+        guard profileInsights == nil, activeChatJobID == nil else {
+            return
+        }
+
+        await refreshProfileInsights(using: appStore)
     }
 
     func handleCoachScreenDidBecomeVisible(using appStore: AppStore) async {
@@ -4913,7 +4930,9 @@ struct CoachView: View {
     @FocusState private var focusedField: CoachFocusField?
 
     private var shouldShowQuickPrompts: Bool {
-        coachStore.messages.isEmpty && coachStore.canUseRemoteCoach
+        coachStore.messages.isEmpty &&
+        coachStore.canUseRemoteCoach &&
+        !coachStore.canResumePendingChatJob
     }
 
     var body: some View {
@@ -4927,6 +4946,7 @@ struct CoachView: View {
                 if coachStore.messages.isEmpty {
                     CoachChatEmptyState(
                         canUseRemoteCoach: coachStore.canUseRemoteCoach,
+                        canResumePendingChatJob: coachStore.canResumePendingChatJob,
                         visibleQuickPromptKeys: shouldShowQuickPrompts ? coachStore.visibleQuickPromptKeys : [],
                         isSendingMessage: coachStore.isSendingMessage
                     ) { prompt in
@@ -5004,24 +5024,57 @@ struct CoachView: View {
 
 private struct CoachChatEmptyState: View {
     let canUseRemoteCoach: Bool
+    let canResumePendingChatJob: Bool
     let visibleQuickPromptKeys: [String]
     let isSendingMessage: Bool
     let onPromptTap: (String) -> Void
+
+    private var titleKey: String {
+        if canResumePendingChatJob {
+            return "coach.chat.resume.title"
+        }
+
+        return canUseRemoteCoach ? "coach.ask.title" : "coach.status.fallback"
+    }
+
+    private var bodyKey: String {
+        if canResumePendingChatJob {
+            return "coach.chat.resume.body"
+        }
+
+        return canUseRemoteCoach ? "coach.chat.empty.body" : "coach.error.chat_unavailable"
+    }
+
+    private var iconName: String {
+        if canResumePendingChatJob {
+            return "hourglass.circle.fill"
+        }
+
+        return canUseRemoteCoach ? "sparkles.rectangle.stack.fill" : "bolt.slash.circle.fill"
+    }
+
+    private var iconColor: Color {
+        if canResumePendingChatJob {
+            return AppTheme.accent
+        }
+
+        return canUseRemoteCoach ? AppTheme.accent : AppTheme.warning
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 10) {
-                    Image(systemName: canUseRemoteCoach ? "sparkles.rectangle.stack.fill" : "bolt.slash.circle.fill")
+                    Image(systemName: iconName)
                         .font(AppTypography.icon(size: 18, weight: .semibold))
-                        .foregroundStyle(canUseRemoteCoach ? AppTheme.accent : AppTheme.warning)
+                        .foregroundStyle(iconColor)
 
-                    Text(LocalizedStringKey(canUseRemoteCoach ? "coach.ask.title" : "coach.status.fallback"))
+                    Text(LocalizedStringKey(titleKey))
                         .font(AppTypography.heading(size: 24))
                         .foregroundStyle(AppTheme.primaryText)
                 }
 
-                Text(LocalizedStringKey(canUseRemoteCoach ? "coach.chat.empty.body" : "coach.error.chat_unavailable"))
+                Text(LocalizedStringKey(bodyKey))
                     .font(AppTypography.body(size: 15, weight: .medium, relativeTo: .subheadline))
                     .foregroundStyle(AppTheme.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
@@ -5034,7 +5087,7 @@ private struct CoachChatEmptyState: View {
                 }
             }
 
-            if canUseRemoteCoach && !visibleQuickPromptKeys.isEmpty {
+            if canUseRemoteCoach && !canResumePendingChatJob && !visibleQuickPromptKeys.isEmpty {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("coach.quick_prompt.title")
                         .font(AppTypography.caption(size: 13, weight: .semibold))
