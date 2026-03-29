@@ -36,10 +36,6 @@ final class WorkoutLiveActivityManager {
         updatedAt: Date = .now
     ) -> WorkoutLiveActivitySnapshot? {
         let allSets = session.exercises.flatMap(\.sets)
-        guard !allSets.isEmpty else {
-            return nil
-        }
-
         let completedSetCount = allSets.filter { $0.completedAt != nil }.count
         let totalSetCount = allSets.count
         let lastCompletedSetAt = allSets.compactMap(\.completedAt).max()
