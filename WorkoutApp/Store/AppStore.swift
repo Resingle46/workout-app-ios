@@ -315,6 +315,8 @@ final class AppStore {
         var calendar = Calendar(identifier: .gregorian)
         calendar.locale = locale
         calendar.timeZone = timeZone
+        calendar.firstWeekday = 2
+        calendar.minimumDaysInFirstWeek = 4
         return calendar
     }
 
@@ -1079,10 +1081,12 @@ final class AppStore {
         calendar: Calendar? = nil
     ) -> ProfileGoalCompatibilitySummary {
         let goalSummary = profileGoalSummary()
-        let workoutAverage = recentAverageWorkoutsPerWeek(referenceDate: referenceDate, calendar: calendar)
+        let consistencySummary = profileConsistencySummary(referenceDate: referenceDate, calendar: calendar)
+        let observedWeeklyCount = Double(consistencySummary.workoutsThisWeek)
+        let hasObservedHistory = !finishedSessionsSortedDescending().isEmpty
         let preferredProgram = preferredProgramForProfileInsights()
         let splitExecution = splitExecutionInterpretation(for: preferredProgram)
-        let usesObservedHistory = workoutAverage.source == .history
+        let usesObservedHistory = hasObservedHistory
         var issues: [ProfileGoalCompatibilityIssue] = []
 
         if let targetBodyWeight = profile.targetBodyWeight {
@@ -1178,14 +1182,14 @@ final class AppStore {
             )
         }
 
-        if usesObservedHistory, workoutAverage.average < Double(max(profile.weeklyWorkoutTarget - 1, 0)) {
+        if usesObservedHistory, observedWeeklyCount < Double(max(profile.weeklyWorkoutTarget - 1, 0)) {
             issues.append(
                 ProfileGoalCompatibilityIssue(
                     id: ProfileGoalCompatibilityIssueKind.adherenceGap.rawValue,
                     kind: .adherenceGap,
                     currentWeeklyTarget: profile.weeklyWorkoutTarget,
                     recommendedWeeklyTargetLowerBound: nil,
-                    observedWorkoutsPerWeek: workoutAverage.average,
+                    observedWorkoutsPerWeek: observedWeeklyCount,
                     etaWeeksUpperBound: nil,
                     systemImage: "chart.line.downtrend.xyaxis"
                 )
@@ -1225,7 +1229,7 @@ final class AppStore {
             currentWeight: profile.weight,
             targetBodyWeight: profile.targetBodyWeight,
             weeklyWorkoutTarget: profile.weeklyWorkoutTarget,
-            averageWorkoutsPerWeek: usesObservedHistory ? workoutAverage.average : nil,
+            averageWorkoutsPerWeek: usesObservedHistory ? observedWeeklyCount : nil,
             usesObservedHistory: usesObservedHistory,
             issues: issues
         )

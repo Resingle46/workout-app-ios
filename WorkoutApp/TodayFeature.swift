@@ -515,7 +515,10 @@ struct TodayRecommendationBuilder {
             TodayMetricState(
                 id: "this_week",
                 title: todayLocalizedString("today.metric.this_week"),
-                value: "\(consistencySummary.workoutsThisWeek)/\(consistencySummary.weeklyTarget)",
+                value: todayWeeklyWorkoutsValueText(
+                    workoutsThisWeek: consistencySummary.workoutsThisWeek,
+                    weeklyTarget: consistencySummary.weeklyTarget
+                ),
                 detail: todayLocalizedString("today.metric.this_week_detail"),
                 accent: .accent
             )
@@ -676,6 +679,9 @@ struct TodayDashboardView: View {
             .padding(.top, 0)
             .padding(.bottom, 28 + bottomRailInset)
         }
+        .refreshable {
+            await coachStore.refreshProfileInsights(using: store, forceRefresh: true)
+        }
         .task(id: store.selectedTab) {
             if store.selectedTab == .programs {
                 await coachStore.handleTodayScreenDidBecomeVisible(using: store)
@@ -735,14 +741,14 @@ private struct TodayHeroCard: View {
     let onOpenStatistics: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: contentSpacing) {
             header
             title
             description
             badges
             actions
         }
-        .padding(20)
+        .padding(cardPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(heroBackground)
         .overlay(
@@ -772,14 +778,14 @@ private struct TodayHeroCard: View {
 
     private var title: some View {
         Text(heroTitle)
-            .font(AppTypography.title(size: 30))
+            .font(AppTypography.title(size: titleFontSize))
             .foregroundStyle(AppTheme.primaryText)
             .fixedSize(horizontal: false, vertical: true)
     }
 
     private var description: some View {
         Text(heroDescription)
-            .font(AppTypography.body(size: 15, weight: .medium, relativeTo: .subheadline))
+            .font(AppTypography.body(size: descriptionFontSize, weight: .medium, relativeTo: .subheadline))
             .foregroundStyle(AppTheme.secondaryText)
             .fixedSize(horizontal: false, vertical: true)
     }
@@ -990,6 +996,22 @@ private struct TodayHeroCard: View {
         }
     }
 
+    private var cardPadding: CGFloat {
+        state.kind == .recovery ? 18 : 20
+    }
+
+    private var contentSpacing: CGFloat {
+        state.kind == .recovery ? 12 : 15
+    }
+
+    private var titleFontSize: CGFloat {
+        state.kind == .recovery ? 28 : 30
+    }
+
+    private var descriptionFontSize: CGFloat {
+        state.kind == .recovery ? 14 : 15
+    }
+
     private var heroBackground: some View {
         RoundedRectangle(cornerRadius: AppTheme.cardCornerRadius, style: .continuous)
             .fill(
@@ -1104,8 +1126,8 @@ private struct TodayMetricCard: View {
         .padding(18)
         .frame(
             maxWidth: .infinity,
-            minHeight: 152,
-            maxHeight: 152,
+            minHeight: 148,
+            maxHeight: 148,
             alignment: .topLeading
         )
         .background(
@@ -1144,10 +1166,10 @@ private struct FlexibleBadgeRow: View {
 
     private func badge(_ value: String) -> some View {
         Text(value)
-            .font(AppTypography.caption(size: 13, weight: .semibold))
+            .font(AppTypography.caption(size: 12, weight: .semibold))
             .foregroundStyle(AppTheme.primaryText)
             .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            .padding(.vertical, 7)
             .background(Color.white.opacity(0.08), in: Capsule())
             .overlay(
                 Capsule()
@@ -1219,6 +1241,17 @@ private func todayWeeklyTargetText(
 ) -> String {
     String(
         format: todayLocalizedString("profile.card.consistency.goal_progress"),
+        workoutsThisWeek,
+        weeklyTarget
+    )
+}
+
+private func todayWeeklyWorkoutsValueText(
+    workoutsThisWeek: Int,
+    weeklyTarget: Int
+) -> String {
+    String(
+        format: todayLocalizedString("today.metric.this_week_value"),
         workoutsThisWeek,
         weeklyTarget
     )

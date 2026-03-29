@@ -4876,7 +4876,10 @@ struct TodayCoachInsightsCard: View {
     var body: some View {
         AppCard(padding: 18) {
             VStack(alignment: .leading, spacing: 14) {
-                AppSectionTitle(titleKey: "today.insights.title")
+                Text("today.insights.title")
+                    .font(AppTypography.heading(size: 20))
+                    .foregroundStyle(AppTheme.primaryText)
+                    .fixedSize(horizontal: false, vertical: true)
 
                 switch state {
                 case .loading:
@@ -4896,18 +4899,44 @@ struct TodayCoachInsightsCard: View {
                         .fixedSize(horizontal: false, vertical: true)
                 case let .ready(content):
                     VStack(alignment: .leading, spacing: 14) {
-                        HStack(spacing: 8) {
-                            Circle()
-                                .fill(content.sourceAccent.tint)
-                                .frame(width: 8, height: 8)
+                        HStack(alignment: .center, spacing: 10) {
+                            HStack(spacing: 8) {
+                                Circle()
+                                    .fill(content.sourceAccent.tint)
+                                    .frame(width: 8, height: 8)
 
-                            Text(LocalizedStringKey(content.sourceKey))
-                                .font(AppTypography.caption(size: 13, weight: .semibold))
-                                .foregroundStyle(AppTheme.secondaryText)
+                                Text(LocalizedStringKey(content.sourceKey))
+                                    .font(AppTypography.caption(size: 13, weight: .semibold))
+                                    .foregroundStyle(AppTheme.secondaryText)
+                            }
+
+                            Spacer(minLength: 12)
+
+                            if let modelLabel = content.modelLabel {
+                                HStack(spacing: 6) {
+                                    CoachStatusDot(color: content.sourceAccent.tint, size: 7)
+
+                                    Text(modelLabel)
+                                        .font(AppTypography.caption(size: 12, weight: .semibold))
+                                        .foregroundStyle(AppTheme.primaryText)
+                                        .lineLimit(1)
+                                        .minimumScaleFactor(0.82)
+                                }
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(
+                                    Capsule()
+                                        .fill(AppTheme.surface)
+                                )
+                                .overlay(
+                                    Capsule()
+                                        .stroke(AppTheme.border, lineWidth: 1)
+                                )
+                            }
                         }
 
                         Text(content.summary)
-                            .font(AppTypography.body(size: 19, weight: .semibold, relativeTo: .title3))
+                            .font(AppTypography.body(size: 18, weight: .semibold, relativeTo: .title3))
                             .foregroundStyle(AppTheme.primaryText)
                             .lineSpacing(2)
                             .fixedSize(horizontal: false, vertical: true)
@@ -5579,9 +5608,7 @@ private struct CoachChatMessageCard: View {
                 isStatus: false
             )
 
-            Text(timestampText)
-                .font(AppTypography.caption(size: 11, weight: .medium))
-                .foregroundStyle(isAssistant ? AppTheme.secondaryText : Color.white.opacity(0.74))
+            bubbleMetadata
 
             if showsFollowUps {
                 FlowLayout(spacing: 8) {
@@ -5610,6 +5637,45 @@ private struct CoachChatMessageCard: View {
                 .stroke(isAssistant ? AppTheme.border : AppTheme.accent.opacity(0.3), lineWidth: 1)
         )
     }
+
+    @ViewBuilder
+    private var bubbleMetadata: some View {
+        if isAssistant {
+            HStack(spacing: 8) {
+                Text(timestampText)
+                    .font(AppTypography.caption(size: 11, weight: .medium))
+                    .foregroundStyle(AppTheme.secondaryText)
+
+                Spacer(minLength: 8)
+
+                if let modelLabel = coachChatModelLabel(
+                    selectedModel: message.selectedModel,
+                    provider: message.provider
+                ) {
+                    HStack(spacing: 6) {
+                        CoachStatusDot(
+                            color: coachChatModelTint(
+                                provider: message.provider,
+                                selectedModel: message.selectedModel
+                            ),
+                            size: 6
+                        )
+
+                        Text(modelLabel)
+                            .font(AppTypography.caption(size: 11, weight: .medium))
+                            .foregroundStyle(AppTheme.secondaryText)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            Text(timestampText)
+                .font(AppTypography.caption(size: 11, weight: .medium))
+                .foregroundStyle(Color.white.opacity(0.74))
+        }
+    }
 }
 
 private func coachVisibleModelLabel(_ selectedModel: String?) -> String? {
@@ -5624,6 +5690,42 @@ private func coachVisibleModelLabel(_ selectedModel: String?) -> String? {
     }
 
     return selectedModel
+}
+
+private func coachChatModelLabel(
+    selectedModel: String?,
+    provider: CoachAIProvider?
+) -> String? {
+    if let selectedModel = coachVisibleModelLabel(selectedModel) {
+        return selectedModel
+    }
+
+    return provider?.debugName
+}
+
+private func coachChatModelTint(
+    provider: CoachAIProvider?,
+    selectedModel: String?
+) -> Color {
+    if coachVisibleModelLabel(selectedModel) != nil {
+        switch provider {
+        case .gemini:
+            return AppTheme.warning
+        case .workersAI:
+            return AppTheme.success
+        case nil:
+            return AppTheme.accent
+        }
+    }
+
+    switch provider {
+    case .gemini:
+        return AppTheme.warning
+    case .workersAI:
+        return AppTheme.success
+    case nil:
+        return AppTheme.secondaryText
+    }
 }
 
 private struct CoachGenerationStatusDot: View {

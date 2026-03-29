@@ -988,6 +988,130 @@ final class BackupCoordinatorTests: XCTestCase {
     }
 
     @MainActor
+    func testProfileConsistencySummaryUsesMondayThroughSundayCalendarWeek() {
+        let exercise = makeExercise(id: UUID(uuidString: "CCCC1111-1111-1111-1111-111111111111")!, name: "Squat")
+        let sessions = [
+            makeSession(
+                startedAt: makeDate(year: 2024, month: 3, day: 24, hour: 10),
+                endedAt: makeDate(year: 2024, month: 3, day: 24, hour: 11),
+                exerciseLogs: [makeExerciseLog(exerciseID: exercise.id, sets: [(100, 5, true)])]
+            ),
+            makeSession(
+                startedAt: makeDate(year: 2024, month: 3, day: 25, hour: 10),
+                endedAt: makeDate(year: 2024, month: 3, day: 25, hour: 11),
+                exerciseLogs: [makeExerciseLog(exerciseID: exercise.id, sets: [(100, 5, true)])]
+            ),
+            makeSession(
+                startedAt: makeDate(year: 2024, month: 3, day: 27, hour: 10),
+                endedAt: makeDate(year: 2024, month: 3, day: 27, hour: 11),
+                exerciseLogs: [makeExerciseLog(exerciseID: exercise.id, sets: [(100, 5, true)])]
+            ),
+            makeSession(
+                startedAt: makeDate(year: 2024, month: 3, day: 31, hour: 10),
+                endedAt: makeDate(year: 2024, month: 3, day: 31, hour: 11),
+                exerciseLogs: [makeExerciseLog(exerciseID: exercise.id, sets: [(100, 5, true)])]
+            )
+        ]
+
+        let store = AppStore()
+        let snapshot = makeStatisticsSnapshot(exercises: [exercise], history: sessions)
+        store.apply(snapshot: snapshot)
+
+        let summary = store.profileConsistencySummary(
+            referenceDate: makeDate(year: 2024, month: 3, day: 31, hour: 12),
+            calendar: statisticsCalendar(localeIdentifier: "en_US")
+        )
+
+        XCTAssertEqual(summary.workoutsThisWeek, 3)
+    }
+
+    @MainActor
+    func testProfileGoalCompatibilitySummaryUsesCurrentCalendarWeekWorkoutCountForSingleWorkout() {
+        let exercise = makeExercise(id: UUID(uuidString: "DDDD1111-1111-1111-1111-111111111111")!, name: "Bench")
+        let sessions = [
+            makeSession(
+                startedAt: makeDate(year: 2024, month: 3, day: 26, hour: 10),
+                endedAt: makeDate(year: 2024, month: 3, day: 26, hour: 11),
+                exerciseLogs: [makeExerciseLog(exerciseID: exercise.id, sets: [(60, 5, true)])]
+            )
+        ]
+
+        let store = AppStore()
+        var snapshot = makeStatisticsSnapshot(exercises: [exercise], history: sessions)
+        snapshot.profile = UserProfile(
+            sex: "M",
+            age: 29,
+            weight: 100,
+            height: 182,
+            appLanguageCode: "en",
+            primaryGoal: .fatLoss,
+            experienceLevel: .intermediate,
+            weeklyWorkoutTarget: 4,
+            targetBodyWeight: 80
+        )
+        store.apply(snapshot: snapshot)
+
+        let summary = store.profileGoalCompatibilitySummary(
+            referenceDate: makeDate(year: 2024, month: 3, day: 27, hour: 12),
+            calendar: statisticsCalendar(localeIdentifier: "en_US")
+        )
+
+        let adherenceGap = try XCTUnwrap(summary.issues.first { $0.kind == .adherenceGap })
+        XCTAssertEqual(try XCTUnwrap(summary.averageWorkoutsPerWeek), 1, accuracy: 0.001)
+        XCTAssertEqual(adherenceGap.observedWorkoutsPerWeek, 1, accuracy: 0.001)
+    }
+
+    @MainActor
+    func testProfileGoalCompatibilitySummaryUsesCurrentCalendarWeekWorkoutCountForFourWorkouts() {
+        let exercise = makeExercise(id: UUID(uuidString: "EEEE1111-1111-1111-1111-111111111111")!, name: "Deadlift")
+        let sessions = [
+            makeSession(
+                startedAt: makeDate(year: 2024, month: 3, day: 25, hour: 9),
+                endedAt: makeDate(year: 2024, month: 3, day: 25, hour: 10),
+                exerciseLogs: [makeExerciseLog(exerciseID: exercise.id, sets: [(120, 5, true)])]
+            ),
+            makeSession(
+                startedAt: makeDate(year: 2024, month: 3, day: 26, hour: 9),
+                endedAt: makeDate(year: 2024, month: 3, day: 26, hour: 10),
+                exerciseLogs: [makeExerciseLog(exerciseID: exercise.id, sets: [(120, 5, true)])]
+            ),
+            makeSession(
+                startedAt: makeDate(year: 2024, month: 3, day: 27, hour: 9),
+                endedAt: makeDate(year: 2024, month: 3, day: 27, hour: 10),
+                exerciseLogs: [makeExerciseLog(exerciseID: exercise.id, sets: [(120, 5, true)])]
+            ),
+            makeSession(
+                startedAt: makeDate(year: 2024, month: 3, day: 29, hour: 9),
+                endedAt: makeDate(year: 2024, month: 3, day: 29, hour: 10),
+                exerciseLogs: [makeExerciseLog(exerciseID: exercise.id, sets: [(120, 5, true)])]
+            )
+        ]
+
+        let store = AppStore()
+        var snapshot = makeStatisticsSnapshot(exercises: [exercise], history: sessions)
+        snapshot.profile = UserProfile(
+            sex: "M",
+            age: 29,
+            weight: 100,
+            height: 182,
+            appLanguageCode: "en",
+            primaryGoal: .fatLoss,
+            experienceLevel: .intermediate,
+            weeklyWorkoutTarget: 4,
+            targetBodyWeight: 80
+        )
+        store.apply(snapshot: snapshot)
+
+        let summary = store.profileGoalCompatibilitySummary(
+            referenceDate: makeDate(year: 2024, month: 3, day: 29, hour: 12),
+            calendar: statisticsCalendar(localeIdentifier: "en_US")
+        )
+
+        XCTAssertEqual(try XCTUnwrap(summary.averageWorkoutsPerWeek), 4, accuracy: 0.001)
+        XCTAssertFalse(summary.issues.contains { $0.kind == .adherenceGap })
+    }
+
+    @MainActor
     func testProfileTrainingRecommendationSummaryReturnsGenericFallbackWhenGoalIsNotSet() {
         let store = AppStore()
         var snapshot = makeStatisticsSnapshot(exercises: [], history: [])
@@ -1145,7 +1269,7 @@ final class BackupCoordinatorTests: XCTestCase {
 
         XCTAssertTrue(summary.issues.contains { $0.kind == .adherenceGap })
         XCTAssertTrue(summary.issues.contains { $0.kind == .longGoalTimeline })
-        XCTAssertEqual(try XCTUnwrap(summary.averageWorkoutsPerWeek), 0.5, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(summary.averageWorkoutsPerWeek), 0, accuracy: 0.001)
     }
 
     @MainActor

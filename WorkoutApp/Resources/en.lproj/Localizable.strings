@@ -352,7 +352,7 @@
 "profile.card.compatibility.issue_frequency_low" = "This goal usually needs at least %d workouts/week; current target is %d.";
 "profile.card.compatibility.issue_frequency_high_beginner" = "%d workouts/week is aggressive for a beginner; recovery is likely the limiter.";
 "profile.card.compatibility.issue_program_frequency_mismatch" = "Your saved program has %d workouts, but weekly target is %d.";
-"profile.card.compatibility.issue_adherence_gap" = "Recent average is %@ workouts/week versus a target of %d.";
+"profile.card.compatibility.issue_adherence_gap" = "Current week is %@ workouts/week versus a target of %d.";
 "profile.card.compatibility.issue_long_eta" = "This weight target is likely a %d+ week phase; add smaller checkpoints.";
 "profile.card.compatibility.issue_missing_goal" = "Set a primary goal so recommendations and compatibility checks can become specific.";
 
@@ -638,10 +638,11 @@
 "today.hero.first_workout.body" = "Start with %@ and let Today guide the rest from local data.";
 "today.hero.empty.title" = "Create your first program";
 "today.hero.empty.body" = "You have almost no local training data yet. Add a program or workout so Today can recommend the next step.";
-"today.hero.badge.completed" = "Completed %d/%d";
+"today.hero.badge.completed" = "Week: %d/%d";
 "today.hero.badge.next" = "Next: %@";
 "today.metric.this_week" = "This week";
-"today.metric.this_week_detail" = "Completed toward your target";
+"today.metric.this_week_value" = "%d/%d workouts";
+"today.metric.this_week_detail" = "Current weekly pace";
 "today.metric.streak" = "Streak";
 "today.metric.streak_detail" = "Weeks at target";
 "today.metric.favorite_day" = "Favorite day";
@@ -661,7 +662,7 @@
 "today.attention.streak.body" = "%d weeks in a row at target.";
 "today.attention.strength.title" = "Weekly momentum";
 "today.attention.strength.body" = "%@ on matched lifts versus last week.";
-"today.insights.title" = "Today focus";
+"today.insights.title" = "Overview";
 "today.insights.loading" = "Refreshing personalized insights...";
 "today.insights.empty" = "Insights will appear after Coach analyzes your profile. Today stays useful from local data in the meantime.";
 "today.insights.empty_local" = "Remote AI is unavailable, so Today stays focused on local-first guidance.";

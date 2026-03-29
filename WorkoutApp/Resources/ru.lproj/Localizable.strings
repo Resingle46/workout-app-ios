@@ -352,7 +352,7 @@
 "profile.card.compatibility.issue_frequency_low" = "Для этой цели обычно нужно минимум %d трен./нед.; сейчас стоит %d.";
 "profile.card.compatibility.issue_frequency_high_beginner" = "%d трен./нед. для новичка уже агрессивно; восстановление, скорее всего, будет узким местом.";
 "profile.card.compatibility.issue_program_frequency_mismatch" = "В сохранённой программе %d тренировок, а недельная цель сейчас %d.";
-"profile.card.compatibility.issue_adherence_gap" = "Недавний средний ритм: %@ трен./нед. при цели %d.";
+"profile.card.compatibility.issue_adherence_gap" = "На текущей неделе: %@ трен./нед. при цели %d.";
 "profile.card.compatibility.issue_long_eta" = "Этот весовой таргет, скорее всего, займёт %d+ недель; лучше разбить его на этапы.";
 "profile.card.compatibility.issue_missing_goal" = "Задайте основную цель, чтобы рекомендации и проверки стали конкретными.";
 
@@ -637,10 +637,11 @@
 "today.hero.first_workout.body" = "Начните с %@, а дальше Today будет вести вас на основе локальных данных.";
 "today.hero.empty.title" = "Создайте первую программу";
 "today.hero.empty.body" = "Локальных тренировочных данных пока почти нет. Добавьте программу или тренировку, чтобы Today мог подсказывать следующий шаг.";
-"today.hero.badge.completed" = "Выполнено %d/%d";
+"today.hero.badge.completed" = "Неделя: %d/%d";
 "today.hero.badge.next" = "Дальше: %@";
 "today.metric.this_week" = "Неделя";
-"today.metric.this_week_detail" = "Выполнено к вашей цели";
+"today.metric.this_week_value" = "%d/%d тренировок";
+"today.metric.this_week_detail" = "Текущий недельный темп";
 "today.metric.streak" = "Серия";
 "today.metric.streak_detail" = "Недель подряд по цели";
 "today.metric.favorite_day" = "Любимый день";
@@ -660,7 +661,7 @@
 "today.attention.streak.body" = "%d недель подряд цель выполнена.";
 "today.attention.strength.title" = "Импульс недели";
 "today.attention.strength.body" = "%@ по совпадающим силовым к прошлой неделе.";
-"today.insights.title" = "Что важно сегодня";
+"today.insights.title" = "Обзор";
 "today.insights.loading" = "Обновляем персональные инсайты...";
 "today.insights.empty" = "Инсайты появятся после анализа профиля в Coach. Пока Today остаётся полезным за счёт локальных данных.";
 "today.insights.empty_local" = "Удалённый AI недоступен, поэтому Today опирается на локальные подсказки.";
