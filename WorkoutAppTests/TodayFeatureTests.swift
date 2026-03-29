@@ -221,19 +221,98 @@ final class TodayFeatureTests: XCTestCase {
             origin: .freshModel,
             isLoading: false,
             canUseRemoteCoach: true,
-            lastErrorDescription: nil
+            lastErrorDescription: nil,
+            languageCode: "en"
         )
 
         switch state {
         case let .ready(content):
             XCTAssertEqual(content.summary, "Your lower-body progress is mostly limited by missed sessions.")
             XCTAssertEqual(content.explanation, "Adherence is the main limiter right now.")
-            XCTAssertEqual(content.items.count, 3)
-            XCTAssertEqual(content.items[0].labelKey, "today.insights.focus.recommendation")
-            XCTAssertEqual(content.items[1].labelKey, "today.insights.focus.constraint")
-            XCTAssertEqual(content.items[2].labelKey, "today.insights.focus.observation")
+            XCTAssertEqual(content.items.count, 2)
+            XCTAssertEqual(content.items[0].message, "Start with Lower A next and keep the top sets at RPE 7-8.")
+            XCTAssertEqual(content.items[1].message, "You missed two lower sessions in the last ten days.")
             XCTAssertEqual(content.modelLabel, "gpt-5.4-mini")
             XCTAssertNil(content.noteKey)
+        default:
+            XCTFail("Expected ready insights state")
+        }
+    }
+
+    func testTodayCoachInsightsResolverFiltersMismatchedLanguageInRussianLocale() {
+        let insights = CoachProfileInsights(
+            summary: "Сегодня лучше сохранить текущий ритм и не форсировать объём.",
+            keyObservations: ["Bench volume has stayed stable for two weeks."],
+            topConstraints: ["Вы пропустили две тренировки ног за последние десять дней."],
+            recommendations: ["Начните со следующей тренировки и держите верхние подходы на RPE 7-8."],
+            confidenceNotes: ["Recent data is slightly sparse."],
+            executionContext: CoachProfileExecutionContext(
+                mode: "profile",
+                effectiveWeeklyFrequency: 2,
+                shouldTreatProgramCountAsMismatch: false,
+                programWorkoutCount: 4,
+                weeklyTarget: 3,
+                statedWeeklyFrequency: 3,
+                observedAverageWorkoutsPerWeek: 2,
+                templateRotationSemantics: "in_order",
+                authoritativeSignal: "history",
+                userNote: nil,
+                explanation: "Rolling template execution should be preserved.",
+                evidence: ["Last 4 weeks"]
+            ),
+            generationStatus: .model,
+            insightSource: .freshModel,
+            provider: nil,
+            selectedModel: nil
+        )
+
+        let state = TodayCoachInsightsResolver.resolve(
+            insights: insights,
+            origin: .freshModel,
+            isLoading: false,
+            canUseRemoteCoach: true,
+            lastErrorDescription: nil,
+            languageCode: "ru"
+        )
+
+        switch state {
+        case let .ready(content):
+            XCTAssertEqual(content.summary, "Сегодня лучше сохранить текущий ритм и не форсировать объём.")
+            XCTAssertNil(content.explanation)
+            XCTAssertEqual(content.items.count, 2)
+            XCTAssertEqual(content.items[0].message, "Начните со следующей тренировки и держите верхние подходы на RPE 7-8.")
+            XCTAssertEqual(content.items[1].message, "Вы пропустили две тренировки ног за последние десять дней.")
+        default:
+            XCTFail("Expected ready insights state")
+        }
+    }
+
+    func testTodayCoachInsightsResolverUsesFirstValidItemAsSummaryWhenSummaryIsWrongLanguage() {
+        let insights = CoachProfileInsights(
+            summary: "Your current split works best when you keep a steady weekly rhythm.",
+            keyObservations: ["Последняя тренировка прошла уверенно по основным движениям."],
+            topConstraints: ["Сейчас главный лимитер — пропуски тренировок ног."],
+            recommendations: ["Вернитесь со следующей тренировки по плану и не добавляйте лишний объём."],
+            generationStatus: .model,
+            insightSource: .freshModel,
+            provider: nil,
+            selectedModel: nil
+        )
+
+        let state = TodayCoachInsightsResolver.resolve(
+            insights: insights,
+            origin: .freshModel,
+            isLoading: false,
+            canUseRemoteCoach: true,
+            lastErrorDescription: nil,
+            languageCode: "ru"
+        )
+
+        switch state {
+        case let .ready(content):
+            XCTAssertEqual(content.summary, "Вернитесь со следующей тренировки по плану и не добавляйте лишний объём.")
+            XCTAssertEqual(content.items.count, 1)
+            XCTAssertEqual(content.items[0].message, "Сейчас главный лимитер — пропуски тренировок ног.")
         default:
             XCTFail("Expected ready insights state")
         }
@@ -245,7 +324,8 @@ final class TodayFeatureTests: XCTestCase {
             origin: .fallback,
             isLoading: true,
             canUseRemoteCoach: true,
-            lastErrorDescription: nil
+            lastErrorDescription: nil,
+            languageCode: "en"
         )
 
         XCTAssertEqual(state, .loading)
@@ -257,10 +337,35 @@ final class TodayFeatureTests: XCTestCase {
             origin: .fallback,
             isLoading: false,
             canUseRemoteCoach: false,
-            lastErrorDescription: nil
+            lastErrorDescription: nil,
+            languageCode: "ru"
         )
 
         XCTAssertEqual(state, .unavailable("today.insights.empty_local"))
+    }
+
+    func testTodayCoachInsightsResolverReturnsUnavailableWhenAllInsightTextIsWrongLanguage() {
+        let insights = CoachProfileInsights(
+            summary: "Your lower-body progress is mostly limited by missed sessions.",
+            keyObservations: ["Bench volume has stayed stable for two weeks."],
+            topConstraints: ["You missed two lower sessions in the last ten days."],
+            recommendations: ["Start with Lower A next and keep the top sets at RPE 7-8."],
+            generationStatus: .model,
+            insightSource: .freshModel,
+            provider: nil,
+            selectedModel: nil
+        )
+
+        let state = TodayCoachInsightsResolver.resolve(
+            insights: insights,
+            origin: .freshModel,
+            isLoading: false,
+            canUseRemoteCoach: true,
+            lastErrorDescription: nil,
+            languageCode: "ru"
+        )
+
+        XCTAssertEqual(state, .unavailable("today.insights.empty"))
     }
 
     func testTodayCoachInsightsResolverAddsFallbackNoteWhenRemoteFails() {
@@ -278,7 +383,8 @@ final class TodayFeatureTests: XCTestCase {
             origin: .fallback,
             isLoading: false,
             canUseRemoteCoach: true,
-            lastErrorDescription: "Backend timeout"
+            lastErrorDescription: "Backend timeout",
+            languageCode: "en"
         )
 
         switch state {

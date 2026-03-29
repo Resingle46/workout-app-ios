@@ -630,7 +630,8 @@ struct TodayDashboardView: View {
             origin: coachStore.profileInsightsOrigin,
             isLoading: coachStore.isLoadingProfileInsights,
             canUseRemoteCoach: coachStore.canUseRemoteCoach,
-            lastErrorDescription: coachStore.lastInsightsErrorDescription
+            lastErrorDescription: coachStore.lastInsightsErrorDescription,
+            languageCode: store.selectedLanguageCode
         )
     }
 
@@ -668,25 +669,8 @@ struct TodayDashboardView: View {
                 }
 
                 if !state.metrics.isEmpty {
-                    TodayMetricsStrip(metrics: state.metrics)
+                    TodayMetricsGrid(metrics: state.metrics)
                 }
-
-                TodayQuickActionsCard(
-                    hero: state.hero,
-                    onCreateProgram: { showingCreateProgram = true },
-                    onStartWorkout: { template in
-                        store.startWorkout(template: template)
-                    },
-                    onContinueWorkout: {
-                        store.selectedTab = .workout
-                    },
-                    onOpenCoach: {
-                        store.selectedTab = .coach
-                    },
-                    onOpenStatistics: {
-                        store.selectedTab = .statistics
-                    }
-                )
             }
             .padding(.horizontal, 20)
             .padding(.top, 0)
@@ -751,14 +735,14 @@ private struct TodayHeroCard: View {
     let onOpenStatistics: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 16) {
             header
             title
             description
             badges
             actions
         }
-        .padding(22)
+        .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(heroBackground)
         .overlay(
@@ -788,14 +772,14 @@ private struct TodayHeroCard: View {
 
     private var title: some View {
         Text(heroTitle)
-            .font(AppTypography.title(size: 32))
+            .font(AppTypography.title(size: 30))
             .foregroundStyle(AppTheme.primaryText)
             .fixedSize(horizontal: false, vertical: true)
     }
 
     private var description: some View {
         Text(heroDescription)
-            .font(AppTypography.body(size: 16, weight: .medium, relativeTo: .subheadline))
+            .font(AppTypography.body(size: 15, weight: .medium, relativeTo: .subheadline))
             .foregroundStyle(AppTheme.secondaryText)
             .fixedSize(horizontal: false, vertical: true)
     }
@@ -959,12 +943,12 @@ private struct TodayHeroCard: View {
 
             return items
         case let .recovery(heroState):
-            var items = [todayWeeklyTargetText(
+            var items = [todayHeroCompletedBadgeText(
                 workoutsThisWeek: heroState.workoutsThisWeek,
                 weeklyTarget: heroState.weeklyTarget
             )]
-            if !heroState.recentExercises.isEmpty {
-                items.append(heroState.recentExercises.prefix(2).map(\.exerciseName).joined(separator: " • "))
+            if let recommendation = heroState.optionalRecommendation {
+                items.append(todayHeroNextWorkoutBadgeText(recommendation.workout.title))
             }
             return items
         case .empty:
@@ -1073,17 +1057,19 @@ private struct TodayAttentionCard: View {
     }
 }
 
-private struct TodayMetricsStrip: View {
+private struct TodayMetricsGrid: View {
     let metrics: [TodayMetricState]
 
+    private let columns = [
+        GridItem(.flexible(), spacing: 14, alignment: .top),
+        GridItem(.flexible(), spacing: 14, alignment: .top)
+    ]
+
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 14) {
-                ForEach(metrics) { metric in
-                    TodayMetricCard(metric: metric)
-                }
+        LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
+            ForEach(metrics) { metric in
+                TodayMetricCard(metric: metric)
             }
-            .padding(.horizontal, 1)
         }
     }
 }
@@ -1098,12 +1084,16 @@ private struct TodayMetricCard: View {
                 .foregroundStyle(AppTheme.secondaryText)
                 .textCase(.uppercase)
                 .tracking(1.0)
+                .lineLimit(2)
+                .minimumScaleFactor(0.85)
 
             Text(metric.value)
                 .font(AppTypography.heading(size: 22))
                 .foregroundStyle(AppTheme.primaryText)
                 .lineLimit(1)
-                .minimumScaleFactor(0.82)
+                .minimumScaleFactor(0.8)
+
+            Spacer(minLength: 0)
 
             Text(metric.detail)
                 .font(AppTypography.caption(size: 13, weight: .medium))
@@ -1112,7 +1102,7 @@ private struct TodayMetricCard: View {
                 .minimumScaleFactor(0.85)
         }
         .padding(18)
-        .frame(width: 164, alignment: .leading)
+        .frame(maxWidth: .infinity, height: 152, alignment: .topLeading)
         .background(
             RoundedRectangle(cornerRadius: 24, style: .continuous)
                 .fill(AppTheme.surfaceElevated)
@@ -1124,116 +1114,6 @@ private struct TodayMetricCard: View {
         .overlay(
             RoundedRectangle(cornerRadius: 24, style: .continuous)
                 .stroke(AppTheme.border, lineWidth: 1)
-        )
-    }
-}
-
-private struct TodayQuickActionsCard: View {
-    let hero: TodayHeroState
-    let onCreateProgram: () -> Void
-    let onStartWorkout: (WorkoutTemplate) -> Void
-    let onContinueWorkout: () -> Void
-    let onOpenCoach: () -> Void
-    let onOpenStatistics: () -> Void
-
-    var body: some View {
-        AppCard {
-            VStack(alignment: .leading, spacing: 16) {
-                AppSectionTitle(titleKey: "today.quick_actions.title")
-
-                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
-                    if case .active = hero {
-                        TodayQuickActionButton(
-                            title: todayLocalizedString("today.action.continue_workout"),
-                            systemImage: "play.fill"
-                        ) {
-                            onContinueWorkout()
-                        }
-                    } else if let template = hero.startableWorkout {
-                        TodayQuickActionButton(
-                            title: todayLocalizedString("action.start_workout"),
-                            systemImage: "play.fill"
-                        ) {
-                            onStartWorkout(template)
-                        }
-                    } else {
-                        TodayQuickActionButton(
-                            title: todayLocalizedString("action.create_program"),
-                            systemImage: "plus"
-                        ) {
-                            onCreateProgram()
-                        }
-                    }
-
-                    TodayQuickActionButton(
-                        title: todayLocalizedString("today.action.open_coach"),
-                        systemImage: "sparkles"
-                    ) {
-                        onOpenCoach()
-                    }
-
-                    TodayQuickActionButton(
-                        title: todayLocalizedString("today.action.open_statistics"),
-                        systemImage: "chart.line.uptrend.xyaxis"
-                    ) {
-                        onOpenStatistics()
-                    }
-
-                    NavigationLink(destination: ProgramsLibraryView()) {
-                        TodayQuickActionLabel(
-                            title: todayLocalizedString("today.action.programs"),
-                            systemImage: "list.clipboard"
-                        )
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-        }
-    }
-}
-
-private struct TodayQuickActionButton: View {
-    let title: String
-    let systemImage: String
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            TodayQuickActionLabel(title: title, systemImage: systemImage)
-        }
-        .buttonStyle(.plain)
-    }
-}
-
-private struct TodayQuickActionLabel: View {
-    let title: String
-    let systemImage: String
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: systemImage)
-                .font(AppTypography.icon(size: 16, weight: .semibold))
-                .foregroundStyle(AppTheme.accent)
-                .frame(width: 36, height: 36)
-                .background(AppTheme.accent.opacity(0.14), in: RoundedRectangle(cornerRadius: 13, style: .continuous))
-
-            Text(title)
-                .font(AppTypography.body(size: 15, weight: .semibold, relativeTo: .subheadline))
-                .foregroundStyle(AppTheme.primaryText)
-                .lineLimit(2)
-                .multilineTextAlignment(.leading)
-
-            Spacer(minLength: 8)
-        }
-        .padding(16)
-        .frame(maxWidth: .infinity, minHeight: 74, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .fill(AppTheme.surfaceElevated)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 22, style: .continuous)
-                        .stroke(AppTheme.border, lineWidth: 1)
-                )
         )
     }
 }
@@ -1336,6 +1216,24 @@ private func todayWeeklyTargetText(
         format: todayLocalizedString("profile.card.consistency.goal_progress"),
         workoutsThisWeek,
         weeklyTarget
+    )
+}
+
+private func todayHeroCompletedBadgeText(
+    workoutsThisWeek: Int,
+    weeklyTarget: Int
+) -> String {
+    String(
+        format: todayLocalizedString("today.hero.badge.completed"),
+        workoutsThisWeek,
+        weeklyTarget
+    )
+}
+
+private func todayHeroNextWorkoutBadgeText(_ title: String) -> String {
+    String(
+        format: todayLocalizedString("today.hero.badge.next"),
+        title
     )
 }
 

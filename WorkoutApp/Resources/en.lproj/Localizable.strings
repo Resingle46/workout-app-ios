@@ -638,6 +638,8 @@
 "today.hero.first_workout.body" = "Start with %@ and let Today guide the rest from local data.";
 "today.hero.empty.title" = "Create your first program";
 "today.hero.empty.body" = "You have almost no local training data yet. Add a program or workout so Today can recommend the next step.";
+"today.hero.badge.completed" = "Completed %d/%d";
+"today.hero.badge.next" = "Next: %@";
 "today.metric.this_week" = "This week";
 "today.metric.this_week_detail" = "Completed toward your target";
 "today.metric.streak" = "Streak";
@@ -659,7 +661,7 @@
 "today.attention.streak.body" = "%d weeks in a row at target.";
 "today.attention.strength.title" = "Weekly momentum";
 "today.attention.strength.body" = "%@ on matched lifts versus last week.";
-"today.insights.title" = "Profile insights";
+"today.insights.title" = "Today focus";
 "today.insights.loading" = "Refreshing personalized insights...";
 "today.insights.empty" = "Insights will appear after Coach analyzes your profile. Today stays useful from local data in the meantime.";
 "today.insights.empty_local" = "Remote AI is unavailable, so Today stays focused on local-first guidance.";

@@ -637,6 +637,8 @@
 "today.hero.first_workout.body" = "Начните с %@, а дальше Today будет вести вас на основе локальных данных.";
 "today.hero.empty.title" = "Создайте первую программу";
 "today.hero.empty.body" = "Локальных тренировочных данных пока почти нет. Добавьте программу или тренировку, чтобы Today мог подсказывать следующий шаг.";
+"today.hero.badge.completed" = "Выполнено %d/%d";
+"today.hero.badge.next" = "Дальше: %@";
 "today.metric.this_week" = "Неделя";
 "today.metric.this_week_detail" = "Выполнено к вашей цели";
 "today.metric.streak" = "Серия";
@@ -658,7 +660,7 @@
 "today.attention.streak.body" = "%d недель подряд цель выполнена.";
 "today.attention.strength.title" = "Импульс недели";
 "today.attention.strength.body" = "%@ по совпадающим силовым к прошлой неделе.";
-"today.insights.title" = "Инсайты по профилю";
+"today.insights.title" = "Что важно сегодня";
 "today.insights.loading" = "Обновляем персональные инсайты...";
 "today.insights.empty" = "Инсайты появятся после анализа профиля в Coach. Пока Today остаётся полезным за счёт локальных данных.";
 "today.insights.empty_local" = "Удалённый AI недоступен, поэтому Today опирается на локальные подсказки.";
