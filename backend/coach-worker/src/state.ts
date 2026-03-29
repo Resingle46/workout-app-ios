@@ -29,7 +29,6 @@ import type {
   BackupUploadRequest,
   BackupUploadResponse,
   CoachChatInferenceMode,
-  CoachChatJobCreateRequest,
   CoachChatJobError,
   CoachChatJobResult,
   CoachChatJobStatus,

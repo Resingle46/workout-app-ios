@@ -1,7 +1,6 @@
 import {
   chatResponseModelOutputSchema,
   profileInsightsModelOutputSchema,
-  profileInsightsJobResultSchema,
   type CoachAIProvider,
   type CoachChatRequest,
   type CoachChatResponse,
@@ -10,7 +9,6 @@ import {
   type CoachWorkoutSummaryJobCreateRequest,
   type CoachWorkoutSummaryResponse,
   workoutSummaryModelOutputSchema,
-  type CoachProfileInsightsJobResult,
 } from "./schemas";
 import {
   buildProfileInsightsMessages,
@@ -35,7 +33,6 @@ import type {
 } from "./state";
 import {
   DEFAULT_AI_MODEL,
-  DEFAULT_GEMINI_CHAT_BALANCED_MODEL,
   buildChatRoutingAttempts,
   buildChatRoutingDecision,
   resolveProfileInsightsExecutionProfile,
@@ -43,7 +40,6 @@ import {
   buildProfileInsightsRoutingDecision,
   buildWorkoutSummaryRoutingAttempts,
   buildWorkoutSummaryRoutingDecision,
-  resolveProvider,
   type ChatRoutingAttempt,
   type CoachModelRole,
   type CoachPayloadTier,
@@ -58,7 +54,6 @@ import {
   classifyGeminiHttpError,
   classifyGeminiServiceFailure,
   isGemini2_5FamilyModel,
-  isGemini2_5FlashLiteModel,
   isGemini2_5FlashModel,
   isGemini2_5QuotaBlockEnabled,
   isGeminiEmergencyFallbackEnabled,
@@ -84,7 +79,6 @@ const CHAT_ASYNC_FALLBACK_MAX_TOKENS = 900;
 const WORKOUT_SUMMARY_STRUCTURED_MAX_TOKENS = 420;
 const WORKOUT_SUMMARY_ASYNC_STRUCTURED_MAX_TOKENS = 700;
 const WORKOUT_SUMMARY_PLAIN_TEXT_MAX_TOKENS = 320;
-const WORKOUT_SUMMARY_ASYNC_PLAIN_TEXT_MAX_TOKENS = 520;
 const GEMINI_MAX_RATE_LIMIT_RETRIES = 2;
 const GEMINI_BASE_RETRY_DELAY_MS = 1_250;
 const GEMINI_MAX_RETRY_DELAY_MS = 6_000;
@@ -3368,19 +3362,6 @@ function extractConstraintsFromSnapshot(
   );
 }
 
-function filterFrequencyStructureText(
-  values: string[],
-  constraints: ProgramCommentConstraints
-): string[] {
-  if (!hasFrequencyStructureGuardrails(constraints)) {
-    return dedupeText(values).slice(0, 8);
-  }
-
-  return dedupeText(
-    values.filter((value) => !shouldBlockFrequencyStructureText(value, constraints))
-  ).slice(0, 8);
-}
-
 function filterChatAnswerMarkdown(
   answerMarkdown: string,
   constraints: ProgramCommentConstraints,
@@ -3520,15 +3501,6 @@ function shouldBlockFrequencyStructureText(
   }
 
   return false;
-}
-
-function filterUnsupportedClaimText(
-  values: string[],
-  derivedAnalytics?: CoachDerivedAnalytics
-): string[] {
-  return dedupeText(
-    values.filter((value) => !shouldBlockUnsupportedClaimText(value, derivedAnalytics))
-  ).slice(0, 8);
 }
 
 function shouldBlockUnsupportedClaimText(
@@ -5043,54 +5015,6 @@ function localizedCoachText(
     (text, [name, value]) => text.replaceAll(`%${name}%`, String(value)),
     templates[key]
   );
-}
-
-function buildGoalEtaRecommendation(
-  locale: string,
-  goal: NonNullable<CoachProfileInsightsRequest["snapshot"]>["analytics"]["goal"]
-): string | undefined {
-  if (
-    goal.etaWeeksLowerBound === undefined ||
-    goal.etaWeeksUpperBound === undefined
-  ) {
-    return undefined;
-  }
-
-  const etaText =
-    goal.etaWeeksUpperBound >= 8
-      ? localizedCoachText(locale, "etaMonths", {
-          lower: Math.max(Math.ceil(goal.etaWeeksLowerBound / 4.345), 1),
-          upper: Math.max(Math.ceil(goal.etaWeeksUpperBound / 4.345), 1),
-        })
-      : localizedCoachText(locale, "etaWeeks", {
-          lower: goal.etaWeeksLowerBound,
-          upper: goal.etaWeeksUpperBound,
-        });
-
-  return localizedCoachText(locale, "etaRecommendation", {
-    eta: etaText,
-  });
-}
-
-function localizedWorkoutFocus(locale: string, goal: string): string {
-  const ru = locale.toLowerCase().startsWith("ru");
-
-  switch (goal) {
-    case "strength":
-      return ru ? "Силовой акцент" : "Strength focus";
-    case "hypertrophy":
-      return ru ? "Гипертрофия" : "Hypertrophy focus";
-    case "fatLoss":
-      return ru ? "Расход энергии и объём" : "Energy expenditure and volume";
-    case "generalFitness":
-      return ru ? "Общая физическая подготовка" : "General fitness";
-    default:
-      return ru ? "Дополнительная тренировка" : "Additional training day";
-  }
-}
-
-function clamp(value: number, lower: number, upper: number): number {
-  return Math.min(Math.max(value, lower), upper);
 }
 
 export function buildOpaqueResponseID(): string {

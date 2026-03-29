@@ -46,7 +46,6 @@ import type {
   CoachProfileInsightsRequest,
   CoachProfileInsightsResponse,
   CoachWorkoutSummaryJobCreateRequest,
-  CoachWorkoutSummaryJobStatusResponse,
   CoachWorkoutSummaryResponse,
   CompactCoachSnapshot,
 } from "../src/schemas";
@@ -2232,7 +2231,7 @@ describe("coach worker app", () => {
     const step = {
       do: vi.fn(
         async (
-          name: string,
+          _name: string,
           arg2: unknown,
           arg3?: () => Promise<unknown>
         ): Promise<unknown> => {

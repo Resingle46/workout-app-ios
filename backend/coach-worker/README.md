@@ -13,13 +13,16 @@ Cloudflare Worker backend for the in-app AI Coach.
 - `DELETE /v1/coach/state`
 - `PATCH /v1/coach/preferences`
 - `POST /v1/coach/memory/clear`
+- `POST /v1/coach/chat`
 - `POST /v1/coach/profile-insights`
+- `POST /v2/coach/profile-insights-jobs`
 - `POST /v2/coach/chat-jobs`
 - `POST /v2/coach/workout-summary-jobs`
+- `GET /v2/coach/profile-insights-jobs/:jobID?installID=...`
 - `GET /v2/coach/chat-jobs/:jobID?installID=...`
 - `GET /v2/coach/workout-summary-jobs/:jobID?installID=...`
 
-All `POST` routes require:
+All routes except `GET /health` require:
 
 ```txt
 Authorization: Bearer <COACH_INTERNAL_TOKEN>
@@ -73,7 +76,11 @@ Set runtime vars and bindings in Cloudflare:
 
 - AI binding: `AI`
 - KV binding: `COACH_STATE_KV`
+- R2 binding: `BACKUPS_R2`
+- D1 binding: `APP_META_DB`
 - Workflow binding: `COACH_CHAT_WORKFLOW`
+- Workflow binding: `WORKOUT_SUMMARY_WORKFLOW`
+- Workflow binding: `PROFILE_INSIGHTS_WORKFLOW`
 - `AI_MODEL=@cf/mistralai/mistral-small-3.1-24b-instruct`
 - `COACH_PROMPT_VERSION=2026-03-25.v1`
 
