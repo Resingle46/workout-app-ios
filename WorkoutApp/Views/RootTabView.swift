@@ -153,7 +153,6 @@ struct RootTabView: View {
     @Environment(CloudSyncStore.self) private var cloudSyncStore
     @Environment(WorkoutSummaryStore.self) private var workoutSummaryStore
     @State private var workoutTabsExpanded = false
-    @State private var isShowingStaleWorkoutAlert = false
 
     private var tabBarPresentationMode: TabBarPresentationMode {
         RootTabBarPresentationResolver.resolve(
@@ -183,9 +182,6 @@ struct RootTabView: View {
                 if newValue == nil {
                     workoutTabsExpanded = false
                 }
-            }
-            .onChange(of: store.pendingStaleWorkoutCheckpoint?.session.id, initial: true) { _, newValue in
-                isShowingStaleWorkoutAlert = newValue != nil
             }
             .safeAreaInset(edge: .top, spacing: 0) {
                 restoredWorkoutBanner
@@ -224,20 +220,18 @@ struct RootTabView: View {
             }
             .alert(
                 Text("workout.recovery.stale_title"),
-                isPresented: $isShowingStaleWorkoutAlert
+                isPresented: Binding(
+                    get: { store.pendingStaleWorkoutCheckpoint != nil },
+                    set: { _ in }
+                )
             ) {
                 Button("workout.recovery.resume_action") {
                     store.resumePendingRecoveredWorkout()
-                    isShowingStaleWorkoutAlert = false
                 }
                 Button("workout.recovery.discard_action", role: .destructive) {
                     if let discardedSessionID = store.discardRecoveredWorkout() {
                         workoutSummaryStore.discardSummary(for: discardedSessionID)
                     }
-                    isShowingStaleWorkoutAlert = false
-                }
-                Button("action.cancel", role: .cancel) {
-                    isShowingStaleWorkoutAlert = false
                 }
             } message: {
                 Text(staleWorkoutAlertMessage)
