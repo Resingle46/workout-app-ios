@@ -1208,7 +1208,7 @@ private struct TodayQuickActionLabel: View {
                     RoundedRectangle(cornerRadius: 22, style: .continuous)
                         .stroke(AppTheme.border, lineWidth: 1)
                 )
-        }
+        )
     }
 }
 
