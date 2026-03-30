@@ -30,6 +30,12 @@ enum SeedData {
         legacyCoreCategoryID: coreCategoryID,
     ]
 
+    static let starterSupersetGroupID = UUID(uuidString: "11111111-1111-4111-8111-111111111111")!
+    private static let legacyStarterSupersetGroupID = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
+    private static let legacySupersetGroupIDMap: [UUID: UUID] = [
+        legacyStarterSupersetGroupID: starterSupersetGroupID,
+    ]
+
     static let categories: [ExerciseCategory] = [
         ExerciseCategory(id: chestCategoryID, nameKey: "muscle.chest", symbol: "figure.strengthtraining.traditional"),
         ExerciseCategory(id: backCategoryID, nameKey: "muscle.back", symbol: "figure.climbing"),
@@ -126,6 +132,10 @@ enum SeedData {
         legacyCategoryIDMap[categoryID] ?? categoryID
     }
 
+    static func canonicalSupersetGroupID(for groupID: UUID) -> UUID {
+        legacySupersetGroupIDMap[groupID] ?? groupID
+    }
+
     static func isDeprecatedSeedExercise(named name: String) -> Bool {
         deprecatedSeedExerciseNames.contains(name)
     }
@@ -143,8 +153,8 @@ enum SeedData {
             exercises: [
                 WorkoutExerciseTemplate(exerciseID: exercise(named: "Barbell Bench Press", in: exerciseByName).id, sets: [8, 8, 6].map { WorkoutSetTemplate(reps: $0) }),
                 WorkoutExerciseTemplate(exerciseID: exercise(named: "Barbell Row", in: exerciseByName).id, sets: [10, 10, 8].map { WorkoutSetTemplate(reps: $0) }),
-                WorkoutExerciseTemplate(exerciseID: exercise(named: "Hammer Curl", in: exerciseByName).id, sets: [12, 12, 12].map { WorkoutSetTemplate(reps: $0) }, groupKind: .superset, groupID: UUID(uuidString: "11111111-1111-1111-1111-111111111111")),
-                WorkoutExerciseTemplate(exerciseID: exercise(named: "Triceps Pushdown", in: exerciseByName).id, sets: [12, 12, 12].map { WorkoutSetTemplate(reps: $0) }, groupKind: .superset, groupID: UUID(uuidString: "11111111-1111-1111-1111-111111111111"))
+                WorkoutExerciseTemplate(exerciseID: exercise(named: "Hammer Curl", in: exerciseByName).id, sets: [12, 12, 12].map { WorkoutSetTemplate(reps: $0) }, groupKind: .superset, groupID: starterSupersetGroupID),
+                WorkoutExerciseTemplate(exerciseID: exercise(named: "Triceps Pushdown", in: exerciseByName).id, sets: [12, 12, 12].map { WorkoutSetTemplate(reps: $0) }, groupKind: .superset, groupID: starterSupersetGroupID)
             ]
         )
 

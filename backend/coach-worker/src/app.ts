@@ -149,7 +149,8 @@ export function createApp(
           const normalized = normalizeBackupUploadPayload(rawBody);
           routeDiagnostics = buildBackupUploadDiagnostics(
             normalized.body,
-            normalized.migratedLegacyCategoryIDs
+            normalized.migratedLegacyCategoryIDs,
+            normalized.migratedLegacySupersetGroupIDs
           );
           const body = backupUploadRequestSchema.parse(normalized.body);
           const installAuth = await authorizeInstallScope(
@@ -2078,7 +2079,8 @@ async function readJSON(request: Request): Promise<unknown> {
 
 function buildBackupUploadDiagnostics(
   rawBody: unknown,
-  migratedLegacyCategoryIDs = 0
+  migratedLegacyCategoryIDs = 0,
+  migratedLegacySupersetGroupIDs = 0
 ): Record<string, unknown> | undefined {
   if (!isRecord(rawBody)) {
     return undefined;
@@ -2101,6 +2103,9 @@ function buildBackupUploadDiagnostics(
   if (migratedLegacyCategoryIDs > 0) {
     diagnostics.migratedLegacyCategoryIDs = migratedLegacyCategoryIDs;
   }
+  if (migratedLegacySupersetGroupIDs > 0) {
+    diagnostics.migratedLegacySupersetGroupIDs = migratedLegacySupersetGroupIDs;
+  }
 
   return Object.keys(diagnostics).length > 0 ? diagnostics : undefined;
 }
@@ -2114,39 +2119,123 @@ const LEGACY_CATEGORY_ID_MAP: Readonly<Record<string, string>> = {
   "A1000000-0000-0000-0000-000000000006": "A1000000-0000-4000-8000-000000000006",
 };
 
+const LEGACY_SUPERSET_GROUP_ID_MAP: Readonly<Record<string, string>> = {
+  "11111111-1111-1111-1111-111111111111":
+    "11111111-1111-4111-8111-111111111111",
+};
+
 function normalizeBackupUploadPayload(rawBody: unknown): {
   body: unknown;
   migratedLegacyCategoryIDs: number;
+  migratedLegacySupersetGroupIDs: number;
 } {
   if (!isRecord(rawBody) || !isRecord(rawBody.snapshot)) {
-    return { body: rawBody, migratedLegacyCategoryIDs: 0 };
+    return {
+      body: rawBody,
+      migratedLegacyCategoryIDs: 0,
+      migratedLegacySupersetGroupIDs: 0,
+    };
   }
 
   const snapshot = rawBody.snapshot;
-  if (!Array.isArray(snapshot.exercises)) {
-    return { body: rawBody, migratedLegacyCategoryIDs: 0 };
-  }
-
   let migratedLegacyCategoryIDs = 0;
-  const normalizedExercises = snapshot.exercises.map((exercise) => {
-    if (!isRecord(exercise) || typeof exercise.categoryID !== "string") {
-      return exercise;
+  let migratedLegacySupersetGroupIDs = 0;
+
+  const normalizedExercises = Array.isArray(snapshot.exercises)
+    ? snapshot.exercises.map((exercise) => {
+        if (!isRecord(exercise) || typeof exercise.categoryID !== "string") {
+          return exercise;
+        }
+
+        const canonicalCategoryID = LEGACY_CATEGORY_ID_MAP[exercise.categoryID];
+        if (!canonicalCategoryID) {
+          return exercise;
+        }
+
+        migratedLegacyCategoryIDs += 1;
+        return {
+          ...exercise,
+          categoryID: canonicalCategoryID,
+        };
+      })
+    : snapshot.exercises;
+
+  const normalizeSupersetGroupID = (value: unknown): unknown => {
+    if (typeof value !== "string") {
+      return value;
     }
 
-    const canonicalCategoryID = LEGACY_CATEGORY_ID_MAP[exercise.categoryID];
-    if (!canonicalCategoryID) {
-      return exercise;
+    const canonicalGroupID = LEGACY_SUPERSET_GROUP_ID_MAP[value];
+    if (!canonicalGroupID) {
+      return value;
     }
 
-    migratedLegacyCategoryIDs += 1;
+    migratedLegacySupersetGroupIDs += 1;
+    return canonicalGroupID;
+  };
+
+  const normalizedPrograms = Array.isArray(snapshot.programs)
+    ? snapshot.programs.map((program) => {
+        if (!isRecord(program) || !Array.isArray(program.workouts)) {
+          return program;
+        }
+
+        return {
+          ...program,
+          workouts: program.workouts.map((workout) => {
+            if (!isRecord(workout) || !Array.isArray(workout.exercises)) {
+              return workout;
+            }
+
+            return {
+              ...workout,
+              exercises: workout.exercises.map((exercise) => {
+                if (!isRecord(exercise)) {
+                  return exercise;
+                }
+
+                return {
+                  ...exercise,
+                  groupID: normalizeSupersetGroupID(exercise.groupID),
+                };
+              }),
+            };
+          }),
+        };
+      })
+    : snapshot.programs;
+
+  const normalizedHistory = Array.isArray(snapshot.history)
+    ? snapshot.history.map((session) => {
+        if (!isRecord(session) || !Array.isArray(session.exercises)) {
+          return session;
+        }
+
+        return {
+          ...session,
+          exercises: session.exercises.map((exercise) => {
+            if (!isRecord(exercise)) {
+              return exercise;
+            }
+
+            return {
+              ...exercise,
+              groupID: normalizeSupersetGroupID(exercise.groupID),
+            };
+          }),
+        };
+      })
+    : snapshot.history;
+
+  if (
+    migratedLegacyCategoryIDs === 0 &&
+    migratedLegacySupersetGroupIDs === 0
+  ) {
     return {
-      ...exercise,
-      categoryID: canonicalCategoryID,
+      body: rawBody,
+      migratedLegacyCategoryIDs: 0,
+      migratedLegacySupersetGroupIDs: 0,
     };
-  });
-
-  if (migratedLegacyCategoryIDs === 0) {
-    return { body: rawBody, migratedLegacyCategoryIDs: 0 };
   }
 
   return {
@@ -2154,10 +2243,13 @@ function normalizeBackupUploadPayload(rawBody: unknown): {
       ...rawBody,
       snapshot: {
         ...snapshot,
+        programs: normalizedPrograms,
         exercises: normalizedExercises,
+        history: normalizedHistory,
       },
     },
     migratedLegacyCategoryIDs,
+    migratedLegacySupersetGroupIDs,
   };
 }
 

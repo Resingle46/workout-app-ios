@@ -1925,16 +1925,17 @@ final class AppStore {
 
     private static func normalizedSnapshot(from snapshot: AppSnapshot) -> AppSnapshot {
         let normalizedPrograms = normalizedPrograms(snapshot.programs)
-        let normalizedHistory = snapshot.history.sorted { $0.startedAt > $1.startedAt }
+        let normalizedHistoryItems = normalizedHistory(snapshot.history)
+            .sorted { $0.startedAt > $1.startedAt }
         let referencedExerciseIDs = referencedExerciseIDs(
             programs: normalizedPrograms,
-            history: normalizedHistory
+            history: normalizedHistoryItems
         )
 
         return AppSnapshot(
             programs: normalizedPrograms,
             exercises: normalizedExercises(snapshot.exercises, referencedExerciseIDs: referencedExerciseIDs),
-            history: normalizedHistory,
+            history: normalizedHistoryItems,
             profile: Self.normalizedProfile(snapshot.profile),
             coachAnalysisSettings: normalizedCoachAnalysisSettings(
                 snapshot.coachAnalysisSettings,
@@ -2098,7 +2099,11 @@ final class AppStore {
             guard !handled.contains(item.id) else { continue }
 
             if item.groupKind == .superset, let groupID = item.groupID {
-                let groupItems = items.filter { $0.groupKind == .superset && $0.groupID == groupID }
+                let canonicalGroupID = SeedData.canonicalSupersetGroupID(for: groupID)
+                let groupItems = items.filter {
+                    $0.groupKind == .superset &&
+                    $0.groupID.map { SeedData.canonicalSupersetGroupID(for: $0) } == canonicalGroupID
+                }
                 groupItems.forEach { handled.insert($0.id) }
 
                 guard groupItems.count > 1 else {
@@ -2111,6 +2116,7 @@ final class AppStore {
                     contentsOf: groupItems.map { groupItem in
                         var normalizedItem = groupItem
                         normalizedItem.sets = resizedTemplateSets(groupItem.sets, targetCount: targetSetCount)
+                        normalizedItem.groupID = canonicalGroupID
                         return normalizedItem
                     }
                 )
@@ -2121,6 +2127,22 @@ final class AppStore {
         }
 
         return result
+    }
+
+    private static func normalizedHistory(_ history: [WorkoutSession]) -> [WorkoutSession] {
+        history.map { session in
+            var normalizedSession = session
+            normalizedSession.exercises = session.exercises.map { exercise in
+                guard exercise.groupKind == .superset, let groupID = exercise.groupID else {
+                    return exercise
+                }
+
+                var normalizedExercise = exercise
+                normalizedExercise.groupID = SeedData.canonicalSupersetGroupID(for: groupID)
+                return normalizedExercise
+            }
+            return normalizedSession
+        }
     }
 
     private static func resizedTemplateSets(_ sets: [WorkoutSetTemplate], targetCount: Int) -> [WorkoutSetTemplate] {

@@ -234,6 +234,78 @@ describe("coach worker app", () => {
     });
   });
 
+  it("restores from the latest backup when head metadata is missing", async () => {
+    const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
+    const app = createApp({
+      createInferenceService: () => stubInferenceService(),
+      createStateRepository: () => repository,
+    });
+    const upload = makeBackupUploadRequestFixture();
+
+    const uploadResponse = await app.fetch(
+      authedRequest("https://coach.example.workers.dev/v1/backup", {
+        method: "PUT",
+        body: JSON.stringify(upload),
+      }),
+      makeEnv()
+    );
+
+    expect(uploadResponse.status).toBe(200);
+    (
+      repository as unknown as { backupHeads: Map<string, unknown> }
+    ).backupHeads.delete(upload.installID);
+
+    const statusResponse = await app.fetch(
+      authedRequest(
+        `https://coach.example.workers.dev/v1/backup/status?installID=${upload.installID}&localStateKind=seed`,
+        {
+          method: "GET",
+        }
+      ),
+      makeEnv()
+    );
+
+    expect(statusResponse.status).toBe(200);
+    await expect(statusResponse.json()).resolves.toMatchObject({
+      syncState: "restore_pending_decision",
+      contextState: "context_stale",
+      actions: {
+        shouldOfferRestore: true,
+        shouldPromptUser: true,
+      },
+      remote: {
+        installID: upload.installID,
+        backupVersion: 1,
+      },
+    });
+
+    const downloadResponse = await app.fetch(
+      authedRequest(
+        `https://coach.example.workers.dev/v1/backup/download?installID=${upload.installID}&version=current`,
+        {
+          method: "GET",
+        }
+      ),
+      makeEnv()
+    );
+
+    expect(downloadResponse.status).toBe(200);
+    await expect(downloadResponse.json()).resolves.toMatchObject({
+      remote: {
+        installID: upload.installID,
+        backupVersion: 1,
+      },
+      backup: {
+        installID: upload.installID,
+        snapshot: {
+          profile: {
+            weeklyWorkoutTarget: 4,
+          },
+        },
+      },
+    });
+  });
+
   it("rejects stale remote context instead of silently using it", async () => {
     const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
     const app = createApp({
@@ -593,6 +665,52 @@ describe("coach worker app", () => {
     const stored = await downloadResponse.json();
     expect(stored.backup.snapshot.exercises[0]?.categoryID).toBe(
       "A1000000-0000-4000-8000-000000000002"
+    );
+  });
+
+  it("accepts backup uploads with legacy superset group IDs by normalizing to canonical IDs", async () => {
+    const repository = new InMemoryCoachStateRepository("test.v1", DEFAULT_AI_MODEL);
+    const app = createApp({
+      createInferenceService: () => stubInferenceService(),
+      createStateRepository: () => repository,
+    });
+    const upload = makeBackupUploadRequestFixture();
+    upload.snapshot.programs[0]!.workouts[0]!.exercises[0] = {
+      ...upload.snapshot.programs[0]!.workouts[0]!.exercises[0]!,
+      groupKind: "superset",
+      groupID: "11111111-1111-1111-1111-111111111111",
+    };
+    upload.snapshot.history[0]!.exercises[0] = {
+      ...upload.snapshot.history[0]!.exercises[0]!,
+      groupKind: "superset",
+      groupID: "11111111-1111-1111-1111-111111111111",
+    };
+
+    const response = await app.fetch(
+      authedRequest("https://coach.example.workers.dev/v1/backup", {
+        method: "PUT",
+        body: JSON.stringify(upload),
+      }),
+      makeEnv()
+    );
+
+    expect(response.status).toBe(200);
+    const downloadResponse = await app.fetch(
+      authedRequest(
+        `https://coach.example.workers.dev/v1/backup/download?installID=${upload.installID}&version=current`,
+        {
+          method: "GET",
+        }
+      ),
+      makeEnv()
+    );
+    expect(downloadResponse.status).toBe(200);
+    const stored = await downloadResponse.json();
+    expect(
+      stored.backup.snapshot.programs[0]?.workouts[0]?.exercises[0]?.groupID
+    ).toBe("11111111-1111-4111-8111-111111111111");
+    expect(stored.backup.snapshot.history[0]?.exercises[0]?.groupID).toBe(
+      "11111111-1111-4111-8111-111111111111"
     );
   });
 

@@ -1669,7 +1669,10 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
     request: BackupStatusRequest
   ): Promise<BackupStatusResponse> {
     const current = await this.getCurrentInstallState(request.installID);
-    const remote = current?.current_backup_version ? toBackupHead(current) : undefined;
+    const remote = await this.readCurrentOrRecoveredBackupHead(
+      request.installID,
+      current
+    );
     const status = buildBackupStatusDecision(request, current, remote);
     await this.persistBackupStatus(request, status);
     return status;
@@ -1679,10 +1682,14 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
     request: BackupUploadRequest
   ): Promise<BackupUploadResponse> {
     const current = await this.getCurrentInstallState(request.installID);
+    const remote = await this.readCurrentOrRecoveredBackupHead(
+      request.installID,
+      current
+    );
     if (
-      (current?.current_backup_version ?? undefined) !== request.expectedRemoteVersion
+      (remote?.backupVersion ?? undefined) !== request.expectedRemoteVersion
     ) {
-      throw new StaleRemoteStateError(current?.current_backup_version ?? undefined);
+      throw new StaleRemoteStateError(remote?.backupVersion);
     }
 
     const normalizedSettings = normalizeCoachAnalysisSettings(
@@ -1695,12 +1702,12 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
     };
     const backupHash = await hashAppSnapshot(snapshot);
 
-    if (current?.current_backup_hash === backupHash && current.current_backup_version) {
-      return toBackupHead(current);
+    if (remote?.backupHash === backupHash) {
+      return current?.current_backup_version ? toBackupHead(current) : remote;
     }
 
     const uploadedAt = this.now().toISOString();
-    const backupVersion = (current?.current_backup_version ?? 0) + 1;
+    const backupVersion = (remote?.backupVersion ?? 0) + 1;
     const envelope: BackupEnvelopeV2 = {
       schemaVersion: BACKUP_SCHEMA_VERSION,
       installID: request.installID,
@@ -1721,11 +1728,14 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
     });
 
     const metadataChanged =
-      current?.selected_program_id !== (normalizedSettings.selectedProgramID ?? null) ||
-      current?.program_comment !== normalizedSettings.programComment;
-    const coachStateVersion = current
-      ? current.coach_state_version + (metadataChanged ? 1 : 0)
-      : 1;
+      (current?.selected_program_id ?? remote?.selectedProgramID ?? null) !==
+        (normalizedSettings.selectedProgramID ?? null) ||
+      (current?.program_comment ?? remote?.programComment ?? "") !==
+        normalizedSettings.programComment;
+    const baselineCoachStateVersion =
+      current?.coach_state_version ?? remote?.coachStateVersion ?? 0;
+    const coachStateVersion =
+      baselineCoachStateVersion + (metadataChanged ? 1 : 0);
     const sizeBytes = compressed.byteLength;
 
     await this.db
@@ -1761,7 +1771,7 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
       )
       .run();
 
-    const createdAt = current?.created_at ?? uploadedAt;
+    const createdAt = current?.created_at ?? remote?.uploadedAt ?? uploadedAt;
     await this.db
       .prepare(
         `
@@ -1863,7 +1873,11 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
     version?: number;
   }): Promise<BackupDownloadResponse> {
     const current = await this.getCurrentInstallState(input.installID);
-    const backupVersion = input.version ?? current?.current_backup_version ?? undefined;
+    const remote = await this.readCurrentOrRecoveredBackupHead(
+      input.installID,
+      current
+    );
+    const backupVersion = input.version ?? remote?.backupVersion ?? undefined;
     if (!backupVersion) {
       throw new MissingRemoteBackupError();
     }
@@ -1874,15 +1888,15 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
     }
 
     const snapshot =
-      input.version === undefined && current
+      input.version === undefined && remote
         ? overlayCoachAnalysisSettings(record.envelope.snapshot, {
-            selectedProgramID: current.selected_program_id,
-            programComment: current.program_comment,
+            selectedProgramID: remote.selectedProgramID,
+            programComment: remote.programComment,
           })
         : record.envelope.snapshot;
 
     return {
-      remote: input.version === undefined && current ? toBackupHead(current) : record.remote,
+      remote: input.version === undefined && remote ? remote : record.remote,
       backup: {
         ...record.envelope,
         snapshot,
@@ -2117,6 +2131,18 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
       .first<InstallStateRow>();
   }
 
+  private async readCurrentOrRecoveredBackupHead(
+    installID: string,
+    current?: InstallStateRow | null
+  ): Promise<BackupHead | undefined> {
+    if (current?.current_backup_version) {
+      return toBackupHead(current);
+    }
+
+    const latest = await this.readLatestBackupVersion(installID);
+    return latest ? toBackupHeadFromVersionRow(latest) : undefined;
+  }
+
   private async persistBackupStatus(
     request: BackupStatusRequest,
     status: BackupStatusResponse
@@ -2167,6 +2193,17 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
     return results.results;
   }
 
+  private async readLatestBackupVersion(
+    installID: string
+  ): Promise<BackupVersionRow | null> {
+    return this.db
+      .prepare(
+        `SELECT * FROM backup_versions WHERE install_id = ? ORDER BY backup_version DESC LIMIT 1`
+      )
+      .bind(installID)
+      .first<BackupVersionRow>();
+  }
+
   private async readBackupRecord(
     installID: string,
     version: number
@@ -2189,20 +2226,7 @@ export class CloudflareCoachStateRepository implements CoachStateStore {
     const text = await gunzipToText(await object.arrayBuffer());
     const envelope = JSON.parse(text) as BackupEnvelopeV2;
     return {
-      remote: {
-        installID,
-        backupVersion: row.backup_version,
-        backupHash: row.backup_hash,
-        r2Key: row.r2_key,
-        uploadedAt: row.uploaded_at,
-        clientSourceModifiedAt: row.client_source_modified_at ?? undefined,
-        selectedProgramID: undefined,
-        programComment: "",
-        coachStateVersion: 0,
-        schemaVersion: row.schema_version,
-        compression: row.compression,
-        sizeBytes: row.size_bytes,
-      },
+      remote: toBackupHeadFromVersionRow(row),
       envelope,
     };
   }
@@ -3622,22 +3646,23 @@ export class InMemoryCoachStateRepository implements CoachStateStore {
   async getBackupStatus(
     request: BackupStatusRequest
   ): Promise<BackupStatusResponse> {
+    const remote = this.recoveredBackupHead(request.installID);
     return buildBackupStatusDecision(
       request,
       inMemoryInstallStateRow(
         request.installID,
-        this.backupHeads.get(request.installID),
+        remote,
         this.installSecretHashes.get(request.installID),
         this.restoreDecisions.get(request.installID)
       ),
-      this.backupHeads.get(request.installID)
+      remote
     );
   }
 
   async uploadBackup(
     request: BackupUploadRequest
   ): Promise<BackupUploadResponse> {
-    const current = this.backupHeads.get(request.installID);
+    const current = this.recoveredBackupHead(request.installID);
     if ((current?.backupVersion ?? undefined) !== request.expectedRemoteVersion) {
       throw new StaleRemoteStateError(current?.backupVersion);
     }
@@ -3700,7 +3725,7 @@ export class InMemoryCoachStateRepository implements CoachStateStore {
     installID: string;
     version?: number;
   }): Promise<BackupDownloadResponse> {
-    const remote = this.backupHeads.get(input.installID);
+    const remote = this.recoveredBackupHead(input.installID);
     const version = input.version ?? remote?.backupVersion;
     const backup = version ? this.backups.get(input.installID)?.get(version) : undefined;
     if (!remote || !version || !backup) {
@@ -3758,6 +3783,34 @@ export class InMemoryCoachStateRepository implements CoachStateStore {
       programComment: normalizedSettings.programComment,
       coachStateVersion,
       updatedAt,
+    };
+  }
+
+  private recoveredBackupHead(installID: string): BackupHead | undefined {
+    const current = this.backupHeads.get(installID);
+    if (current) {
+      return current;
+    }
+
+    const latest = latestInMemoryBackupVersion(this.backups.get(installID));
+    if (!latest) {
+      return undefined;
+    }
+
+    const [backupVersion, envelope] = latest;
+    return {
+      installID,
+      backupVersion,
+      backupHash: envelope.backupHash,
+      r2Key: backupObjectKey(installID, backupVersion, envelope.backupHash),
+      uploadedAt: envelope.uploadedAt,
+      clientSourceModifiedAt: envelope.clientSourceModifiedAt,
+      selectedProgramID: envelope.snapshot.coachAnalysisSettings.selectedProgramID,
+      programComment: envelope.snapshot.coachAnalysisSettings.programComment,
+      coachStateVersion: this.coachStateVersions.get(installID) ?? 0,
+      schemaVersion: envelope.schemaVersion,
+      compression: "gzip",
+      sizeBytes: jsonByteLength(envelope),
     };
   }
 
@@ -4456,6 +4509,23 @@ function backupObjectKey(
   return `installs/${installID}/backups/v${String(backupVersion).padStart(6, "0")}-${backupHash}.json.gz`;
 }
 
+function toBackupHeadFromVersionRow(row: BackupVersionRow): BackupHead {
+  return {
+    installID: row.install_id,
+    backupVersion: row.backup_version,
+    backupHash: row.backup_hash,
+    r2Key: row.r2_key,
+    uploadedAt: row.uploaded_at,
+    clientSourceModifiedAt: row.client_source_modified_at ?? undefined,
+    selectedProgramID: undefined,
+    programComment: "",
+    coachStateVersion: 0,
+    schemaVersion: row.schema_version,
+    compression: row.compression,
+    sizeBytes: row.size_bytes,
+  };
+}
+
 function toBackupHead(row: InstallStateRow): BackupHead {
   if (
     !row.current_backup_version ||
@@ -4481,6 +4551,23 @@ function toBackupHead(row: InstallStateRow): BackupHead {
     compression: row.compression,
     sizeBytes: row.size_bytes,
   };
+}
+
+function latestInMemoryBackupVersion(
+  backups: Map<number, BackupEnvelopeV2> | undefined
+): [number, BackupEnvelopeV2] | undefined {
+  if (!backups || backups.size === 0) {
+    return undefined;
+  }
+
+  let latest: [number, BackupEnvelopeV2] | undefined;
+  for (const entry of backups.entries()) {
+    if (!latest || entry[0] > latest[0]) {
+      latest = entry;
+    }
+  }
+
+  return latest;
 }
 
 function withRuntimeContext(
