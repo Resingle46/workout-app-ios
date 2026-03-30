@@ -15,11 +15,22 @@ struct WorkoutLiveActivitySnapshot: Equatable, Sendable {
     var startedAt: Date
     var title: String
     var currentExerciseName: String
+    var currentSetNumber: Int?
     var currentSetLabel: String?
+    var currentSetReps: Int?
+    var currentSetWeight: Double?
     var completedSetCount: Int
     var totalSetCount: Int
     var lastCompletedSetAt: Date?
     var updatedAt: Date
+}
+
+private struct WorkoutLiveActivityExerciseContext: Equatable, Sendable {
+    var exerciseName: String
+    var currentSetNumber: Int?
+    var currentSetLabel: String?
+    var currentSetReps: Int?
+    var currentSetWeight: Double?
 }
 
 struct WorkoutLiveActivityDiagnosticsSnapshot: Hashable, Sendable {
@@ -307,7 +318,10 @@ final class WorkoutLiveActivityManager {
             title: session.title,
             currentExerciseName: currentExerciseContext?.exerciseName
                 ?? NSLocalizedString("header.workout.subtitle", comment: ""),
+            currentSetNumber: currentExerciseContext?.currentSetNumber,
             currentSetLabel: currentExerciseContext?.currentSetLabel,
+            currentSetReps: currentExerciseContext?.currentSetReps,
+            currentSetWeight: currentExerciseContext?.currentSetWeight,
             completedSetCount: completedSetCount,
             totalSetCount: totalSetCount,
             lastCompletedSetAt: lastCompletedSetAt,
@@ -318,19 +332,17 @@ final class WorkoutLiveActivityManager {
     private static func firstIncompleteExerciseContext(
         in session: WorkoutSession,
         using store: AppStore
-    ) -> (exerciseName: String, currentSetLabel: String?)? {
+    ) -> WorkoutLiveActivityExerciseContext? {
         for exerciseLog in session.exercises {
             guard let exercise = store.exercise(for: exerciseLog.exerciseID) else {
                 continue
             }
 
             if let setIndex = exerciseLog.sets.firstIndex(where: { $0.completedAt == nil }) {
-                return (
-                    exercise.localizedName,
-                    String(
-                        format: NSLocalizedString("workout.set_number", comment: ""),
-                        setIndex + 1
-                    )
+                return exerciseContext(
+                    exerciseName: exercise.localizedName,
+                    set: exerciseLog.sets[setIndex],
+                    setNumber: setIndex + 1
                 )
             }
         }
@@ -341,19 +353,44 @@ final class WorkoutLiveActivityManager {
     private static func fallbackExerciseContext(
         in session: WorkoutSession,
         using store: AppStore
-    ) -> (exerciseName: String, currentSetLabel: String?)? {
+    ) -> WorkoutLiveActivityExerciseContext? {
         guard let exerciseLog = session.exercises.last,
               let exercise = store.exercise(for: exerciseLog.exerciseID) else {
             return nil
         }
 
-        let setLabel = exerciseLog.sets.isEmpty
-            ? nil
-            : String(
-                format: NSLocalizedString("workout.set_number", comment: ""),
-                exerciseLog.sets.count
+        guard let set = exerciseLog.sets.last else {
+            return WorkoutLiveActivityExerciseContext(
+                exerciseName: exercise.localizedName,
+                currentSetNumber: nil,
+                currentSetLabel: nil,
+                currentSetReps: nil,
+                currentSetWeight: nil
             )
-        return (exercise.localizedName, setLabel)
+        }
+
+        return exerciseContext(
+            exerciseName: exercise.localizedName,
+            set: set,
+            setNumber: exerciseLog.sets.count
+        )
+    }
+
+    private static func exerciseContext(
+        exerciseName: String,
+        set: WorkoutSetLog,
+        setNumber: Int
+    ) -> WorkoutLiveActivityExerciseContext {
+        WorkoutLiveActivityExerciseContext(
+            exerciseName: exerciseName,
+            currentSetNumber: setNumber,
+            currentSetLabel: String(
+                format: NSLocalizedString("workout.set_number", comment: ""),
+                setNumber
+            ),
+            currentSetReps: set.reps,
+            currentSetWeight: set.weight
+        )
     }
 }
 
@@ -476,7 +513,10 @@ private extension WorkoutLiveActivityManager {
             state: WorkoutActivityAttributes.ContentState(
                 title: snapshot.title,
                 currentExerciseName: snapshot.currentExerciseName,
+                currentSetNumber: snapshot.currentSetNumber,
                 currentSetLabel: snapshot.currentSetLabel,
+                currentSetReps: snapshot.currentSetReps,
+                currentSetWeight: snapshot.currentSetWeight,
                 completedSetCount: snapshot.completedSetCount,
                 totalSetCount: snapshot.totalSetCount,
                 lastCompletedSetAt: snapshot.lastCompletedSetAt,
