@@ -133,17 +133,12 @@ private struct WorkoutLiveActivityLockScreenView: View {
     let context: ActivityViewContext<WorkoutActivityAttributes>
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 10) {
-                HStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                HStack(spacing: 6) {
                     Image(systemName: "figure.strengthtraining.traditional")
-                        .font(.caption.weight(.semibold))
-                        .frame(width: 24, height: 24)
+                        .font(.caption2.weight(.semibold))
                         .foregroundStyle(Color(red: 0.55, green: 0.79, blue: 1.0))
-                        .background(
-                            Circle()
-                                .fill(Color(red: 0.32, green: 0.52, blue: 0.93).opacity(0.22))
-                        )
 
                     Text(context.state.title)
                         .font(.subheadline.weight(.semibold))
@@ -154,23 +149,17 @@ private struct WorkoutLiveActivityLockScreenView: View {
 
                 HStack(spacing: 6) {
                     Image(systemName: "timer")
-                        .font(.caption.weight(.semibold))
+                        .font(.caption2.weight(.semibold))
                         .foregroundStyle(Color(red: 0.64, green: 0.82, blue: 1.0))
                     Text(context.attributes.startedAt, style: .timer)
-                        .font(.headline.monospacedDigit())
+                        .font(.subheadline.monospacedDigit())
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(
-                    Capsule(style: .continuous)
-                        .fill(Color(red: 0.32, green: 0.52, blue: 0.93).opacity(0.18))
-                )
             }
 
             Text(context.state.currentExerciseName)
-                .font(.system(size: 27, weight: .semibold, design: .rounded))
-                .lineLimit(2)
-                .minimumScaleFactor(0.9)
+                .font(.system(size: 22, weight: .semibold, design: .rounded))
+                .lineLimit(1)
+                .minimumScaleFactor(0.78)
 
             HStack(spacing: 8) {
                 metricChip(
@@ -197,24 +186,24 @@ private struct WorkoutLiveActivityLockScreenView: View {
             if let lastCompletedSetAt = context.state.lastCompletedSetAt {
                 HStack(spacing: 10) {
                     Image(systemName: "pause.circle.fill")
-                        .font(.title3)
+                        .font(.subheadline)
                         .foregroundStyle(.orange)
 
                     Text(lastCompletedSetAt, style: .timer)
-                        .font(.system(size: 28, weight: .semibold, design: .rounded))
+                        .font(.system(size: 22, weight: .semibold, design: .rounded))
                         .monospacedDigit()
 
                     Spacer(minLength: 0)
                 }
                 .padding(.horizontal, 12)
-                .padding(.vertical, 11)
+                .padding(.vertical, 8)
                 .background(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
                         .fill(.orange.opacity(0.18))
                 )
             }
         }
-        .padding(.vertical, 8)
+        .padding(.vertical, 4)
     }
 
     private var progressValueText: String {
@@ -239,9 +228,9 @@ private struct WorkoutLiveActivityLockScreenView: View {
                 .foregroundStyle(tint)
             content()
         }
-        .font(.subheadline.weight(.semibold))
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
+        .font(.caption.weight(.semibold))
+        .padding(.horizontal, 9)
+        .padding(.vertical, 5)
         .background(
             Capsule(style: .continuous)
                 .fill(backgroundColor)
