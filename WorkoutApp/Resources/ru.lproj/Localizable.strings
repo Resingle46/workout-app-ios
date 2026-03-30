@@ -636,6 +636,8 @@
 "today.action.open_coach" = "Открыть Coach";
 "today.action.open_statistics" = "Открыть статистику";
 "today.action.programs" = "Программы";
+"today.action.start_workout_cta" = "Начать тренировку";
+"today.programs.back" = "Назад";
 "today.hero.eyebrow.active" = "В процессе";
 "today.hero.eyebrow.recommended" = "Сегодня";
 "today.hero.eyebrow.back_on_track" = "Вернуться в ритм";

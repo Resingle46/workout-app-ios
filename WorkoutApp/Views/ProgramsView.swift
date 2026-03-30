@@ -10,6 +10,8 @@ struct ProgramsLibraryView: View {
     @Environment(AppStore.self) private var store
     @Environment(\.appBottomRailInset) private var bottomRailInset
     @State private var showingCreateProgram = false
+    let onNavigateBack: (() -> Void)? = nil
+    let onOpenProgram: ((UUID) -> Void)? = nil
 
     var body: some View {
         ScrollView {
@@ -20,11 +22,21 @@ struct ProgramsLibraryView: View {
                     emptyState
                 } else {
                     ForEach(store.programs) { program in
-                        NavigationLink(destination: ProgramDetailView(programID: program.id)) {
-                            programOverviewCard(program)
+                        if let onOpenProgram {
+                            Button {
+                                onOpenProgram(program.id)
+                            } label: {
+                                programOverviewCard(program)
+                            }
+                            .buttonStyle(AppInteractiveCardButtonStyle())
+                            .padding(.horizontal, 8)
+                        } else {
+                            NavigationLink(destination: ProgramDetailView(programID: program.id)) {
+                                programOverviewCard(program)
+                            }
+                            .buttonStyle(AppInteractiveCardButtonStyle())
+                            .padding(.horizontal, 8)
                         }
-                        .buttonStyle(AppInteractiveCardButtonStyle())
-                        .padding(.horizontal, 8)
                     }
                 }
             }
@@ -41,21 +53,43 @@ struct ProgramsLibraryView: View {
     }
 
     private var header: some View {
-        AppPageHeaderModule(titleKey: "header.programs.title", subtitleKey: "header.programs.subtitle") {
-            Button {
-                showingCreateProgram = true
-            } label: {
-                Image(systemName: "plus")
-                    .font(AppTypography.icon(size: 20, weight: .medium))
+        VStack(alignment: .leading, spacing: 12) {
+            if let onNavigateBack {
+                Button(action: onNavigateBack) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "chevron.left")
+                            .font(AppTypography.icon(size: 14, weight: .bold))
+                        Text("today.programs.back")
+                            .font(AppTypography.caption(size: 13, weight: .semibold))
+                    }
                     .foregroundStyle(AppTheme.primaryText)
-                    .frame(width: 42, height: 42)
-                    .background(AppTheme.surfaceElevated, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .background(AppTheme.surfaceElevated, in: Capsule())
                     .overlay(
-                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        Capsule()
                             .stroke(AppTheme.border, lineWidth: 1)
                     )
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
+
+            AppPageHeaderModule(titleKey: "header.programs.title", subtitleKey: "header.programs.subtitle") {
+                Button {
+                    showingCreateProgram = true
+                } label: {
+                    Image(systemName: "plus")
+                        .font(AppTypography.icon(size: 20, weight: .medium))
+                        .foregroundStyle(AppTheme.primaryText)
+                        .frame(width: 42, height: 42)
+                        .background(AppTheme.surfaceElevated, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .stroke(AppTheme.border, lineWidth: 1)
+                        )
+                }
+                .buttonStyle(.plain)
+            }
         }
     }
 
@@ -145,6 +179,7 @@ struct ProgramDetailView: View {
     @Environment(\.dismiss) private var dismiss
 
     let programID: UUID
+    let onOpenWorkoutTemplate: ((UUID) -> Void)? = nil
     @State private var showingCreateWorkout = false
     @State private var editingProgram: EditableProgram?
     @State private var editingWorkout: EditableWorkout?
@@ -234,10 +269,19 @@ struct ProgramDetailView: View {
                                         }
 
                                         VStack(spacing: 12) {
-                                            NavigationLink(destination: WorkoutTemplateDetailView(programID: programID, workoutID: workout.id)) {
-                                                Label("program.open_workout", systemImage: "square.grid.2x2")
+                                            if let onOpenWorkoutTemplate {
+                                                Button {
+                                                    onOpenWorkoutTemplate(workout.id)
+                                                } label: {
+                                                    Label("program.open_workout", systemImage: "square.grid.2x2")
+                                                }
+                                                .buttonStyle(AppSecondaryButtonStyle())
+                                            } else {
+                                                NavigationLink(destination: WorkoutTemplateDetailView(programID: programID, workoutID: workout.id)) {
+                                                    Label("program.open_workout", systemImage: "square.grid.2x2")
+                                                }
+                                                .buttonStyle(AppSecondaryButtonStyle())
                                             }
-                                            .buttonStyle(AppSecondaryButtonStyle())
 
                                             Button {
                                                 store.startWorkout(template: workout)

@@ -637,6 +637,8 @@
 "today.action.open_coach" = "Open Coach";
 "today.action.open_statistics" = "Open Statistics";
 "today.action.programs" = "Programs";
+"today.action.start_workout_cta" = "Start workout";
+"today.programs.back" = "Back";
 "today.hero.eyebrow.active" = "In progress";
 "today.hero.eyebrow.recommended" = "Today";
 "today.hero.eyebrow.back_on_track" = "Back on track";

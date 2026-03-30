@@ -622,13 +622,14 @@ struct TodayDashboardView: View {
     @Environment(CoachStore.self) private var coachStore
     @Environment(\.appBottomRailInset) private var bottomRailInset
     @State private var showingCreateProgram = false
+    let onOpenPrograms: () -> Void = {}
 
     private var state: TodayDashboardState {
         TodayRecommendationBuilder.build(from: store)
     }
 
     private var coachInsightsState: TodayCoachInsightsState {
-        let workoutsThisWeek = store.profileConsistencySummary().workoutsThisWeek
+        let consistencySummary = store.profileConsistencySummary()
         return TodayCoachInsightsResolver.resolve(
             insights: coachStore.profileInsights,
             origin: coachStore.profileInsightsOrigin,
@@ -636,7 +637,8 @@ struct TodayDashboardView: View {
             canUseRemoteCoach: coachStore.canUseRemoteCoach,
             lastErrorDescription: coachStore.lastInsightsErrorDescription,
             languageCode: store.selectedLanguageCode,
-            workoutsThisWeek: workoutsThisWeek
+            workoutsThisWeek: consistencySummary.workoutsThisWeek,
+            weeklyTarget: consistencySummary.weeklyTarget
         )
     }
 
@@ -650,7 +652,7 @@ struct TodayDashboardView: View {
 
     var body: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 20) {
                 header
                 TodayHeroCard(
                     state: state.hero,
@@ -666,6 +668,8 @@ struct TodayDashboardView: View {
                         store.selectedTab = .statistics
                     }
                 )
+
+                TodayProgramsCTAButton(action: onOpenPrograms)
 
                 TodayCoachInsightsCard(state: coachInsightsState)
 
@@ -700,7 +704,7 @@ struct TodayDashboardView: View {
     private var header: some View {
         AppPageHeaderModule(titleKey: "header.today.title", subtitleKey: "header.today.subtitle") {
             HStack(spacing: 10) {
-                NavigationLink(destination: ProgramsLibraryView()) {
+                Button(action: onOpenPrograms) {
                     Image(systemName: "list.clipboard")
                         .font(AppTypography.icon(size: 18, weight: .medium))
                         .foregroundStyle(AppTheme.primaryText)
@@ -731,6 +735,17 @@ struct TodayDashboardView: View {
                 }
             }
         }
+    }
+}
+
+private struct TodayProgramsCTAButton: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Label("today.action.start_workout_cta", systemImage: "list.clipboard.fill")
+        }
+        .buttonStyle(AppSecondaryButtonStyle())
     }
 }
 

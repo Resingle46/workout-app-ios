@@ -4638,7 +4638,8 @@ struct TodayCoachInsightsResolver {
         canUseRemoteCoach: Bool,
         lastErrorDescription: String?,
         languageCode: String,
-        workoutsThisWeek: Int
+        workoutsThisWeek: Int,
+        weeklyTarget: Int
     ) -> TodayCoachInsightsState {
         if let insights {
             let hasError = !(lastErrorDescription?
@@ -4647,29 +4648,33 @@ struct TodayCoachInsightsResolver {
             let filteredItems = focusItems(
                 from: insights,
                 languageCode: languageCode,
-                workoutsThisWeek: workoutsThisWeek
+                workoutsThisWeek: workoutsThisWeek,
+                weeklyTarget: weeklyTarget
             )
             let summary = normalizedText(
                 insights.summary,
                 languageCode: languageCode,
-                workoutsThisWeek: workoutsThisWeek
+                workoutsThisWeek: workoutsThisWeek,
+                weeklyTarget: weeklyTarget
             )
                 ?? filteredItems.first?.message
             guard let summary else {
                 return .unavailable(unavailableMessageKey(canUseRemoteCoach: canUseRemoteCoach))
             }
+            let explanation = firstValidText(
+                [
+                    insights.executionContext?.explanation,
+                    insights.confidenceNotes.first
+                ],
+                languageCode: languageCode,
+                workoutsThisWeek: workoutsThisWeek,
+                weeklyTarget: weeklyTarget
+            )
 
             return .ready(
                 TodayCoachInsightsContentState(
                     summary: summary,
-                    explanation: firstValidText(
-                        [
-                            insights.executionContext?.explanation,
-                            insights.confidenceNotes.first
-                        ],
-                        languageCode: languageCode,
-                        workoutsThisWeek: workoutsThisWeek
-                    ),
+                    explanation: explanation == summary ? nil : explanation,
                     items: Array(filteredItems.filter { $0.message != summary }.prefix(2)),
                     sourceKey: sourceKey(for: origin),
                     sourceAccent: accent(for: origin),
@@ -4695,14 +4700,16 @@ struct TodayCoachInsightsResolver {
     private static func firstValidText(
         _ values: [String?],
         languageCode: String,
-        workoutsThisWeek: Int
+        workoutsThisWeek: Int,
+        weeklyTarget: Int
     ) -> String? {
         values
             .compactMap {
                 normalizedText(
                     $0,
                     languageCode: languageCode,
-                    workoutsThisWeek: workoutsThisWeek
+                    workoutsThisWeek: workoutsThisWeek,
+                    weeklyTarget: weeklyTarget
                 )
             }
             .first
@@ -4711,7 +4718,8 @@ struct TodayCoachInsightsResolver {
     private static func focusItems(
         from insights: CoachProfileInsights,
         languageCode: String,
-        workoutsThisWeek: Int
+        workoutsThisWeek: Int,
+        weeklyTarget: Int
     ) -> [TodayCoachInsightItemState] {
         typealias Source = (
             prefix: String,
@@ -4750,7 +4758,8 @@ struct TodayCoachInsightsResolver {
                     normalizedText(
                         $0,
                         languageCode: languageCode,
-                        workoutsThisWeek: workoutsThisWeek
+                        workoutsThisWeek: workoutsThisWeek,
+                        weeklyTarget: weeklyTarget
                     )
                 })
                 .first(where: { usedMessages.insert($0).inserted }) else {
@@ -4775,7 +4784,8 @@ struct TodayCoachInsightsResolver {
                     normalizedText(
                         $0,
                         languageCode: languageCode,
-                        workoutsThisWeek: workoutsThisWeek
+                        workoutsThisWeek: workoutsThisWeek,
+                        weeklyTarget: weeklyTarget
                     )
                 }) {
                     guard usedMessages.insert(item).inserted else {
@@ -4808,7 +4818,8 @@ struct TodayCoachInsightsResolver {
     private static func normalizedText(
         _ text: String?,
         languageCode: String,
-        workoutsThisWeek: Int
+        workoutsThisWeek: Int,
+        weeklyTarget: Int
     ) -> String? {
         guard let text else {
             return nil
@@ -4817,7 +4828,8 @@ struct TodayCoachInsightsResolver {
         let normalized = sanitizedWeeklyFrequencyText(
             in: coachNormalizedReadableText(text),
             languageCode: languageCode,
-            workoutsThisWeek: workoutsThisWeek
+            workoutsThisWeek: workoutsThisWeek,
+            weeklyTarget: weeklyTarget
         )
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalized.isEmpty else {
@@ -4833,41 +4845,18 @@ struct TodayCoachInsightsResolver {
     private static func sanitizedWeeklyFrequencyText(
         in text: String,
         languageCode: String,
-        workoutsThisWeek: Int
+        workoutsThisWeek: Int,
+        weeklyTarget: Int
     ) -> String {
-        let normalizedCount = max(workoutsThisWeek, 0)
-        let replacement: String
-        let patterns: [String]
-
-        if languageCode.lowercased().hasPrefix("ru") {
-            replacement = "\(normalizedCount) \(russianWorkoutNoun(for: normalizedCount)) на этой неделе"
-            patterns = [
-                #"(?iu)(?:около|примерно|где-?то|почти)?\s*\d+[.,]\d+\s*(?:трен(?:ировка|ировки|ировок)?|трен\.|раз(?:а)?|занят(?:ие|ия|ий)?|сесс(?:ия|ии|ий)?)\s*(?:в\s+недел(?:ю|и)|/нед\.?)"#,
-                #"(?iu)(?:около|примерно|где-?то|почти)?\s*\d+[.,]\d+\s*(?:раз(?:а)?)\s*в\s*недел(?:ю|и)"#
-            ]
-        } else {
-            replacement = "\(normalizedCount) workout\(normalizedCount == 1 ? "" : "s") this week"
-            patterns = [
-                #"(?i)(?:about|around|roughly|nearly|almost)?\s*\d+[.,]\d+\s*(?:workouts?|sessions?)\s*(?:per\s+week|/week)"#
-            ]
+        guard containsFractionalWeeklyFrequency(in: text, languageCode: languageCode) else {
+            return text
         }
 
-        var result = text
-        for pattern in patterns {
-            guard let regex = try? NSRegularExpression(pattern: pattern) else {
-                continue
-            }
-
-            let range = NSRange(result.startIndex..<result.endIndex, in: result)
-            result = regex.stringByReplacingMatches(
-                in: result,
-                options: [],
-                range: range,
-                withTemplate: replacement
-            )
-        }
-
-        return result.replacingOccurrences(of: "  ", with: " ")
+        return weeklyProgressSummaryText(
+            languageCode: languageCode,
+            workoutsThisWeek: workoutsThisWeek,
+            weeklyTarget: weeklyTarget
+        )
     }
 
     private static func russianWorkoutNoun(for count: Int) -> String {
@@ -4920,6 +4909,59 @@ struct TodayCoachInsightsResolver {
         }
 
         return (cyrillic, latin)
+    }
+
+    private static func containsFractionalWeeklyFrequency(
+        in text: String,
+        languageCode: String
+    ) -> Bool {
+        weeklyFrequencyPatterns(for: languageCode).contains { pattern in
+            guard let regex = try? NSRegularExpression(pattern: pattern) else {
+                return false
+            }
+
+            let range = NSRange(text.startIndex..<text.endIndex, in: text)
+            return regex.firstMatch(in: text, options: [], range: range) != nil
+        }
+    }
+
+    private static func weeklyFrequencyPatterns(for languageCode: String) -> [String] {
+        if languageCode.lowercased().hasPrefix("ru") {
+            return [
+                #"(?iu)(?:около|примерно|где-?то|почти)?\s*\d+[.,]\d+\s*(?:трен(?:ировка|ировки|ировок)?|трен\.|раз(?:а)?|занят(?:ие|ия|ий)?|сесс(?:ия|ии|ий)?)\s*(?:в\s+недел(?:ю|и)|/нед\.?)"#,
+                #"(?iu)(?:около|примерно|где-?то|почти)?\s*\d+[.,]\d+\s*(?:раз(?:а)?)\s*в\s*недел(?:ю|и)"#
+            ]
+        }
+
+        return [
+            #"(?i)(?:about|around|roughly|nearly|almost)?\s*\d+[.,]\d+\s*(?:workouts?|sessions?)\s*(?:per\s+week|/week)"#
+        ]
+    }
+
+    private static func weeklyProgressSummaryText(
+        languageCode: String,
+        workoutsThisWeek: Int,
+        weeklyTarget: Int
+    ) -> String {
+        let completed = max(workoutsThisWeek, 0)
+        let target = max(weeklyTarget, 1)
+
+        if languageCode.lowercased().hasPrefix("ru") {
+            if completed > target {
+                return "На этой неделе выполнено \(completed) \(russianWorkoutNoun(for: completed)) при цели \(target)."
+            }
+            return "На этой неделе выполнено \(completed) из \(target) \(russianWorkoutNounForWeeklyTarget(target))."
+        }
+
+        if completed > target {
+            return "This week you have completed \(completed) workouts against a target of \(target)."
+        }
+
+        return "This week you have completed \(completed) of \(target) workout\(target == 1 ? "" : "s")."
+    }
+
+    private static func russianWorkoutNounForWeeklyTarget(_ target: Int) -> String {
+        target == 1 ? "тренировки" : "тренировок"
     }
 
     private static func sourceKey(for origin: CoachInsightsOrigin) -> String {
@@ -4996,46 +5038,22 @@ struct TodayCoachInsightsCard: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                 case let .ready(content):
                     VStack(alignment: .leading, spacing: 14) {
-                        HStack(alignment: .center, spacing: 10) {
-                            HStack(spacing: 8) {
-                                Circle()
-                                    .fill(content.sourceAccent.tint)
-                                    .frame(width: 8, height: 8)
-
-                                Text(LocalizedStringKey(content.sourceKey))
-                                    .font(AppTypography.caption(size: 13, weight: .semibold))
-                                    .foregroundStyle(AppTheme.secondaryText)
-                            }
-
-                            Spacer(minLength: 12)
-
-                            if let modelLabel = content.modelLabel {
-                                HStack(spacing: 6) {
-                                    CoachStatusDot(color: content.sourceAccent.tint, size: 7)
-
-                                    Text(modelLabel)
-                                        .font(AppTypography.caption(size: 12, weight: .semibold))
-                                        .foregroundStyle(AppTheme.primaryText)
-                                        .lineLimit(1)
-                                        .minimumScaleFactor(0.82)
+                        ViewThatFits(in: .vertical) {
+                            insightsMetaRow(content: content)
+                            VStack(alignment: .leading, spacing: 10) {
+                                insightsSourceBadge(content: content)
+                                if let modelLabel = content.modelLabel {
+                                    insightsModelBadge(modelLabel, accent: content.sourceAccent)
                                 }
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 6)
-                                .background(
-                                    Capsule()
-                                        .fill(AppTheme.surface)
-                                )
-                                .overlay(
-                                    Capsule()
-                                        .stroke(AppTheme.border, lineWidth: 1)
-                                )
                             }
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         }
 
                         Text(content.summary)
                             .font(AppTypography.body(size: 18, weight: .semibold, relativeTo: .title3))
                             .foregroundStyle(AppTheme.primaryText)
                             .lineSpacing(2)
+                            .lineLimit(nil)
                             .multilineTextAlignment(.leading)
                             .fixedSize(horizontal: false, vertical: true)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -5045,6 +5063,7 @@ struct TodayCoachInsightsCard: View {
                             Text(explanation)
                                 .font(AppTypography.body(size: 15, weight: .medium, relativeTo: .subheadline))
                                 .foregroundStyle(AppTheme.secondaryText)
+                                .lineLimit(nil)
                                 .multilineTextAlignment(.leading)
                                 .fixedSize(horizontal: false, vertical: true)
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -5074,6 +5093,54 @@ struct TodayCoachInsightsCard: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
+
+    private func insightsMetaRow(content: TodayCoachInsightsContentState) -> some View {
+        HStack(alignment: .center, spacing: 10) {
+            insightsSourceBadge(content: content)
+
+            Spacer(minLength: 12)
+
+            if let modelLabel = content.modelLabel {
+                insightsModelBadge(modelLabel, accent: content.sourceAccent)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func insightsSourceBadge(content: TodayCoachInsightsContentState) -> some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(content.sourceAccent.tint)
+                .frame(width: 8, height: 8)
+
+            Text(LocalizedStringKey(content.sourceKey))
+                .font(AppTypography.caption(size: 13, weight: .semibold))
+                .foregroundStyle(AppTheme.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func insightsModelBadge(_ modelLabel: String, accent: TodayCardAccent) -> some View {
+        HStack(spacing: 6) {
+            CoachStatusDot(color: accent.tint, size: 7)
+
+            Text(modelLabel)
+                .font(AppTypography.caption(size: 12, weight: .semibold))
+                .foregroundStyle(AppTheme.primaryText)
+                .lineLimit(1)
+                .minimumScaleFactor(0.82)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(
+            Capsule()
+                .fill(AppTheme.surface)
+        )
+        .overlay(
+            Capsule()
+                .stroke(AppTheme.border, lineWidth: 1)
+        )
+    }
 }
 
 private struct TodayCoachInsightRow: View {
@@ -5090,6 +5157,7 @@ private struct TodayCoachInsightRow: View {
             Text(item.message)
                 .font(AppTypography.body(size: 14, weight: .medium, relativeTo: .subheadline))
                 .foregroundStyle(AppTheme.primaryText)
+                .lineLimit(nil)
                 .multilineTextAlignment(.leading)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)

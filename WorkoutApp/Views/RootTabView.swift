@@ -147,12 +147,19 @@ struct RootTabBarPresentationResolver {
     }
 }
 
+private enum TodayProgramsRoute: Hashable {
+    case library
+    case programDetail(UUID)
+    case workoutTemplate(programID: UUID, workoutID: UUID)
+}
+
 @MainActor
 struct RootTabView: View {
     @Environment(AppStore.self) private var store
     @Environment(CloudSyncStore.self) private var cloudSyncStore
     @Environment(WorkoutSummaryStore.self) private var workoutSummaryStore
     @State private var workoutTabsExpanded = false
+    @State private var todayProgramsPath: [TodayProgramsRoute] = []
 
     private var tabBarPresentationMode: TabBarPresentationMode {
         RootTabBarPresentationResolver.resolve(
@@ -269,18 +276,31 @@ struct RootTabView: View {
     private func rootNavigationStack(for tab: RootTab, bottomRailInset: CGFloat) -> some View {
         let isSelected = store.selectedTab == tab
 
-        NavigationStack {
+        Group {
             switch tab {
             case .programs:
-                TodayDashboardView()
+                NavigationStack(path: $todayProgramsPath) {
+                    TodayDashboardView(onOpenPrograms: openProgramsLibrary)
+                        .navigationDestination(for: TodayProgramsRoute.self) { route in
+                            todayProgramsDestination(for: route)
+                        }
+                }
             case .workout:
-                ActiveWorkoutView()
+                NavigationStack {
+                    ActiveWorkoutView()
+                }
             case .statistics:
-                StatisticsView()
+                NavigationStack {
+                    StatisticsView()
+                }
             case .coach:
-                CoachView()
+                NavigationStack {
+                    CoachView()
+                }
             case .profile:
-                ProfileView()
+                NavigationStack {
+                    ProfileView()
+                }
             }
         }
         .environment(\.appBottomRailInset, bottomRailInset)
@@ -288,6 +308,44 @@ struct RootTabView: View {
         .allowsHitTesting(isSelected)
         .accessibilityHidden(!isSelected)
         .zIndex(isSelected ? 1 : 0)
+    }
+
+    private func openProgramsLibrary() {
+        if todayProgramsPath.last != .library {
+            todayProgramsPath.append(.library)
+        }
+    }
+
+    private func popTodayProgramsRoute() {
+        guard !todayProgramsPath.isEmpty else {
+            return
+        }
+
+        todayProgramsPath.removeLast()
+    }
+
+    @ViewBuilder
+    private func todayProgramsDestination(for route: TodayProgramsRoute) -> some View {
+        switch route {
+        case .library:
+            ProgramsLibraryView(
+                onNavigateBack: popTodayProgramsRoute,
+                onOpenProgram: { programID in
+                    todayProgramsPath.append(.programDetail(programID))
+                }
+            )
+        case let .programDetail(programID):
+            ProgramDetailView(
+                programID: programID,
+                onOpenWorkoutTemplate: { workoutID in
+                    todayProgramsPath.append(
+                        .workoutTemplate(programID: programID, workoutID: workoutID)
+                    )
+                }
+            )
+        case let .workoutTemplate(programID, workoutID):
+            WorkoutTemplateDetailView(programID: programID, workoutID: workoutID)
+        }
     }
 
     private func reservedBottomInset(safeAreaBottom: CGFloat) -> CGFloat {
@@ -321,9 +379,17 @@ struct RootTabView: View {
                 selectedTab: store.selectedTab,
                 presentationMode: tabBarPresentationMode,
                 onSelect: { tab in
+                    let isReselectingTodayTab = tab == .programs && store.selectedTab == .programs
+
                     if tab != .workout {
                         workoutTabsExpanded = false
                     }
+
+                    if isReselectingTodayTab {
+                        todayProgramsPath.removeAll()
+                        return
+                    }
+
                     store.selectedTab = tab
                 },
                 onToggleWorkoutTabs: {

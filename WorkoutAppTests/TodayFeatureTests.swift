@@ -223,7 +223,8 @@ final class TodayFeatureTests: XCTestCase {
             canUseRemoteCoach: true,
             lastErrorDescription: nil,
             languageCode: "en",
-            workoutsThisWeek: 2
+            workoutsThisWeek: 2,
+            weeklyTarget: 3
         )
 
         switch state {
@@ -274,7 +275,8 @@ final class TodayFeatureTests: XCTestCase {
             canUseRemoteCoach: true,
             lastErrorDescription: nil,
             languageCode: "ru",
-            workoutsThisWeek: 2
+            workoutsThisWeek: 2,
+            weeklyTarget: 3
         )
 
         switch state {
@@ -308,7 +310,8 @@ final class TodayFeatureTests: XCTestCase {
             canUseRemoteCoach: true,
             lastErrorDescription: nil,
             languageCode: "ru",
-            workoutsThisWeek: 2
+            workoutsThisWeek: 2,
+            weeklyTarget: 3
         )
 
         switch state {
@@ -329,7 +332,8 @@ final class TodayFeatureTests: XCTestCase {
             canUseRemoteCoach: true,
             lastErrorDescription: nil,
             languageCode: "en",
-            workoutsThisWeek: 0
+            workoutsThisWeek: 0,
+            weeklyTarget: 3
         )
 
         XCTAssertEqual(state, .loading)
@@ -343,7 +347,8 @@ final class TodayFeatureTests: XCTestCase {
             canUseRemoteCoach: false,
             lastErrorDescription: nil,
             languageCode: "ru",
-            workoutsThisWeek: 0
+            workoutsThisWeek: 0,
+            weeklyTarget: 3
         )
 
         XCTAssertEqual(state, .unavailable("today.insights.empty_local"))
@@ -368,7 +373,8 @@ final class TodayFeatureTests: XCTestCase {
             canUseRemoteCoach: true,
             lastErrorDescription: nil,
             languageCode: "ru",
-            workoutsThisWeek: 0
+            workoutsThisWeek: 0,
+            weeklyTarget: 3
         )
 
         XCTAssertEqual(state, .unavailable("today.insights.empty"))
@@ -391,7 +397,8 @@ final class TodayFeatureTests: XCTestCase {
             canUseRemoteCoach: true,
             lastErrorDescription: "Backend timeout",
             languageCode: "en",
-            workoutsThisWeek: 1
+            workoutsThisWeek: 1,
+            weeklyTarget: 3
         )
 
         switch state {
@@ -402,7 +409,7 @@ final class TodayFeatureTests: XCTestCase {
         }
     }
 
-    func testTodayCoachInsightsResolverReplacesFractionalRussianWeeklyFrequencyWithCurrentWeekCount() {
+    func testTodayCoachInsightsResolverReplacesFractionalRussianWeeklyFrequencyWithCurrentWeekProgress() {
         let insights = CoachProfileInsights(
             summary: "Сейчас ваш ритм около 1.3 тренировки в неделю.",
             recommendations: ["Удерживайте 1.3 тренировки в неделю и не ускоряйтесь резко."],
@@ -419,19 +426,20 @@ final class TodayFeatureTests: XCTestCase {
             canUseRemoteCoach: true,
             lastErrorDescription: nil,
             languageCode: "ru",
-            workoutsThisWeek: 4
+            workoutsThisWeek: 2,
+            weeklyTarget: 3
         )
 
         switch state {
         case let .ready(content):
-            XCTAssertEqual(content.summary, "Сейчас ваш ритм 4 тренировки на этой неделе.")
-            XCTAssertEqual(content.items.first?.message, "Удерживайте 4 тренировки на этой неделе и не ускоряйтесь резко.")
+            XCTAssertEqual(content.summary, "На этой неделе выполнено 2 из 3 тренировок.")
+            XCTAssertTrue(content.items.isEmpty)
         default:
             XCTFail("Expected ready insights state")
         }
     }
 
-    func testTodayCoachInsightsResolverReplacesFractionalEnglishWeeklyFrequencyWithCurrentWeekCount() {
+    func testTodayCoachInsightsResolverReplacesFractionalEnglishWeeklyFrequencyWithCurrentWeekProgress() {
         let insights = CoachProfileInsights(
             summary: "You are averaging 1.3 workouts per week right now.",
             recommendations: ["Stay near 1.3 workouts per week until recovery improves."],
@@ -448,13 +456,14 @@ final class TodayFeatureTests: XCTestCase {
             canUseRemoteCoach: true,
             lastErrorDescription: nil,
             languageCode: "en",
-            workoutsThisWeek: 3
+            workoutsThisWeek: 2,
+            weeklyTarget: 3
         )
 
         switch state {
         case let .ready(content):
-            XCTAssertEqual(content.summary, "You are averaging 3 workouts this week right now.")
-            XCTAssertEqual(content.items.first?.message, "Stay near 3 workouts this week until recovery improves.")
+            XCTAssertEqual(content.summary, "This week you have completed 2 of 3 workouts.")
+            XCTAssertTrue(content.items.isEmpty)
         default:
             XCTFail("Expected ready insights state")
         }
