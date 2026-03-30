@@ -4,26 +4,26 @@ import SwiftUI
 import WidgetKit
 
 private enum WorkoutLiveActivityPalette {
-    static let background = Color(red: 0.14, green: 0.14, blue: 0.16)
-    static let panel = Color.white.opacity(0.07)
-    static let panelStroke = Color.white.opacity(0.06)
+    static let background = Color(red: 0.15, green: 0.15, blue: 0.17)
+    static let panel = Color.white.opacity(0.06)
+    static let panelStroke = Color.white.opacity(0.05)
     static let primaryText = Color.white.opacity(0.96)
     static let secondaryText = Color.white.opacity(0.62)
     static let accent = Color.white.opacity(0.90)
-    static let progressFill = Color.white.opacity(0.08)
+    static let progressFill = Color.white.opacity(0.07)
     static let progressTint = Color(red: 0.47, green: 0.93, blue: 0.60)
     static let restTint = Color(red: 1.0, green: 0.72, blue: 0.38)
 }
 
 private enum WorkoutLiveActivityMetrics {
-    static let outerSpacing: CGFloat = 8
-    static let panelSpacing: CGFloat = 8
+    static let outerSpacing: CGFloat = 7
+    static let panelSpacing: CGFloat = 7
     static let horizontalGap: CGFloat = 10
     static let containerHorizontalPadding: CGFloat = 14
-    static let containerVerticalPadding: CGFloat = 10
-    static let panelPadding: CGFloat = 11
+    static let containerVerticalPadding: CGFloat = 9
+    static let panelPadding: CGFloat = 10
     static let cornerRadius: CGFloat = 14
-    static let statusColumnWidth: CGFloat = 76
+    static let statusColumnWidth: CGFloat = 72
     static let dividerHeight: CGFloat = 32
 }
 
@@ -163,9 +163,10 @@ struct WorkoutLiveActivityWidget: Widget {
             Text(WorkoutLiveActivityFormatting.progressText(for: state))
                 .monospacedDigit()
         }
-        .font(.caption2.weight(.semibold))
-        .padding(.horizontal, 7)
-        .padding(.vertical, 4)
+        .font(.caption2.weight(.medium))
+        .foregroundStyle(WorkoutLiveActivityPalette.secondaryText)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 3)
         .background(
             Capsule(style: .continuous)
                 .fill(WorkoutLiveActivityPalette.progressFill)
@@ -276,10 +277,10 @@ private struct WorkoutLiveActivityLockScreenView: View {
             Text(WorkoutLiveActivityFormatting.progressText(for: context.state))
                 .monospacedDigit()
         }
-        .font(.caption2.weight(.semibold))
+        .font(.caption2.weight(.medium))
         .foregroundStyle(WorkoutLiveActivityPalette.secondaryText)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 3)
         .background(
             Capsule(style: .continuous)
                 .fill(WorkoutLiveActivityPalette.progressFill)
@@ -288,7 +289,7 @@ private struct WorkoutLiveActivityLockScreenView: View {
 
     private var setValueView: some View {
         Text(WorkoutLiveActivityFormatting.primarySetValueText(for: context.state))
-            .font(.system(size: 23, weight: .semibold, design: .rounded))
+            .font(.system(size: 22, weight: .semibold, design: .rounded))
             .foregroundStyle(WorkoutLiveActivityPalette.primaryText)
             .lineLimit(1)
             .minimumScaleFactor(0.82)
@@ -302,7 +303,7 @@ private struct WorkoutLiveActivityLockScreenView: View {
                 .foregroundStyle(WorkoutLiveActivityPalette.restTint)
 
             Text(lastCompletedSetAt, style: .timer)
-                .font(.system(size: 17, weight: .semibold, design: .rounded))
+                .font(.system(size: 16, weight: .semibold, design: .rounded))
                 .foregroundStyle(WorkoutLiveActivityPalette.primaryText)
                 .monospacedDigit()
                 .lineLimit(1)
