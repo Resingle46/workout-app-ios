@@ -166,7 +166,6 @@ private struct WorkoutLiveActivityLockScreenView: View {
                         .fill(Color(red: 0.32, green: 0.52, blue: 0.93).opacity(0.18))
                 )
             }
-            }
 
             Text(context.state.currentExerciseName)
                 .font(.system(size: 27, weight: .semibold, design: .rounded))
