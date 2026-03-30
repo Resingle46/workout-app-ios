@@ -622,7 +622,11 @@ struct TodayDashboardView: View {
     @Environment(CoachStore.self) private var coachStore
     @Environment(\.appBottomRailInset) private var bottomRailInset
     @State private var showingCreateProgram = false
-    let onOpenPrograms: () -> Void = {}
+    let onOpenPrograms: () -> Void
+
+    init(onOpenPrograms: @escaping () -> Void = {}) {
+        self.onOpenPrograms = onOpenPrograms
+    }
 
     private var state: TodayDashboardState {
         TodayRecommendationBuilder.build(from: store)

@@ -10,8 +10,16 @@ struct ProgramsLibraryView: View {
     @Environment(AppStore.self) private var store
     @Environment(\.appBottomRailInset) private var bottomRailInset
     @State private var showingCreateProgram = false
-    let onNavigateBack: (() -> Void)? = nil
-    let onOpenProgram: ((UUID) -> Void)? = nil
+    let onNavigateBack: (() -> Void)?
+    let onOpenProgram: ((UUID) -> Void)?
+
+    init(
+        onNavigateBack: (() -> Void)? = nil,
+        onOpenProgram: ((UUID) -> Void)? = nil
+    ) {
+        self.onNavigateBack = onNavigateBack
+        self.onOpenProgram = onOpenProgram
+    }
 
     var body: some View {
         ScrollView {
@@ -179,10 +187,18 @@ struct ProgramDetailView: View {
     @Environment(\.dismiss) private var dismiss
 
     let programID: UUID
-    let onOpenWorkoutTemplate: ((UUID) -> Void)? = nil
+    let onOpenWorkoutTemplate: ((UUID) -> Void)?
     @State private var showingCreateWorkout = false
     @State private var editingProgram: EditableProgram?
     @State private var editingWorkout: EditableWorkout?
+
+    init(
+        programID: UUID,
+        onOpenWorkoutTemplate: ((UUID) -> Void)? = nil
+    ) {
+        self.programID = programID
+        self.onOpenWorkoutTemplate = onOpenWorkoutTemplate
+    }
 
     private var program: WorkoutProgram? {
         store.program(for: programID)
