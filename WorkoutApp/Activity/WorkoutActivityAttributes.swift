@@ -11,6 +11,7 @@ struct WorkoutActivityAttributes: ActivityAttributes {
         var currentSetLabel: String?
         var currentSetReps: Int?
         var currentSetWeight: Double?
+        var currentSetValueText: String?
         var completedSetCount: Int
         var totalSetCount: Int
         var lastCompletedSetAt: Date?

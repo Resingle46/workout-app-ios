@@ -10,6 +10,20 @@ private let workoutLiveActivityLogger = Logger(
     category: "live_activity"
 )
 
+private let workoutLiveActivityWeightFormatter: MeasurementFormatter = {
+    let formatter = MeasurementFormatter()
+    formatter.locale = .current
+    formatter.unitStyle = .medium
+    formatter.unitOptions = .providedUnit
+
+    let numberFormatter = NumberFormatter()
+    numberFormatter.locale = .current
+    numberFormatter.minimumFractionDigits = 0
+    numberFormatter.maximumFractionDigits = 1
+    formatter.numberFormatter = numberFormatter
+    return formatter
+}()
+
 struct WorkoutLiveActivitySnapshot: Equatable, Sendable {
     var sessionID: UUID
     var startedAt: Date
@@ -19,6 +33,7 @@ struct WorkoutLiveActivitySnapshot: Equatable, Sendable {
     var currentSetLabel: String?
     var currentSetReps: Int?
     var currentSetWeight: Double?
+    var currentSetValueText: String?
     var completedSetCount: Int
     var totalSetCount: Int
     var lastCompletedSetAt: Date?
@@ -31,6 +46,7 @@ private struct WorkoutLiveActivityExerciseContext: Equatable, Sendable {
     var currentSetLabel: String?
     var currentSetReps: Int?
     var currentSetWeight: Double?
+    var currentSetValueText: String?
 }
 
 struct WorkoutLiveActivityDiagnosticsSnapshot: Hashable, Sendable {
@@ -322,6 +338,7 @@ final class WorkoutLiveActivityManager {
             currentSetLabel: currentExerciseContext?.currentSetLabel,
             currentSetReps: currentExerciseContext?.currentSetReps,
             currentSetWeight: currentExerciseContext?.currentSetWeight,
+            currentSetValueText: currentExerciseContext?.currentSetValueText,
             completedSetCount: completedSetCount,
             totalSetCount: totalSetCount,
             lastCompletedSetAt: lastCompletedSetAt,
@@ -365,7 +382,8 @@ final class WorkoutLiveActivityManager {
                 currentSetNumber: nil,
                 currentSetLabel: nil,
                 currentSetReps: nil,
-                currentSetWeight: nil
+                currentSetWeight: nil,
+                currentSetValueText: nil
             )
         }
 
@@ -389,7 +407,33 @@ final class WorkoutLiveActivityManager {
                 setNumber
             ),
             currentSetReps: set.reps,
-            currentSetWeight: set.weight
+            currentSetWeight: set.weight,
+            currentSetValueText: currentSetValueText(for: set)
+        )
+    }
+
+    private static func currentSetValueText(for set: WorkoutSetLog) -> String? {
+        if set.weight > 0, set.reps > 0 {
+            return "\(formattedWeightText(for: set.weight)) × \(set.reps)"
+        }
+
+        if set.weight > 0 {
+            return formattedWeightText(for: set.weight)
+        }
+
+        if set.reps > 0 {
+            return String(
+                format: NSLocalizedString("template.reps_summary", comment: ""),
+                "\(set.reps)"
+            )
+        }
+
+        return nil
+    }
+
+    private static func formattedWeightText(for weight: Double) -> String {
+        workoutLiveActivityWeightFormatter.string(
+            from: Measurement(value: weight, unit: UnitMass.kilograms)
         )
     }
 }
@@ -517,6 +561,7 @@ private extension WorkoutLiveActivityManager {
                 currentSetLabel: snapshot.currentSetLabel,
                 currentSetReps: snapshot.currentSetReps,
                 currentSetWeight: snapshot.currentSetWeight,
+                currentSetValueText: snapshot.currentSetValueText,
                 completedSetCount: snapshot.completedSetCount,
                 totalSetCount: snapshot.totalSetCount,
                 lastCompletedSetAt: snapshot.lastCompletedSetAt,

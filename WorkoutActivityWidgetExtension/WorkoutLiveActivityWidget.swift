@@ -4,15 +4,26 @@ import SwiftUI
 import WidgetKit
 
 private enum WorkoutLiveActivityPalette {
-    static let background = Color(red: 0.18, green: 0.20, blue: 0.27)
-    static let surface = Color.white.opacity(0.10)
-    static let surfaceStroke = Color.white.opacity(0.08)
-    static let accent = Color(red: 0.56, green: 0.80, blue: 1.0)
-    static let accentSurface = Color(red: 0.32, green: 0.52, blue: 0.94).opacity(0.20)
-    static let progressSurface = Color.green.opacity(0.18)
-    static let progressTint = Color(red: 0.39, green: 0.92, blue: 0.55)
-    static let restSurface = Color.orange.opacity(0.20)
-    static let restStroke = Color.orange.opacity(0.26)
+    static let background = Color(red: 0.17, green: 0.19, blue: 0.25)
+    static let panel = Color.white.opacity(0.09)
+    static let panelStroke = Color.white.opacity(0.08)
+    static let primaryText = Color.white.opacity(0.96)
+    static let secondaryText = Color.white.opacity(0.66)
+    static let accent = Color(red: 0.60, green: 0.82, blue: 1.0)
+    static let progressFill = Color.green.opacity(0.16)
+    static let progressTint = Color(red: 0.47, green: 0.93, blue: 0.60)
+    static let restTint = Color(red: 1.0, green: 0.72, blue: 0.38)
+}
+
+private enum WorkoutLiveActivityMetrics {
+    static let outerSpacing: CGFloat = 12
+    static let panelSpacing: CGFloat = 10
+    static let horizontalGap: CGFloat = 12
+    static let outerVerticalPadding: CGFloat = 6
+    static let panelPadding: CGFloat = 14
+    static let cornerRadius: CGFloat = 16
+    static let statusColumnWidth: CGFloat = 90
+    static let dividerHeight: CGFloat = 38
 }
 
 private enum WorkoutLiveActivityFormatting {
@@ -42,39 +53,45 @@ private enum WorkoutLiveActivityFormatting {
         state.currentSetLabel ?? progressText(for: state)
     }
 
-    static func setMetricsText(for state: WorkoutActivityAttributes.ContentState) -> String {
-        let repsText = state.currentSetReps.map { "\($0)" }
-        let weightText = state.currentSetWeight.flatMap(formattedWeightText(for:))
-
-        switch (weightText, repsText) {
-        case let (weight?, reps?):
-            return "\(weight) × \(reps)"
-        case let (weight?, nil):
-            return weight
-        case let (nil, reps?):
-            return "× \(reps)"
-        default:
-            return currentSetLabel(for: state)
+    static func primarySetValueText(for state: WorkoutActivityAttributes.ContentState) -> String {
+        if let currentSetValueText = state.currentSetValueText,
+           !currentSetValueText.isEmpty {
+            return currentSetValueText
         }
+
+        if let weight = state.currentSetWeight,
+           weight > 0,
+           let reps = state.currentSetReps,
+           reps > 0 {
+            return "\(formattedWeightText(for: weight)) × \(reps)"
+        }
+
+        if let weight = state.currentSetWeight,
+           weight > 0 {
+            return formattedWeightText(for: weight)
+        }
+
+        if let reps = state.currentSetReps,
+           reps > 0 {
+            return "\(reps) reps"
+        }
+
+        return currentSetLabel(for: state)
     }
 
-    static func compactSetSummary(for state: WorkoutActivityAttributes.ContentState) -> String {
+    static func compactSummaryText(for state: WorkoutActivityAttributes.ContentState) -> String {
         let label = currentSetLabel(for: state)
-        let metrics = setMetricsText(for: state)
+        let value = primarySetValueText(for: state)
 
-        guard metrics != label else {
-            return label
+        guard value != label else {
+            return value
         }
 
-        return "\(label) · \(metrics)"
+        return "\(label) · \(value)"
     }
 
-    private static func formattedWeightText(for weight: Double) -> String? {
-        guard weight > 0 else {
-            return nil
-        }
-
-        return weightFormatter.string(from: Measurement(value: weight, unit: UnitMass.kilograms))
+    private static func formattedWeightText(for weight: Double) -> String {
+        weightFormatter.string(from: Measurement(value: weight, unit: UnitMass.kilograms))
     }
 }
 
@@ -83,7 +100,7 @@ struct WorkoutLiveActivityWidget: Widget {
         ActivityConfiguration(for: WorkoutActivityAttributes.self) { context in
             WorkoutLiveActivityLockScreenView(context: context)
                 .activityBackgroundTint(WorkoutLiveActivityPalette.background)
-                .activitySystemActionForegroundColor(Color.white)
+                .activitySystemActionForegroundColor(.white)
         } dynamicIsland: { context in
             DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
@@ -111,35 +128,23 @@ struct WorkoutLiveActivityWidget: Widget {
                 }
 
                 DynamicIslandExpandedRegion(.bottom) {
-                    VStack(alignment: .leading, spacing: 7) {
-                        HStack(alignment: .firstTextBaseline, spacing: 8) {
-                            Text(WorkoutLiveActivityFormatting.compactSetSummary(for: context.state))
-                                .font(.caption.weight(.semibold))
-                                .lineLimit(1)
+                    HStack(alignment: .center, spacing: 8) {
+                        Text(WorkoutLiveActivityFormatting.compactSummaryText(for: context.state))
+                            .font(.caption.weight(.semibold))
+                            .lineLimit(1)
 
-                            Spacer(minLength: 0)
+                        Spacer(minLength: 0)
 
-                            progressChip(for: context.state)
-                        }
+                        progressChip(for: context.state)
 
                         if let lastCompletedSetAt = context.state.lastCompletedSetAt {
-                            compactTimerChip(
-                                systemImage: "pause.fill",
-                                timerDate: lastCompletedSetAt,
-                                tint: .orange,
-                                backgroundColor: WorkoutLiveActivityPalette.restSurface
-                            )
+                            restTimerChip(lastCompletedSetAt)
                         }
                     }
                 }
             } compactLeading: {
-                if context.state.lastCompletedSetAt != nil {
-                    Image(systemName: "pause.fill")
-                        .foregroundStyle(.orange)
-                } else {
-                    Image(systemName: "figure.strengthtraining.traditional")
-                        .foregroundStyle(WorkoutLiveActivityPalette.accent)
-                }
+                Image(systemName: context.state.lastCompletedSetAt == nil ? "figure.strengthtraining.traditional" : "pause.fill")
+                    .foregroundStyle(context.state.lastCompletedSetAt == nil ? WorkoutLiveActivityPalette.accent : WorkoutLiveActivityPalette.restTint)
             } compactTrailing: {
                 Text(context.attributes.startedAt, style: .timer)
                     .font(.caption2.monospacedDigit())
@@ -150,47 +155,11 @@ struct WorkoutLiveActivityWidget: Widget {
     }
 
     private func progressChip(for state: WorkoutActivityAttributes.ContentState) -> some View {
-        compactTextChip(
-            systemImage: "checkmark.circle.fill",
-            text: WorkoutLiveActivityFormatting.progressText(for: state),
-            tint: WorkoutLiveActivityPalette.progressTint,
-            backgroundColor: WorkoutLiveActivityPalette.progressSurface
-        )
-    }
-
-    private func compactTextChip(
-        systemImage: String,
-        text: String,
-        tint: Color,
-        backgroundColor: Color
-    ) -> some View {
         HStack(spacing: 4) {
-            Image(systemName: systemImage)
-                .foregroundStyle(tint)
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(WorkoutLiveActivityPalette.progressTint)
 
-            Text(text)
-                .lineLimit(1)
-        }
-        .font(.caption2.weight(.semibold))
-        .padding(.horizontal, 7)
-        .padding(.vertical, 4)
-        .background(
-            Capsule(style: .continuous)
-                .fill(backgroundColor)
-        )
-    }
-
-    private func compactTimerChip(
-        systemImage: String,
-        timerDate: Date,
-        tint: Color,
-        backgroundColor: Color
-    ) -> some View {
-        HStack(spacing: 4) {
-            Image(systemName: systemImage)
-                .foregroundStyle(tint)
-
-            Text(timerDate, style: .timer)
+            Text(WorkoutLiveActivityFormatting.progressText(for: state))
                 .monospacedDigit()
         }
         .font(.caption2.weight(.semibold))
@@ -198,7 +167,24 @@ struct WorkoutLiveActivityWidget: Widget {
         .padding(.vertical, 4)
         .background(
             Capsule(style: .continuous)
-                .fill(backgroundColor)
+                .fill(WorkoutLiveActivityPalette.progressFill)
+        )
+    }
+
+    private func restTimerChip(_ lastCompletedSetAt: Date) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: "pause.fill")
+                .foregroundStyle(WorkoutLiveActivityPalette.restTint)
+
+            Text(lastCompletedSetAt, style: .timer)
+                .monospacedDigit()
+        }
+        .font(.caption2.weight(.semibold))
+        .padding(.horizontal, 7)
+        .padding(.vertical, 4)
+        .background(
+            Capsule(style: .continuous)
+                .fill(Color.white.opacity(0.08))
         )
     }
 }
@@ -207,60 +193,43 @@ private struct WorkoutLiveActivityLockScreenView: View {
     let context: ActivityViewContext<WorkoutActivityAttributes>
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: WorkoutLiveActivityMetrics.outerSpacing) {
             headerRow
 
             Text(context.state.currentExerciseName)
-                .font(.system(size: 24, weight: .semibold, design: .rounded))
-                .foregroundStyle(.white)
+                .font(.system(size: 21, weight: .semibold, design: .rounded))
+                .foregroundStyle(WorkoutLiveActivityPalette.primaryText)
                 .lineLimit(2)
-                .minimumScaleFactor(0.78)
+                .minimumScaleFactor(0.88)
+                .multilineTextAlignment(.leading)
                 .fixedSize(horizontal: false, vertical: true)
 
-            HStack(alignment: .bottom, spacing: 10) {
-                currentSetCard
-
-                if let lastCompletedSetAt = context.state.lastCompletedSetAt {
-                    restCard(lastCompletedSetAt)
-                }
-            }
+            detailPanel
         }
-        .padding(.vertical, 6)
+        .padding(.vertical, WorkoutLiveActivityMetrics.outerVerticalPadding)
     }
 
     private var headerRow: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
-            HStack(spacing: 6) {
-                Image(systemName: "figure.strengthtraining.traditional")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(WorkoutLiveActivityPalette.accent)
+            Text(context.state.title)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(WorkoutLiveActivityPalette.primaryText.opacity(0.92))
+                .lineLimit(1)
 
-                Text(context.state.title)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.white.opacity(0.92))
-                    .lineLimit(1)
-            }
+            Spacer(minLength: 8)
 
-            Spacer(minLength: 10)
-
-            HStack(spacing: 6) {
-                Image(systemName: "timer")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(WorkoutLiveActivityPalette.accent)
-
-                Text(context.attributes.startedAt, style: .timer)
-                    .font(.subheadline.monospacedDigit())
-                    .foregroundStyle(.white.opacity(0.92))
-            }
+            Text(context.attributes.startedAt, style: .timer)
+                .font(.subheadline.monospacedDigit())
+                .foregroundStyle(WorkoutLiveActivityPalette.secondaryText)
         }
     }
 
-    private var currentSetCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
+    private var detailPanel: some View {
+        VStack(alignment: .leading, spacing: WorkoutLiveActivityMetrics.panelSpacing) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(WorkoutLiveActivityFormatting.currentSetLabel(for: context.state))
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(.white.opacity(0.70))
+                    .foregroundStyle(WorkoutLiveActivityPalette.secondaryText)
                     .lineLimit(1)
 
                 Spacer(minLength: 8)
@@ -268,22 +237,28 @@ private struct WorkoutLiveActivityLockScreenView: View {
                 progressChip
             }
 
-            Text(WorkoutLiveActivityFormatting.setMetricsText(for: context.state))
-                .font(.system(size: 27, weight: .bold, design: .rounded))
-                .foregroundStyle(.white)
-                .lineLimit(1)
-                .minimumScaleFactor(0.76)
+            if let lastCompletedSetAt = context.state.lastCompletedSetAt {
+                HStack(alignment: .center, spacing: WorkoutLiveActivityMetrics.horizontalGap) {
+                    setValueView
+
+                    Rectangle()
+                        .fill(WorkoutLiveActivityPalette.panelStroke)
+                        .frame(width: 1, height: WorkoutLiveActivityMetrics.dividerHeight)
+
+                    restStatusView(lastCompletedSetAt)
+                }
+            } else {
+                setValueView
+            }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
+        .padding(WorkoutLiveActivityMetrics.panelPadding)
         .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(WorkoutLiveActivityPalette.surface)
+            RoundedRectangle(cornerRadius: WorkoutLiveActivityMetrics.cornerRadius, style: .continuous)
+                .fill(WorkoutLiveActivityPalette.panel)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(WorkoutLiveActivityPalette.surfaceStroke, lineWidth: 1)
+            RoundedRectangle(cornerRadius: WorkoutLiveActivityMetrics.cornerRadius, style: .continuous)
+                .stroke(WorkoutLiveActivityPalette.panelStroke, lineWidth: 1)
         )
     }
 
@@ -296,38 +271,37 @@ private struct WorkoutLiveActivityLockScreenView: View {
                 .monospacedDigit()
         }
         .font(.caption2.weight(.semibold))
-        .foregroundStyle(.white.opacity(0.82))
+        .foregroundStyle(WorkoutLiveActivityPalette.primaryText.opacity(0.84))
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
         .background(
             Capsule(style: .continuous)
-                .fill(WorkoutLiveActivityPalette.progressSurface)
+                .fill(WorkoutLiveActivityPalette.progressFill)
         )
     }
 
-    private func restCard(_ lastCompletedSetAt: Date) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+    private var setValueView: some View {
+        Text(WorkoutLiveActivityFormatting.primarySetValueText(for: context.state))
+            .font(.system(size: 25, weight: .semibold, design: .rounded))
+            .foregroundStyle(WorkoutLiveActivityPalette.primaryText)
+            .lineLimit(1)
+            .minimumScaleFactor(0.76)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func restStatusView(_ lastCompletedSetAt: Date) -> some View {
+        HStack(spacing: 6) {
             Image(systemName: "pause.fill")
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(.orange)
+                .foregroundStyle(WorkoutLiveActivityPalette.restTint)
 
             Text(lastCompletedSetAt, style: .timer)
-                .font(.system(size: 24, weight: .semibold, design: .rounded))
-                .foregroundStyle(.white)
+                .font(.system(size: 19, weight: .semibold, design: .rounded))
+                .foregroundStyle(WorkoutLiveActivityPalette.primaryText)
                 .monospacedDigit()
                 .lineLimit(1)
-                .minimumScaleFactor(0.7)
+                .minimumScaleFactor(0.8)
         }
-        .frame(minWidth: 92, alignment: .leading)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 11)
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(WorkoutLiveActivityPalette.restSurface)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(WorkoutLiveActivityPalette.restStroke, lineWidth: 1)
-        )
+        .frame(width: WorkoutLiveActivityMetrics.statusColumnWidth, alignment: .leading)
     }
 }
