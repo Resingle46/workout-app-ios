@@ -4,26 +4,27 @@ import SwiftUI
 import WidgetKit
 
 private enum WorkoutLiveActivityPalette {
-    static let background = Color(red: 0.17, green: 0.19, blue: 0.25)
-    static let panel = Color.white.opacity(0.09)
-    static let panelStroke = Color.white.opacity(0.08)
+    static let background = Color(red: 0.14, green: 0.14, blue: 0.16)
+    static let panel = Color.white.opacity(0.07)
+    static let panelStroke = Color.white.opacity(0.06)
     static let primaryText = Color.white.opacity(0.96)
-    static let secondaryText = Color.white.opacity(0.66)
-    static let accent = Color(red: 0.60, green: 0.82, blue: 1.0)
-    static let progressFill = Color.green.opacity(0.16)
+    static let secondaryText = Color.white.opacity(0.62)
+    static let accent = Color.white.opacity(0.90)
+    static let progressFill = Color.white.opacity(0.08)
     static let progressTint = Color(red: 0.47, green: 0.93, blue: 0.60)
     static let restTint = Color(red: 1.0, green: 0.72, blue: 0.38)
 }
 
 private enum WorkoutLiveActivityMetrics {
-    static let outerSpacing: CGFloat = 12
-    static let panelSpacing: CGFloat = 10
-    static let horizontalGap: CGFloat = 12
-    static let outerVerticalPadding: CGFloat = 6
-    static let panelPadding: CGFloat = 14
-    static let cornerRadius: CGFloat = 16
-    static let statusColumnWidth: CGFloat = 90
-    static let dividerHeight: CGFloat = 38
+    static let outerSpacing: CGFloat = 8
+    static let panelSpacing: CGFloat = 8
+    static let horizontalGap: CGFloat = 10
+    static let containerHorizontalPadding: CGFloat = 14
+    static let containerVerticalPadding: CGFloat = 10
+    static let panelPadding: CGFloat = 11
+    static let cornerRadius: CGFloat = 14
+    static let statusColumnWidth: CGFloat = 76
+    static let dividerHeight: CGFloat = 32
 }
 
 private enum WorkoutLiveActivityFormatting {
@@ -146,7 +147,7 @@ struct WorkoutLiveActivityWidget: Widget {
                 Image(systemName: context.state.lastCompletedSetAt == nil ? "figure.strengthtraining.traditional" : "pause.fill")
                     .foregroundStyle(context.state.lastCompletedSetAt == nil ? WorkoutLiveActivityPalette.accent : WorkoutLiveActivityPalette.restTint)
             } compactTrailing: {
-                Text(context.attributes.startedAt, style: .timer)
+                Text(WorkoutLiveActivityFormatting.progressText(for: context.state))
                     .font(.caption2.monospacedDigit())
             } minimal: {
                 Image(systemName: context.state.lastCompletedSetAt == nil ? "figure.strengthtraining.traditional" : "pause.fill")
@@ -197,29 +198,33 @@ private struct WorkoutLiveActivityLockScreenView: View {
             headerRow
 
             Text(context.state.currentExerciseName)
-                .font(.system(size: 21, weight: .semibold, design: .rounded))
+                .font(.system(size: 20, weight: .semibold, design: .rounded))
                 .foregroundStyle(WorkoutLiveActivityPalette.primaryText)
                 .lineLimit(2)
-                .minimumScaleFactor(0.88)
+                .minimumScaleFactor(0.92)
                 .multilineTextAlignment(.leading)
                 .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
             detailPanel
         }
-        .padding(.vertical, WorkoutLiveActivityMetrics.outerVerticalPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, WorkoutLiveActivityMetrics.containerHorizontalPadding)
+        .padding(.vertical, WorkoutLiveActivityMetrics.containerVerticalPadding)
     }
 
     private var headerRow: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             Text(context.state.title)
-                .font(.subheadline.weight(.semibold))
+                .font(.footnote.weight(.semibold))
                 .foregroundStyle(WorkoutLiveActivityPalette.primaryText.opacity(0.92))
                 .lineLimit(1)
+                .truncationMode(.tail)
 
             Spacer(minLength: 8)
 
             Text(context.attributes.startedAt, style: .timer)
-                .font(.subheadline.monospacedDigit())
+                .font(.footnote.monospacedDigit())
                 .foregroundStyle(WorkoutLiveActivityPalette.secondaryText)
         }
     }
@@ -228,7 +233,7 @@ private struct WorkoutLiveActivityLockScreenView: View {
         VStack(alignment: .leading, spacing: WorkoutLiveActivityMetrics.panelSpacing) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(WorkoutLiveActivityFormatting.currentSetLabel(for: context.state))
-                    .font(.caption.weight(.semibold))
+                    .font(.caption2.weight(.semibold))
                     .foregroundStyle(WorkoutLiveActivityPalette.secondaryText)
                     .lineLimit(1)
 
@@ -251,6 +256,7 @@ private struct WorkoutLiveActivityLockScreenView: View {
                 setValueView
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(WorkoutLiveActivityMetrics.panelPadding)
         .background(
             RoundedRectangle(cornerRadius: WorkoutLiveActivityMetrics.cornerRadius, style: .continuous)
@@ -271,7 +277,7 @@ private struct WorkoutLiveActivityLockScreenView: View {
                 .monospacedDigit()
         }
         .font(.caption2.weight(.semibold))
-        .foregroundStyle(WorkoutLiveActivityPalette.primaryText.opacity(0.84))
+        .foregroundStyle(WorkoutLiveActivityPalette.secondaryText)
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
         .background(
@@ -282,10 +288,10 @@ private struct WorkoutLiveActivityLockScreenView: View {
 
     private var setValueView: some View {
         Text(WorkoutLiveActivityFormatting.primarySetValueText(for: context.state))
-            .font(.system(size: 25, weight: .semibold, design: .rounded))
+            .font(.system(size: 23, weight: .semibold, design: .rounded))
             .foregroundStyle(WorkoutLiveActivityPalette.primaryText)
             .lineLimit(1)
-            .minimumScaleFactor(0.76)
+            .minimumScaleFactor(0.82)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 
@@ -296,12 +302,12 @@ private struct WorkoutLiveActivityLockScreenView: View {
                 .foregroundStyle(WorkoutLiveActivityPalette.restTint)
 
             Text(lastCompletedSetAt, style: .timer)
-                .font(.system(size: 19, weight: .semibold, design: .rounded))
+                .font(.system(size: 17, weight: .semibold, design: .rounded))
                 .foregroundStyle(WorkoutLiveActivityPalette.primaryText)
                 .monospacedDigit()
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
         }
-        .frame(width: WorkoutLiveActivityMetrics.statusColumnWidth, alignment: .leading)
+        .frame(width: WorkoutLiveActivityMetrics.statusColumnWidth, alignment: .trailing)
     }
 }
