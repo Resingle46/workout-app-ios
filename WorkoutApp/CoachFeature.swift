@@ -2646,6 +2646,18 @@ struct CloudSyncPreparationResult: Sendable {
     }
 }
 
+struct CloudSnapshotMutationSyncResult: Sendable {
+    var attemptedRemoteSync: Bool
+    var remoteUpdated: Bool
+    var errorDescription: String?
+
+    static let skipped = CloudSnapshotMutationSyncResult(
+        attemptedRemoteSync: false,
+        remoteUpdated: false,
+        errorDescription: nil
+    )
+}
+
 @MainActor
 @Observable
 final class CloudSyncStore {
@@ -2698,6 +2710,31 @@ final class CloudSyncStore {
 
     func handleSceneDidEnterBackground(using appStore: AppStore) async {
         _ = await syncIfNeeded(using: appStore, allowUserPrompt: false)
+    }
+
+    @discardableResult
+    func syncSnapshotAfterLocalMutation(using appStore: AppStore) async -> CloudSnapshotMutationSyncResult {
+        guard configuration.canUseRemoteCoach else {
+            return .skipped
+        }
+
+        _ = await syncIfNeeded(using: appStore, allowUserPrompt: false)
+
+        let trimmedErrorDescription = lastSyncErrorDescription?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let errorDescription = trimmedErrorDescription?.isEmpty == false
+            ? trimmedErrorDescription
+            : nil
+        let remoteUpdated =
+            errorDescription == nil &&
+            lastBackupStatus?.syncState == .remoteReady &&
+            lastBackupStatus?.remote?.backupHash == appStore.localBackupHash
+
+        return CloudSnapshotMutationSyncResult(
+            attemptedRemoteSync: true,
+            remoteUpdated: remoteUpdated,
+            errorDescription: errorDescription
+        )
     }
 
     @discardableResult
@@ -3178,6 +3215,14 @@ final class CoachStore {
             return
         }
         _ = await cloudSyncStore.syncIfNeeded(using: appStore, allowUserPrompt: false)
+    }
+
+    func rebuildProfileInsightsFromLocalHistory(using appStore: AppStore) {
+        clearActiveProfileInsightsJob()
+        profileInsights = CoachFallbackInsightsFactory.make(from: appStore)
+        profileInsightsOrigin = .fallback
+        lastInsightsErrorDescription = nil
+        lastInsightsProvider = nil
     }
 
     func refreshProfileInsights(
@@ -5038,16 +5083,7 @@ struct TodayCoachInsightsCard: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                 case let .ready(content):
                     VStack(alignment: .leading, spacing: 14) {
-                        ViewThatFits(in: .vertical) {
-                            insightsMetaRow(content: content)
-                            VStack(alignment: .leading, spacing: 10) {
-                                insightsSourceBadge(content: content)
-                                if let modelLabel = content.modelLabel {
-                                    insightsModelBadge(modelLabel, accent: content.sourceAccent)
-                                }
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        }
+                        insightsMeta(content: content)
 
                         Text(content.summary)
                             .font(AppTypography.body(size: 18, weight: .semibold, relativeTo: .title3))
@@ -5094,12 +5130,10 @@ struct TodayCoachInsightsCard: View {
         }
     }
 
-    private func insightsMetaRow(content: TodayCoachInsightsContentState) -> some View {
-        HStack(alignment: .center, spacing: 10) {
+    @ViewBuilder
+    private func insightsMeta(content: TodayCoachInsightsContentState) -> some View {
+        FlowLayout(spacing: 10) {
             insightsSourceBadge(content: content)
-
-            Spacer(minLength: 12)
-
             if let modelLabel = content.modelLabel {
                 insightsModelBadge(modelLabel, accent: content.sourceAccent)
             }
@@ -5108,38 +5142,45 @@ struct TodayCoachInsightsCard: View {
     }
 
     private func insightsSourceBadge(content: TodayCoachInsightsContentState) -> some View {
-        HStack(spacing: 8) {
+        HStack(alignment: .top, spacing: 8) {
             Circle()
                 .fill(content.sourceAccent.tint)
                 .frame(width: 8, height: 8)
+                .padding(.top, 4)
 
             Text(LocalizedStringKey(content.sourceKey))
                 .font(AppTypography.caption(size: 13, weight: .semibold))
                 .foregroundStyle(AppTheme.secondaryText)
+                .lineLimit(nil)
+                .multilineTextAlignment(.leading)
                 .fixedSize(horizontal: false, vertical: true)
         }
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     private func insightsModelBadge(_ modelLabel: String, accent: TodayCardAccent) -> some View {
-        HStack(spacing: 6) {
+        HStack(alignment: .top, spacing: 6) {
             CoachStatusDot(color: accent.tint, size: 7)
+                .padding(.top, 4)
 
             Text(modelLabel)
                 .font(AppTypography.caption(size: 12, weight: .semibold))
                 .foregroundStyle(AppTheme.primaryText)
-                .lineLimit(1)
-                .minimumScaleFactor(0.82)
+                .lineLimit(2)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
         .background(
-            Capsule()
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .fill(AppTheme.surface)
         )
         .overlay(
-            Capsule()
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .stroke(AppTheme.border, lineWidth: 1)
         )
+        .fixedSize(horizontal: false, vertical: true)
     }
 }
 

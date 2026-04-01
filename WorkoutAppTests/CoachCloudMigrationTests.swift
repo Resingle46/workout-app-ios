@@ -200,6 +200,179 @@ final class CoachCloudMigrationTests: XCTestCase {
     }
 
     @MainActor
+    func testAppStoreDeleteHistorySessionRemovesWorkoutAndIsIdempotent() {
+        let persistence = PersistenceController()
+        persistence.clearStoredSnapshot()
+        defer {
+            persistence.clearStoredSnapshot()
+        }
+
+        let exercise = makeHistoryDeletionExercise()
+        let newestSession = makeHistoryDeletionSession(
+            id: UUID(uuidString: "70000000-0000-0000-0000-000000000001")!,
+            exerciseID: exercise.id,
+            startedAt: Date(timeIntervalSince1970: 300),
+            endedAt: Date(timeIntervalSince1970: 360)
+        )
+        let deletedSession = makeHistoryDeletionSession(
+            id: UUID(uuidString: "70000000-0000-0000-0000-000000000002")!,
+            exerciseID: exercise.id,
+            startedAt: Date(timeIntervalSince1970: 200),
+            endedAt: Date(timeIntervalSince1970: 260)
+        )
+        let oldestSession = makeHistoryDeletionSession(
+            id: UUID(uuidString: "70000000-0000-0000-0000-000000000003")!,
+            exerciseID: exercise.id,
+            startedAt: Date(timeIntervalSince1970: 100),
+            endedAt: Date(timeIntervalSince1970: 160)
+        )
+
+        let appStore = AppStore(persistence: persistence)
+        appStore.apply(snapshot: AppSnapshot(
+            programs: [],
+            exercises: [exercise],
+            history: [deletedSession, oldestSession, newestSession],
+            profile: .empty
+        ))
+
+        XCTAssertTrue(appStore.deleteHistorySession(id: deletedSession.id))
+        XCTAssertEqual(appStore.history.map(\.id), [newestSession.id, oldestSession.id])
+        XCTAssertEqual(appStore.lastFinishedSession?.id, newestSession.id)
+        XCTAssertFalse(appStore.deleteHistorySession(id: deletedSession.id))
+    }
+
+    @MainActor
+    func testAppStoreDeleteHistorySessionRecomputesLastFinishedSession() {
+        let persistence = PersistenceController()
+        persistence.clearStoredSnapshot()
+        defer {
+            persistence.clearStoredSnapshot()
+        }
+
+        let exercise = makeHistoryDeletionExercise()
+        let newestSession = makeHistoryDeletionSession(
+            id: UUID(uuidString: "71000000-0000-0000-0000-000000000001")!,
+            exerciseID: exercise.id,
+            startedAt: Date(timeIntervalSince1970: 300),
+            endedAt: Date(timeIntervalSince1970: 360)
+        )
+        let olderSession = makeHistoryDeletionSession(
+            id: UUID(uuidString: "71000000-0000-0000-0000-000000000002")!,
+            exerciseID: exercise.id,
+            startedAt: Date(timeIntervalSince1970: 200),
+            endedAt: Date(timeIntervalSince1970: 260)
+        )
+
+        let appStore = AppStore(persistence: persistence)
+        appStore.apply(snapshot: AppSnapshot(
+            programs: [],
+            exercises: [exercise],
+            history: [olderSession, newestSession],
+            profile: .empty
+        ))
+
+        XCTAssertEqual(appStore.lastFinishedSession?.id, newestSession.id)
+        XCTAssertTrue(appStore.deleteHistorySession(id: newestSession.id))
+        XCTAssertEqual(appStore.lastFinishedSession?.id, olderSession.id)
+        XCTAssertTrue(appStore.deleteHistorySession(id: olderSession.id))
+        XCTAssertNil(appStore.lastFinishedSession)
+        XCTAssertTrue(appStore.history.isEmpty)
+    }
+
+    @MainActor
+    func testAppStoreDeleteHistorySessionPersistsEmptyHistory() {
+        let persistence = PersistenceController()
+        persistence.clearStoredSnapshot()
+        defer {
+            persistence.clearStoredSnapshot()
+        }
+
+        let exercise = makeHistoryDeletionExercise()
+        let onlySession = makeHistoryDeletionSession(
+            id: UUID(uuidString: "72000000-0000-0000-0000-000000000001")!,
+            exerciseID: exercise.id,
+            startedAt: Date(timeIntervalSince1970: 300),
+            endedAt: Date(timeIntervalSince1970: 360)
+        )
+
+        let appStore = AppStore(persistence: persistence)
+        appStore.apply(snapshot: AppSnapshot(
+            programs: [],
+            exercises: [exercise],
+            history: [onlySession],
+            profile: .empty
+        ))
+
+        XCTAssertTrue(appStore.deleteHistorySession(id: onlySession.id))
+
+        let reloadedStore = AppStore(persistence: persistence)
+        XCTAssertTrue(reloadedStore.history.isEmpty)
+        XCTAssertNil(reloadedStore.lastFinishedSession)
+    }
+
+    @MainActor
+    func testCloudSyncStoreSyncSnapshotAfterLocalMutationUploadsHistoryWithoutDeletedWorkout() async {
+        let suiteName = "CoachCloudMigrationTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        let persistence = PersistenceController()
+        persistence.clearStoredSnapshot()
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+            persistence.clearStoredSnapshot()
+        }
+
+        let localStateStore = CoachLocalStateStore(
+            defaults: defaults,
+            generatedInstallID: "install-delete-sync",
+            generatedInstallSecret: "install-secret",
+            identityVault: InMemoryCoachIdentityVault()
+        )
+        let client = RecordingHistoryDeletionSyncClient(installID: localStateStore.installID)
+        let cloudSyncStore = CloudSyncStore(
+            client: client,
+            configuration: CoachRuntimeConfiguration(
+                isFeatureEnabled: true,
+                backendBaseURL: URL(string: "https://example.com"),
+                internalBearerToken: "token"
+            ),
+            installID: localStateStore.installID,
+            installSecretProvider: { localStateStore.installSecret },
+            localStateStore: CloudSyncLocalStateStore(defaults: defaults)
+        )
+        let exercise = makeHistoryDeletionExercise()
+        let keptSession = makeHistoryDeletionSession(
+            id: UUID(uuidString: "73000000-0000-0000-0000-000000000001")!,
+            exerciseID: exercise.id,
+            startedAt: Date(timeIntervalSince1970: 300),
+            endedAt: Date(timeIntervalSince1970: 360)
+        )
+        let deletedSession = makeHistoryDeletionSession(
+            id: UUID(uuidString: "73000000-0000-0000-0000-000000000002")!,
+            exerciseID: exercise.id,
+            startedAt: Date(timeIntervalSince1970: 200),
+            endedAt: Date(timeIntervalSince1970: 260)
+        )
+
+        let appStore = AppStore(persistence: persistence)
+        appStore.apply(snapshot: AppSnapshot(
+            programs: [],
+            exercises: [exercise],
+            history: [keptSession, deletedSession],
+            profile: .empty
+        ))
+        XCTAssertTrue(appStore.deleteHistorySession(id: deletedSession.id))
+
+        let result = await cloudSyncStore.syncSnapshotAfterLocalMutation(using: appStore)
+        let uploadRequests = await client.uploadRequests
+
+        XCTAssertTrue(result.attemptedRemoteSync)
+        XCTAssertTrue(result.remoteUpdated)
+        XCTAssertNil(result.errorDescription)
+        XCTAssertEqual(uploadRequests.count, 1)
+        XCTAssertEqual(uploadRequests.first?.snapshot.history.map(\.id), [keptSession.id])
+    }
+
+    @MainActor
     func testCloudSyncStoreDismissesPendingRemoteRestoreAndMarksContextStale() async {
         let suiteName = "CoachCloudMigrationTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
@@ -371,6 +544,47 @@ final class InMemoryCoachIdentityVault: CoachIdentityVault, @unchecked Sendable 
     }
 }
 
+private func makeHistoryDeletionExercise() -> Exercise {
+    Exercise(
+        id: UUID(uuidString: "7A000000-0000-0000-0000-000000000001")!,
+        name: "Bench Press",
+        categoryID: SeedData.chestCategoryID,
+        equipment: "Barbell",
+        notes: ""
+    )
+}
+
+private func makeHistoryDeletionSession(
+    id: UUID,
+    exerciseID: UUID,
+    startedAt: Date,
+    endedAt: Date?
+) -> WorkoutSession {
+    WorkoutSession(
+        id: id,
+        workoutTemplateID: UUID(uuidString: "7B000000-0000-0000-0000-000000000001")!,
+        title: "Push",
+        startedAt: startedAt,
+        endedAt: endedAt,
+        exercises: [
+            WorkoutExerciseLog(
+                templateExerciseID: UUID(uuidString: "7C000000-0000-0000-0000-000000000001")!,
+                exerciseID: exerciseID,
+                groupKind: .regular,
+                groupID: nil,
+                sets: [
+                    WorkoutSetLog(
+                        id: UUID(uuidString: "7D000000-0000-0000-0000-000000000001")!,
+                        reps: 5,
+                        weight: 100,
+                        completedAt: endedAt
+                    )
+                ]
+            )
+        ]
+    )
+}
+
 private actor RecordingCoachRemoteMaintenanceClient: CoachAPIClient {
     private(set) var recordedRestoreDecisions: [CloudBackupRestoreDecisionRequest] = []
     private(set) var recordedMemoryClearRequests: [CloudCoachMemoryClearRequest] = []
@@ -398,6 +612,124 @@ private actor RecordingCoachRemoteMaintenanceClient: CoachAPIClient {
     func deleteRemoteBackup(installID: String) async throws {
         throw CoachClientError.invalidResponse
     }
+
+    func updateCoachPreferences(
+        _ request: CloudCoachPreferencesUpdateRequest
+    ) async throws -> CloudCoachPreferencesUpdateResponse {
+        throw CoachClientError.invalidResponse
+    }
+
+    func fetchProfileInsights(
+        locale: String,
+        snapshotEnvelope: CoachSnapshotEnvelope,
+        capabilityScope: CoachCapabilityScope,
+        runtimeContextDelta: CoachRuntimeContextDelta?,
+        forceRefresh: Bool
+    ) async throws -> CoachProfileInsights {
+        throw CoachClientError.invalidResponse
+    }
+
+    func createChatJob(
+        locale: String,
+        question: String,
+        clientRequestID: String,
+        clientRecentTurns: [CoachConversationMessage],
+        snapshotEnvelope: CoachSnapshotEnvelope,
+        capabilityScope: CoachCapabilityScope,
+        runtimeContextDelta: CoachRuntimeContextDelta?
+    ) async throws -> CoachChatJobCreateResponse {
+        throw CoachClientError.invalidResponse
+    }
+
+    func getChatJob(
+        jobID: String,
+        installID: String
+    ) async throws -> CoachChatJobStatusResponse {
+        throw CoachClientError.invalidResponse
+    }
+
+    func createWorkoutSummaryJob(
+        _ request: WorkoutSummaryJobCreateRequest
+    ) async throws -> WorkoutSummaryJobCreateResponse {
+        throw CoachClientError.invalidResponse
+    }
+
+    func getWorkoutSummaryJob(
+        jobID: String,
+        installID: String
+    ) async throws -> WorkoutSummaryJobStatusResponse {
+        throw CoachClientError.invalidResponse
+    }
+
+    func sendChat(
+        locale: String,
+        question: String,
+        clientRecentTurns: [CoachConversationMessage],
+        snapshotEnvelope: CoachSnapshotEnvelope,
+        capabilityScope: CoachCapabilityScope,
+        runtimeContextDelta: CoachRuntimeContextDelta?
+    ) async throws -> CoachChatResponse {
+        throw CoachClientError.invalidResponse
+    }
+
+    func deleteRemoteState(installID: String) async throws {
+        throw CoachClientError.invalidResponse
+    }
+}
+
+private actor RecordingHistoryDeletionSyncClient: CoachAPIClient {
+    let installID: String
+    private(set) var uploadRequests: [CloudBackupUploadRequest] = []
+
+    init(installID: String) {
+        self.installID = installID
+    }
+
+    func getBackupStatus(_ request: CloudBackupStatusRequest) async throws -> CloudBackupStatusResponse {
+        CloudBackupStatusResponse(
+            syncState: .uploadRequired,
+            contextState: .contextStale,
+            reasonCodes: ["local_dirty_since_remote"],
+            actions: CloudBackupStatusActions(
+                canUseRemoteAIContextNow: false,
+                shouldUpload: true,
+                shouldOfferRestore: false,
+                shouldBuildInlineFallback: true,
+                shouldPromptUser: false
+            ),
+            authMode: .secretValid,
+            remote: nil
+        )
+    }
+
+    func uploadBackup(_ request: CloudBackupUploadRequest) async throws -> CloudBackupHead {
+        uploadRequests.append(request)
+        let backupHash = request.backupHash ?? "history-delete-hash"
+        return CloudBackupHead(
+            installID: installID,
+            backupVersion: 1,
+            backupHash: backupHash,
+            r2Key: "installs/\(installID)/backups/v000001-\(backupHash).json.gz",
+            uploadedAt: request.clientSourceModifiedAt ?? .now,
+            clientSourceModifiedAt: request.clientSourceModifiedAt,
+            selectedProgramID: request.snapshot.coachAnalysisSettings.selectedProgramID,
+            programComment: request.snapshot.coachAnalysisSettings.programComment,
+            coachStateVersion: 1,
+            schemaVersion: 2,
+            compression: "gzip",
+            sizeBytes: 1024
+        )
+    }
+
+    func downloadBackup(installID: String, version: Int?) async throws -> CloudBackupDownloadResponse {
+        throw CoachClientError.invalidResponse
+    }
+
+    func recordRestoreDecision(_ request: CloudBackupRestoreDecisionRequest) async throws {}
+
+    func clearRemoteChatMemory(_ request: CloudCoachMemoryClearRequest) async throws {}
+
+    func deleteRemoteBackup(installID: String) async throws {}
 
     func updateCoachPreferences(
         _ request: CloudCoachPreferencesUpdateRequest

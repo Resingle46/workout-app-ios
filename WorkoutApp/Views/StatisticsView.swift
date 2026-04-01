@@ -3,8 +3,14 @@ import SwiftUI
 
 struct StatisticsView: View {
     @Environment(AppStore.self) private var store
+    @Environment(CoachStore.self) private var coachStore
+    @Environment(CloudSyncStore.self) private var cloudSyncStore
+    @Environment(WorkoutSummaryStore.self) private var workoutSummaryStore
     @Environment(\.appBottomRailInset) private var bottomRailInset
     @State private var selectedExerciseID: UUID?
+    @State private var pendingDeleteSession: WorkoutSession?
+    @State private var historySyncNotice: StatisticsHistorySyncNotice?
+    @State private var isRetryingHistorySync = false
 
     private var selectedExercise: Exercise? {
         guard let selectedExerciseID else { return nil }
@@ -40,6 +46,10 @@ struct StatisticsView: View {
                     LazyVStack(alignment: .leading, spacing: 14) {
                         AppSectionTitle(titleKey: "stats.history")
 
+                        if let historySyncNotice {
+                            historySyncNoticeView(historySyncNotice)
+                        }
+
                         if store.history.isEmpty {
                             Text("stats.no_workouts")
                                 .foregroundStyle(AppTheme.secondaryText)
@@ -61,9 +71,18 @@ struct StatisticsView: View {
                                             .font(AppTypography.body(size: 16, relativeTo: .subheadline))
                                             .foregroundStyle(AppTheme.secondaryText)
                                     }
+                                    .frame(maxWidth: .infinity, alignment: .leading)
                                     .padding(.vertical, 4)
+                                    .contentShape(Rectangle())
                                 }
                                 .buttonStyle(.plain)
+                                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                    Button(role: .destructive) {
+                                        pendingDeleteSession = session
+                                    } label: {
+                                        Label("common.delete", systemImage: "trash")
+                                    }
+                                }
 
                                 if session.id != (store.history.last?.id ?? session.id) {
                                     Divider()
@@ -81,6 +100,27 @@ struct StatisticsView: View {
         .onAppear(perform: syncSelectedExercise)
         .onChange(of: store.exercises.map(\.id)) { _, _ in
             syncSelectedExercise()
+        }
+        .alert(
+            "stats.history_delete_confirm_title",
+            isPresented: Binding(
+                get: { pendingDeleteSession != nil },
+                set: { isPresented in
+                    if !isPresented {
+                        pendingDeleteSession = nil
+                    }
+                }
+            ),
+            presenting: pendingDeleteSession
+        ) { session in
+            Button("common.delete", role: .destructive) {
+                confirmDelete(for: session)
+            }
+            Button("action.cancel", role: .cancel) {
+                pendingDeleteSession = nil
+            }
+        } message: { _ in
+            Text("stats.history_delete_confirm_message")
         }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .navigationBar)
@@ -304,6 +344,48 @@ struct StatisticsView: View {
         selectedExerciseID = defaultExerciseID
     }
 
+    @ViewBuilder
+    private func historySyncNoticeView(_ notice: StatisticsHistorySyncNotice) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("stats.history_delete_remote_notice")
+                .font(AppTypography.caption(size: 13, weight: .semibold))
+                .foregroundStyle(AppTheme.warning)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if let detail = notice.detail, !detail.isEmpty {
+                Text(detail)
+                    .font(AppTypography.caption(size: 12, weight: .medium))
+                    .foregroundStyle(AppTheme.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Button {
+                retryHistoryRemoteSync()
+            } label: {
+                Text(
+                    LocalizedStringKey(
+                        isRetryingHistorySync
+                            ? "stats.history_delete_remote_syncing"
+                            : "backup.action.sync_remote"
+                    )
+                )
+            }
+            .buttonStyle(.plain)
+            .font(AppTypography.caption(size: 12, weight: .semibold))
+            .foregroundStyle(isRetryingHistorySync ? AppTheme.secondaryText : AppTheme.accent)
+            .disabled(isRetryingHistorySync)
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(AppTheme.surfaceElevated.opacity(0.88))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(AppTheme.warning.opacity(0.35), lineWidth: 1)
+        )
+    }
+
     private var chartAreaGradient: LinearGradient {
         LinearGradient(
             colors: [
@@ -329,6 +411,54 @@ struct StatisticsView: View {
         let duration = session.endedAt.map { formattedDuration(startedAt: session.startedAt, endedAt: $0) } ?? NSLocalizedString("common.no_data", comment: "")
         return String(format: NSLocalizedString("stats.history_meta", comment: ""), exerciseCount, duration)
     }
+
+    @MainActor
+    private func confirmDelete(for session: WorkoutSession) {
+        pendingDeleteSession = nil
+
+        guard store.deleteHistorySession(id: session.id) else {
+            return
+        }
+
+        workoutSummaryStore.discardSummary(for: session.id)
+        coachStore.rebuildProfileInsightsFromLocalHistory(using: store)
+        historySyncNotice = nil
+
+        Task { @MainActor in
+            let syncResult = await cloudSyncStore.syncSnapshotAfterLocalMutation(using: store)
+            applyHistorySyncResult(syncResult)
+        }
+    }
+
+    @MainActor
+    private func retryHistoryRemoteSync() {
+        guard !isRetryingHistorySync else {
+            return
+        }
+
+        isRetryingHistorySync = true
+        Task { @MainActor in
+            let syncResult = await cloudSyncStore.syncSnapshotAfterLocalMutation(using: store)
+            isRetryingHistorySync = false
+            applyHistorySyncResult(syncResult)
+        }
+    }
+
+    @MainActor
+    private func applyHistorySyncResult(_ result: CloudSnapshotMutationSyncResult) {
+        guard result.attemptedRemoteSync else {
+            historySyncNotice = nil
+            return
+        }
+
+        historySyncNotice = result.remoteUpdated
+            ? nil
+            : StatisticsHistorySyncNotice(detail: result.errorDescription)
+    }
+}
+
+private struct StatisticsHistorySyncNotice: Equatable {
+    var detail: String?
 }
 
 enum WorkoutSummaryMode {

@@ -413,6 +413,18 @@ final class AppStore {
         clearActiveWorkoutCheckpoint(reason: "finished_workout")
     }
 
+    @discardableResult
+    func deleteHistorySession(id: UUID) -> Bool {
+        guard let index = history.firstIndex(where: { $0.id == id }) else {
+            return false
+        }
+
+        history.remove(at: index)
+        lastFinishedSession = history.first(where: { $0.isFinished })
+        save()
+        return true
+    }
+
     func applyRemoteRestore(snapshot: AppSnapshot, remoteBackupHash: String? = nil) {
         let existingSnapshot = currentSnapshot()
         if let checkpoint = persistence.saveRollbackCheckpoint(snapshot: existingSnapshot) {
