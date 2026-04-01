@@ -211,7 +211,7 @@ struct WorkoutLiveActivityWidget: Widget {
 
         return CompleteCurrentSetIntent(
             sessionID: sessionID,
-            currentSetID: currentSetID
+            currentSetID: currentSetID.uuidString
         )
     }
 
@@ -372,7 +372,7 @@ private struct WorkoutLiveActivityLockScreenView: View {
 
         return CompleteCurrentSetIntent(
             sessionID: context.attributes.sessionID,
-            currentSetID: currentSetID
+            currentSetID: currentSetID.uuidString
         )
     }
 

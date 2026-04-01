@@ -10,24 +10,25 @@ struct CompleteCurrentSetIntent: LiveActivityIntent {
     var sessionID: String
 
     @Parameter(title: "Current Set ID")
-    var currentSetID: UUID
+    var currentSetID: String
 
     init() {}
 
-    init(sessionID: String, currentSetID: UUID) {
+    init(sessionID: String, currentSetID: String) {
         self.sessionID = sessionID
         self.currentSetID = currentSetID
     }
 
     func perform() async throws -> some IntentResult {
-        guard let sessionUUID = UUID(uuidString: sessionID) else {
+        guard let sessionUUID = UUID(uuidString: sessionID),
+              let currentSetUUID = UUID(uuidString: currentSetID) else {
             return .result()
         }
 
         let command = WorkoutExternalCommand(
             kind: .completeCurrentSet,
             sessionID: sessionUUID,
-            currentSetID: currentSetID
+            currentSetID: currentSetUUID
         )
         let commandStore = WorkoutExternalCommandStore()
         _ = try commandStore.enqueue(command)
