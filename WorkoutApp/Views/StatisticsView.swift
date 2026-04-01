@@ -475,6 +475,10 @@ private struct StatisticsHistoryRow<Destination: View>: View {
         return max(-deleteRevealWidth, min(0, baseOffset + dragTranslationX))
     }
 
+    private var visibleDeleteWidth: CGFloat {
+        max(0, -contentOffset)
+    }
+
     var body: some View {
         ZStack(alignment: .trailing) {
             deleteButton
@@ -514,28 +518,28 @@ private struct StatisticsHistoryRow<Destination: View>: View {
     }
 
     private var deleteButton: some View {
-        HStack(spacing: 0) {
-            Spacer(minLength: 0)
+        Button(role: .destructive, action: onDelete) {
+            VStack(spacing: 6) {
+                Image(systemName: "trash")
+                    .font(AppTypography.icon(size: 16, weight: .semibold))
 
-            Button(role: .destructive, action: onDelete) {
-                VStack(spacing: 6) {
-                    Image(systemName: "trash")
-                        .font(AppTypography.icon(size: 16, weight: .semibold))
-
-                    Text("common.delete")
-                        .font(AppTypography.caption(size: 11, weight: .semibold))
-                }
-                .foregroundStyle(Color.white)
-                .frame(width: deleteRevealWidth)
-                .frame(maxHeight: .infinity)
-                .padding(.vertical, 10)
-                .background(
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .fill(AppTheme.destructive)
-                )
+                Text("common.delete")
+                    .font(AppTypography.caption(size: 11, weight: .semibold))
             }
-            .buttonStyle(.plain)
+            .foregroundStyle(Color.white)
+            .frame(width: deleteRevealWidth)
+            .frame(maxHeight: .infinity)
+            .padding(.vertical, 10)
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(AppTheme.destructive)
+            )
         }
+        .buttonStyle(.plain)
+        .frame(width: visibleDeleteWidth, alignment: .trailing)
+        .clipped()
+        .opacity(visibleDeleteWidth > 0 ? 1 : 0)
+        .allowsHitTesting(visibleDeleteWidth > 0)
     }
 
     private var historySwipeGesture: some Gesture {
