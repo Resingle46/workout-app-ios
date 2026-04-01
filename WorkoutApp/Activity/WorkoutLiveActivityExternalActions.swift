@@ -67,11 +67,12 @@ enum WorkoutLiveActivityCommandSignal {
 
 final class WorkoutLiveActivityCommandObserver {
     private let handler: @MainActor () async -> Void
-    private let observerPointer: UnsafeMutableRawPointer
+    private var observerPointer: UnsafeMutableRawPointer?
 
     init(handler: @escaping @MainActor () async -> Void) {
         self.handler = handler
-        self.observerPointer = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
+        let observerPointer = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
+        self.observerPointer = observerPointer
 
         CFNotificationCenterAddObserver(
             CFNotificationCenterGetDarwinNotifyCenter(),
@@ -94,6 +95,9 @@ final class WorkoutLiveActivityCommandObserver {
     }
 
     deinit {
+        guard let observerPointer else {
+            return
+        }
         CFNotificationCenterRemoveObserver(
             CFNotificationCenterGetDarwinNotifyCenter(),
             observerPointer,
