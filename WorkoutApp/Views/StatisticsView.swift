@@ -46,6 +46,10 @@ struct StatisticsView: View {
                     LazyVStack(alignment: .leading, spacing: 14) {
                         AppSectionTitle(titleKey: "stats.history")
 
+                        if !store.history.isEmpty {
+                            historyDeleteHintView
+                        }
+
                         if let historySyncNotice {
                             historySyncNoticeView(historySyncNotice)
                         }
@@ -55,7 +59,14 @@ struct StatisticsView: View {
                                 .foregroundStyle(AppTheme.secondaryText)
                         } else {
                             ForEach(store.history) { session in
-                                NavigationLink(destination: WorkoutSummaryView(session: session)) {
+                                NavigationLink(
+                                    destination: WorkoutSummaryView(
+                                        session: session,
+                                        onDeleteFromHistory: {
+                                            confirmDelete(for: session)
+                                        }
+                                    )
+                                ) {
                                     VStack(alignment: .leading, spacing: 8) {
                                         HStack {
                                             Text(session.title)
@@ -344,6 +355,30 @@ struct StatisticsView: View {
         selectedExerciseID = defaultExerciseID
     }
 
+    private var historyDeleteHintView: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "trash")
+                .font(AppTypography.icon(size: 13, weight: .semibold))
+                .foregroundStyle(AppTheme.secondaryText)
+                .padding(.top, 1)
+
+            Text("stats.history_delete_hint")
+                .font(AppTypography.caption(size: 13, weight: .medium))
+                .foregroundStyle(AppTheme.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(AppTheme.surfaceElevated.opacity(0.72))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(AppTheme.border, lineWidth: 1)
+        )
+    }
+
     @ViewBuilder
     private func historySyncNoticeView(_ notice: StatisticsHistorySyncNotice) -> some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -470,12 +505,15 @@ enum WorkoutSummaryMode {
 struct WorkoutSummaryView: View {
     @Environment(AppStore.self) private var store
     @Environment(WorkoutSummaryStore.self) private var workoutSummaryStore
+    @Environment(\.dismiss) private var dismiss
+    @State private var isShowingDeleteConfirmation = false
 
     let session: WorkoutSession
     var mode: WorkoutSummaryMode = .history
     var onContinue: (() -> Void)? = nil
     var onDone: (() -> Void)? = nil
     var onCancel: (() -> Void)? = nil
+    var onDeleteFromHistory: (() -> Void)? = nil
 
     var body: some View {
         ScrollView {
@@ -564,6 +602,26 @@ struct WorkoutSummaryView: View {
             } else if mode == .previousWorkout {
                 previousWorkoutCTAs
             }
+        }
+        .toolbar {
+            if mode == .history, onDeleteFromHistory != nil {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(role: .destructive) {
+                        isShowingDeleteConfirmation = true
+                    } label: {
+                        Image(systemName: "trash")
+                    }
+                }
+            }
+        }
+        .alert("stats.history_delete_confirm_title", isPresented: $isShowingDeleteConfirmation) {
+            Button("common.delete", role: .destructive) {
+                onDeleteFromHistory?()
+                dismiss()
+            }
+            Button("action.cancel", role: .cancel) {}
+        } message: {
+            Text("stats.history_delete_confirm_message")
         }
         .navigationTitle(mode == .history ? session.title : "")
         .navigationBarTitleDisplayMode(.inline)
