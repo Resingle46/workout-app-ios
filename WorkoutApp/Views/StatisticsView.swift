@@ -459,7 +459,7 @@ private struct StatisticsHistorySyncNotice: Equatable {
 }
 
 private struct StatisticsHistoryRow<Destination: View>: View {
-    private static let deleteRevealWidth: CGFloat = 88
+    private let deleteRevealWidth: CGFloat = 88
 
     let session: WorkoutSession
     let isDeleteRevealed: Bool
@@ -471,8 +471,8 @@ private struct StatisticsHistoryRow<Destination: View>: View {
     @GestureState private var dragTranslationX: CGFloat = 0
 
     private var contentOffset: CGFloat {
-        let baseOffset = isDeleteRevealed ? -Self.deleteRevealWidth : 0
-        return max(-Self.deleteRevealWidth, min(0, baseOffset + dragTranslationX))
+        let baseOffset = isDeleteRevealed ? -deleteRevealWidth : 0
+        return max(-deleteRevealWidth, min(0, baseOffset + dragTranslationX))
     }
 
     var body: some View {
@@ -526,7 +526,7 @@ private struct StatisticsHistoryRow<Destination: View>: View {
                         .font(AppTypography.caption(size: 11, weight: .semibold))
                 }
                 .foregroundStyle(Color.white)
-                .frame(width: Self.deleteRevealWidth)
+                .frame(width: deleteRevealWidth)
                 .frame(maxHeight: .infinity)
                 .padding(.vertical, 10)
                 .background(
@@ -547,9 +547,9 @@ private struct StatisticsHistoryRow<Destination: View>: View {
 
                 let translation = value.translation.width
                 if isDeleteRevealed {
-                    state = max(-Self.deleteRevealWidth, min(0, translation))
+                    state = max(-deleteRevealWidth, min(0, translation))
                 } else {
-                    state = min(0, max(-Self.deleteRevealWidth, translation))
+                    state = min(0, max(-deleteRevealWidth, translation))
                 }
             }
             .onEnded { value in
@@ -559,9 +559,9 @@ private struct StatisticsHistoryRow<Destination: View>: View {
 
                 let shouldRevealDelete: Bool
                 if isDeleteRevealed {
-                    shouldRevealDelete = (-Self.deleteRevealWidth + value.translation.width) < (-Self.deleteRevealWidth * 0.45)
+                    shouldRevealDelete = (-deleteRevealWidth + value.translation.width) < (-deleteRevealWidth * 0.45)
                 } else {
-                    shouldRevealDelete = value.translation.width < (-Self.deleteRevealWidth * 0.35)
+                    shouldRevealDelete = value.translation.width < (-deleteRevealWidth * 0.35)
                 }
 
                 if shouldRevealDelete {
