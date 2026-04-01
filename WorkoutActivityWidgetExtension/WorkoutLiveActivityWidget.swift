@@ -6,6 +6,8 @@ import WidgetKit
 
 private enum WorkoutLiveActivityPalette {
     static let background = Color(red: 0.15, green: 0.15, blue: 0.17)
+    static let panel = Color.white.opacity(0.06)
+    static let panelStroke = Color.white.opacity(0.05)
     static let primaryText = Color.white.opacity(0.96)
     static let secondaryText = Color.white.opacity(0.62)
     static let accent = Color.white.opacity(0.90)
@@ -15,13 +17,16 @@ private enum WorkoutLiveActivityPalette {
 }
 
 private enum WorkoutLiveActivityMetrics {
-    static let outerSpacing: CGFloat = 12
-    static let panelSpacing: CGFloat = 8
-    static let horizontalGap: CGFloat = 8
+    static let outerSpacing: CGFloat = 7
+    static let panelSpacing: CGFloat = 7
+    static let horizontalGap: CGFloat = 10
     static let actionSpacing: CGFloat = 9
-    static let containerHorizontalPadding: CGFloat = 16
-    static let containerVerticalPadding: CGFloat = 14
-    static let minimumLockScreenHeight: CGFloat = 152
+    static let containerHorizontalPadding: CGFloat = 14
+    static let containerVerticalPadding: CGFloat = 9
+    static let panelPadding: CGFloat = 10
+    static let cornerRadius: CGFloat = 14
+    static let statusColumnWidth: CGFloat = 72
+    static let dividerHeight: CGFloat = 32
 }
 
 private enum WorkoutLiveActivityFormatting {
@@ -242,61 +247,45 @@ private struct WorkoutLiveActivityLockScreenView: View {
         VStack(alignment: .leading, spacing: WorkoutLiveActivityMetrics.outerSpacing) {
             headerRow
             exerciseTitle
-            detailRow
-
-            Text(progressSummary)
-                .font(.caption)
-                .foregroundStyle(WorkoutLiveActivityPalette.secondaryText)
-                .lineLimit(2)
-                .fixedSize(horizontal: false, vertical: true)
-
-            if let lastCompletedSetAt = context.state.lastCompletedSetAt {
-                restStatusView(lastCompletedSetAt)
-            }
-
-            if let actionIntent = completionIntent {
-                liveActivityActionButton(intent: actionIntent)
-            }
+            detailPanel
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .frame(minHeight: WorkoutLiveActivityMetrics.minimumLockScreenHeight, alignment: .topLeading)
         .padding(.horizontal, WorkoutLiveActivityMetrics.containerHorizontalPadding)
         .padding(.vertical, WorkoutLiveActivityMetrics.containerVerticalPadding)
     }
 
     private var headerRow: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Text(displayTitle)
-                .font(.headline.weight(.semibold))
-                .foregroundStyle(WorkoutLiveActivityPalette.primaryText)
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text(context.state.title)
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(WorkoutLiveActivityPalette.primaryText.opacity(0.92))
                 .lineLimit(1)
                 .truncationMode(.tail)
 
             Spacer(minLength: 8)
 
             Text(context.attributes.startedAt, style: .timer)
-                .font(.subheadline.monospacedDigit())
+                .font(.footnote.monospacedDigit())
                 .foregroundStyle(WorkoutLiveActivityPalette.secondaryText)
-                .fixedSize(horizontal: true, vertical: false)
         }
     }
 
     private var exerciseTitle: some View {
-        Text(exerciseNameText)
-            .font(.title3.weight(.semibold))
+        Text(context.state.currentExerciseName)
+            .font(.system(size: 20, weight: .semibold, design: .rounded))
             .foregroundStyle(WorkoutLiveActivityPalette.primaryText)
             .lineLimit(2)
-            .minimumScaleFactor(0.86)
+            .minimumScaleFactor(0.92)
             .multilineTextAlignment(.leading)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var detailRow: some View {
+    private var detailPanel: some View {
         VStack(alignment: .leading, spacing: WorkoutLiveActivityMetrics.panelSpacing) {
-            HStack(alignment: .firstTextBaseline, spacing: WorkoutLiveActivityMetrics.horizontalGap) {
-                Text(currentSetLabelText)
-                    .font(.caption.weight(.semibold))
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(WorkoutLiveActivityFormatting.currentSetLabel(for: context.state))
+                    .font(.caption2.weight(.semibold))
                     .foregroundStyle(WorkoutLiveActivityPalette.secondaryText)
                     .lineLimit(1)
 
@@ -305,13 +294,34 @@ private struct WorkoutLiveActivityLockScreenView: View {
                 progressChip
             }
 
-            Text(primaryValueText)
-                .font(.system(size: 28, weight: .semibold, design: .rounded))
-                .foregroundStyle(WorkoutLiveActivityPalette.primaryText)
-                .lineLimit(1)
-                .minimumScaleFactor(0.82)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            if let lastCompletedSetAt = context.state.lastCompletedSetAt {
+                HStack(alignment: .center, spacing: WorkoutLiveActivityMetrics.horizontalGap) {
+                    setValueView
+
+                    Rectangle()
+                        .fill(WorkoutLiveActivityPalette.panelStroke)
+                        .frame(width: 1, height: WorkoutLiveActivityMetrics.dividerHeight)
+
+                    restStatusView(lastCompletedSetAt)
+                }
+            } else {
+                setValueView
+            }
+
+            if let actionIntent = completionIntent {
+                liveActivityActionButton(intent: actionIntent)
+            }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(WorkoutLiveActivityMetrics.panelPadding)
+        .background(
+            RoundedRectangle(cornerRadius: WorkoutLiveActivityMetrics.cornerRadius, style: .continuous)
+                .fill(WorkoutLiveActivityPalette.panel)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: WorkoutLiveActivityMetrics.cornerRadius, style: .continuous)
+                .stroke(WorkoutLiveActivityPalette.panelStroke, lineWidth: 1)
+        )
     }
 
     private var progressChip: some View {
@@ -332,6 +342,15 @@ private struct WorkoutLiveActivityLockScreenView: View {
         )
     }
 
+    private var setValueView: some View {
+        Text(WorkoutLiveActivityFormatting.primarySetValueText(for: context.state))
+            .font(.system(size: 22, weight: .semibold, design: .rounded))
+            .foregroundStyle(WorkoutLiveActivityPalette.primaryText)
+            .lineLimit(1)
+            .minimumScaleFactor(0.82)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     private func restStatusView(_ lastCompletedSetAt: Date) -> some View {
         HStack(spacing: 6) {
             Image(systemName: "pause.fill")
@@ -345,12 +364,7 @@ private struct WorkoutLiveActivityLockScreenView: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-        .background(
-            Capsule(style: .continuous)
-                .fill(Color.white.opacity(0.08))
-        )
+        .frame(width: WorkoutLiveActivityMetrics.statusColumnWidth, alignment: .trailing)
     }
 
     private var completionIntent: CompleteCurrentSetIntent? {
@@ -362,65 +376,6 @@ private struct WorkoutLiveActivityLockScreenView: View {
             sessionID: context.attributes.sessionID,
             currentSetID: currentSetID.uuidString
         )
-    }
-
-    private var displayTitle: String {
-        let title = context.state.title.trimmingCharacters(in: .whitespacesAndNewlines)
-        return title.isEmpty ? "Workout" : title
-    }
-
-    private var exerciseNameText: String {
-        let name = context.state.currentExerciseName.trimmingCharacters(in: .whitespacesAndNewlines)
-        return name.isEmpty ? "Workout in progress" : name
-    }
-
-    private var currentSetLabelText: String {
-        let label = (context.state.currentSetLabel ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        if label.isEmpty {
-            return WorkoutLiveActivityFormatting.currentSetLabel(for: context.state)
-        }
-
-        return label
-    }
-
-    private var primaryValueText: String {
-        let value = (context.state.currentSetValueText ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        if !value.isEmpty {
-            return value
-        }
-
-        if let reps = context.state.currentSetReps,
-           reps > 0,
-           let weight = context.state.currentSetWeight,
-           weight > 0 {
-            if weight.rounded(.towardZero) == weight {
-                return "\(Int(weight)) kg x \(reps)"
-            }
-            return "\(weight.formatted(.number.precision(.fractionLength(0...1)))) kg x \(reps)"
-        }
-
-        if let reps = context.state.currentSetReps,
-           reps > 0 {
-            return "\(reps) reps"
-        }
-
-        if let weight = context.state.currentSetWeight,
-           weight > 0 {
-            if weight.rounded(.towardZero) == weight {
-                return "\(Int(weight)) kg"
-            }
-            return "\(weight.formatted(.number.precision(.fractionLength(0...1)))) kg"
-        }
-
-        return currentSetLabelText
-    }
-
-    private var progressSummary: String {
-        if context.state.totalSetCount > 0 {
-            return "Progress: \(context.state.completedSetCount) of \(context.state.totalSetCount) sets"
-        }
-
-        return "Completed sets: \(context.state.completedSetCount)"
     }
 
     private func liveActivityActionButton(intent: CompleteCurrentSetIntent) -> some View {
