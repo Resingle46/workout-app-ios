@@ -205,8 +205,6 @@ final class WorkoutLiveActivityCommandProcessor {
 
     private func osLogLevel(for level: DebugLogLevel) -> OSLogType {
         switch level {
-        case .debug:
-            return .debug
         case .info:
             return .info
         case .warning:
