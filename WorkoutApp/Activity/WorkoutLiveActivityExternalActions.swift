@@ -83,7 +83,7 @@ final class WorkoutLiveActivityCommandObserver {
                     .takeUnretainedValue()
                 instance.handleNotification(name)
             },
-            WorkoutLiveActivityCommandSignal.cfNotificationName,
+            WorkoutLiveActivityCommandSignal.notificationName as CFString,
             nil,
             .deliverImmediately
         )
@@ -97,7 +97,7 @@ final class WorkoutLiveActivityCommandObserver {
         CFNotificationCenterRemoveObserver(
             CFNotificationCenterGetDarwinNotifyCenter(),
             observerPointer,
-            WorkoutLiveActivityCommandSignal.cfNotificationName,
+            WorkoutLiveActivityCommandSignal.notificationName as CFString,
             nil
         )
         workoutExternalActionLogger.log(
@@ -211,9 +211,9 @@ struct WorkoutExternalCommandStore: Sendable {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
 
-        let commands = try fileURLs
+        let commands = fileURLs
             .filter { $0.pathExtension == "json" }
-            .compactMap { url in
+            .compactMap { (url: URL) -> WorkoutExternalCommand? in
                 do {
                     let data = try Data(contentsOf: url)
                     let command = try decoder.decode(WorkoutExternalCommand.self, from: data)
@@ -233,11 +233,11 @@ struct WorkoutExternalCommandStore: Sendable {
                     return nil
                 }
             }
-            .sorted {
-                if $0.createdAt == $1.createdAt {
-                    return $0.fileName < $1.fileName
+            .sorted { (lhs: WorkoutExternalCommand, rhs: WorkoutExternalCommand) in
+                if lhs.createdAt == rhs.createdAt {
+                    return lhs.fileName < rhs.fileName
                 }
-                return $0.createdAt < $1.createdAt
+                return lhs.createdAt < rhs.createdAt
             }
 
         workoutExternalActionLogger.log(
