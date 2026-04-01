@@ -5052,6 +5052,8 @@ struct TodayCoachInsightsResolver {
 @MainActor
 struct TodayCoachInsightsCard: View {
     let state: TodayCoachInsightsState
+    @State private var readyBodyMeasuredHeight: CGFloat = 0
+    private let readyBodyMaxHeight: CGFloat = 280
 
     var body: some View {
         AppCard(padding: 18) {
@@ -5082,48 +5084,7 @@ struct TodayCoachInsightsCard: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 case let .ready(content):
-                    VStack(alignment: .leading, spacing: 14) {
-                        insightsMeta(content: content)
-
-                        Text(content.summary)
-                            .font(AppTypography.body(size: 18, weight: .semibold, relativeTo: .title3))
-                            .foregroundStyle(AppTheme.primaryText)
-                            .lineSpacing(2)
-                            .lineLimit(nil)
-                            .multilineTextAlignment(.leading)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .layoutPriority(1)
-
-                        if let explanation = content.explanation {
-                            Text(explanation)
-                                .font(AppTypography.body(size: 15, weight: .medium, relativeTo: .subheadline))
-                                .foregroundStyle(AppTheme.secondaryText)
-                                .lineLimit(nil)
-                                .multilineTextAlignment(.leading)
-                                .fixedSize(horizontal: false, vertical: true)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .layoutPriority(1)
-                        }
-
-                        if !content.items.isEmpty {
-                            VStack(alignment: .leading, spacing: 10) {
-                                ForEach(content.items) { item in
-                                    TodayCoachInsightRow(item: item)
-                                }
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-
-                        if let noteKey = content.noteKey {
-                            Text(LocalizedStringKey(noteKey))
-                                .font(AppTypography.caption(size: 12, weight: .medium))
-                                .foregroundStyle(AppTheme.secondaryText)
-                                .fixedSize(horizontal: false, vertical: true)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    readyContent(content)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -5131,11 +5092,99 @@ struct TodayCoachInsightsCard: View {
     }
 
     @ViewBuilder
+    private func readyContent(_ content: TodayCoachInsightsContentState) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            insightsMeta(content: content)
+            readyBody(content: content)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private func readyBody(content: TodayCoachInsightsContentState) -> some View {
+        let shouldScroll = readyBodyMeasuredHeight > readyBodyMaxHeight
+
+        Group {
+            if shouldScroll {
+                ScrollView(.vertical, showsIndicators: true) {
+                    readyBodyContent(content: content)
+                        .padding(.trailing, 4)
+                }
+                .scrollBounceBehavior(.basedOnSize, axes: .vertical)
+                .frame(maxWidth: .infinity, maxHeight: readyBodyMaxHeight, alignment: .topLeading)
+            } else {
+                readyBodyContent(content: content)
+            }
+        }
+        .onPreferenceChange(TodayCoachInsightsBodyHeightPreferenceKey.self) { newValue in
+            readyBodyMeasuredHeight = newValue
+        }
+    }
+
+    private func readyBodyContent(content: TodayCoachInsightsContentState) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(content.summary)
+                .font(AppTypography.body(size: 18, weight: .semibold, relativeTo: .title3))
+                .foregroundStyle(AppTheme.primaryText)
+                .lineSpacing(2)
+                .lineLimit(nil)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .layoutPriority(1)
+
+            if let explanation = content.explanation {
+                Text(explanation)
+                    .font(AppTypography.body(size: 15, weight: .medium, relativeTo: .subheadline))
+                    .foregroundStyle(AppTheme.secondaryText)
+                    .lineLimit(nil)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .layoutPriority(1)
+            }
+
+            if !content.items.isEmpty {
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(content.items) { item in
+                        TodayCoachInsightRow(item: item)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            if let noteKey = content.noteKey {
+                Text(LocalizedStringKey(noteKey))
+                    .font(AppTypography.caption(size: 12, weight: .medium))
+                    .foregroundStyle(AppTheme.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            GeometryReader { proxy in
+                Color.clear.preference(
+                    key: TodayCoachInsightsBodyHeightPreferenceKey.self,
+                    value: proxy.size.height
+                )
+            }
+        )
+    }
+
+    @ViewBuilder
     private func insightsMeta(content: TodayCoachInsightsContentState) -> some View {
-        FlowLayout(spacing: 10) {
-            insightsSourceBadge(content: content)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 12) {
+                insightsSourceBadge(content: content)
+                Spacer(minLength: 0)
+            }
+
             if let modelLabel = content.modelLabel {
-                insightsModelBadge(modelLabel, accent: content.sourceAccent)
+                HStack(spacing: 0) {
+                    Spacer(minLength: 0)
+                    insightsModelBadge(modelLabel, accent: content.sourceAccent)
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -5164,10 +5213,10 @@ struct TodayCoachInsightsCard: View {
                 .padding(.top, 4)
 
             Text(modelLabel)
-                .font(AppTypography.caption(size: 12, weight: .semibold))
+                .font(AppTypography.caption(size: 13, weight: .semibold))
                 .foregroundStyle(AppTheme.primaryText)
                 .lineLimit(2)
-                .multilineTextAlignment(.leading)
+                .multilineTextAlignment(.trailing)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(.horizontal, 10)
@@ -5205,6 +5254,14 @@ private struct TodayCoachInsightRow: View {
                 .layoutPriority(1)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct TodayCoachInsightsBodyHeightPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
     }
 }
 
@@ -6257,12 +6314,110 @@ private func coachUserFacingJobFailureMessage(
     return message?.isEmpty == false ? message : nil
 }
 
+private let coachPrimaryStructuredTextKeys = [
+    "summary",
+    "message",
+    "text",
+    "overview",
+    "body",
+    "content",
+    "description",
+    "explanation",
+    "answer"
+]
+
+private let coachSecondaryStructuredTextKeys = [
+    "headline",
+    "title",
+    "label"
+]
+
 private func coachNormalizedReadableText(_ text: String) -> String {
+    coachNormalizedSpacing(
+        in: coachReadableStructuredText(from: text) ?? text
+    )
+}
+
+private func coachNormalizedSpacing(in text: String) -> String {
     text.replacingOccurrences(
         of: #"([.!?])([A-ZА-ЯЁ])"#,
         with: "$1 $2",
         options: .regularExpression
     )
+}
+
+private func coachReadableStructuredText(from rawText: String) -> String? {
+    let trimmed = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else {
+        return nil
+    }
+
+    let unfenced = trimmed.replacingOccurrences(
+        of: #"(?is)^```(?:json)?\s*|\s*```$"#,
+        with: "",
+        options: .regularExpression
+    )
+    .trimmingCharacters(in: .whitespacesAndNewlines)
+
+    guard let firstCharacter = unfenced.first,
+          firstCharacter == "{" || firstCharacter == "[" else {
+        return nil
+    }
+
+    guard let data = unfenced.data(using: .utf8),
+          let value = try? JSONSerialization.jsonObject(with: data) else {
+        return nil
+    }
+
+    return coachReadableText(fromStructuredValue: value)
+}
+
+private func coachReadableText(fromStructuredValue value: Any) -> String? {
+    switch value {
+    case let string as String:
+        let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return nil
+        }
+
+        return coachReadableStructuredText(from: trimmed) ?? trimmed
+    case let dictionary as [String: Any]:
+        for key in coachPrimaryStructuredTextKeys {
+            if let nestedValue = coachStructuredValue(in: dictionary, key: key),
+               let candidate = coachReadableText(fromStructuredValue: nestedValue) {
+                return candidate
+            }
+        }
+
+        for key in coachSecondaryStructuredTextKeys {
+            if let nestedValue = coachStructuredValue(in: dictionary, key: key),
+               let candidate = coachReadableText(fromStructuredValue: nestedValue) {
+                return candidate
+            }
+        }
+
+        for nestedValue in dictionary.values {
+            if let candidate = coachReadableText(fromStructuredValue: nestedValue) {
+                return candidate
+            }
+        }
+
+        return nil
+    case let array as [Any]:
+        return array.compactMap(coachReadableText(fromStructuredValue:)).first
+    default:
+        return nil
+    }
+}
+
+private func coachStructuredValue(in dictionary: [String: Any], key: String) -> Any? {
+    if let value = dictionary[key] {
+        return value
+    }
+
+    return dictionary.first { entry in
+        entry.key.caseInsensitiveCompare(key) == .orderedSame
+    }?.value
 }
 
 private func coachLocalizedSplitTitle(_ split: ProfileTrainingSplitRecommendation) -> String {

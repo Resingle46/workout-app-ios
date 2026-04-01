@@ -468,11 +468,11 @@ private struct StatisticsHistoryRow<Destination: View>: View {
     let onDelete: () -> Void
     let destination: Destination
 
+    @State private var settledOffset: CGFloat = 0
     @GestureState private var dragTranslationX: CGFloat = 0
 
     private var contentOffset: CGFloat {
-        let baseOffset = isDeleteRevealed ? -deleteRevealWidth : 0
-        return max(-deleteRevealWidth, min(0, baseOffset + dragTranslationX))
+        max(-deleteRevealWidth, min(0, settledOffset + dragTranslationX))
     }
 
     private var visibleDeleteWidth: CGFloat {
@@ -487,13 +487,25 @@ private struct StatisticsHistoryRow<Destination: View>: View {
                 rowContent
             }
             .buttonStyle(.plain)
-            .disabled(isDeleteRevealed)
+            .disabled(visibleDeleteWidth > 0.5)
             .offset(x: contentOffset)
         }
         .contentShape(Rectangle())
         .clipped()
-        .animation(.easeOut(duration: 0.18), value: isDeleteRevealed)
         .simultaneousGesture(historySwipeGesture)
+        .onAppear {
+            settledOffset = isDeleteRevealed ? -deleteRevealWidth : 0
+        }
+        .onChange(of: isDeleteRevealed) { _, newValue in
+            let targetOffset = newValue ? -deleteRevealWidth : 0
+            guard abs(settledOffset - targetOffset) > 0.5 else {
+                return
+            }
+
+            withAnimation(.easeOut(duration: 0.18)) {
+                settledOffset = targetOffset
+            }
+        }
     }
 
     private var rowContent: some View {
@@ -550,22 +562,21 @@ private struct StatisticsHistoryRow<Destination: View>: View {
                 }
 
                 let translation = value.translation.width
-                if isDeleteRevealed {
-                    state = max(-deleteRevealWidth, min(0, translation))
-                } else {
-                    state = min(0, max(-deleteRevealWidth, translation))
-                }
+                let minimumTranslation = -deleteRevealWidth - settledOffset
+                let maximumTranslation = -settledOffset
+                state = min(max(translation, minimumTranslation), maximumTranslation)
             }
             .onEnded { value in
                 guard abs(value.translation.width) > abs(value.translation.height) else {
                     return
                 }
 
-                let shouldRevealDelete: Bool
-                if isDeleteRevealed {
-                    shouldRevealDelete = (-deleteRevealWidth + value.translation.width) < (-deleteRevealWidth * 0.45)
-                } else {
-                    shouldRevealDelete = value.translation.width < (-deleteRevealWidth * 0.35)
+                let finalOffset = max(-deleteRevealWidth, min(0, settledOffset + value.translation.width))
+                let shouldRevealDelete = finalOffset < (-deleteRevealWidth * 0.5)
+                let targetOffset = shouldRevealDelete ? -deleteRevealWidth : 0
+
+                withAnimation(.easeOut(duration: 0.18)) {
+                    settledOffset = targetOffset
                 }
 
                 if shouldRevealDelete {

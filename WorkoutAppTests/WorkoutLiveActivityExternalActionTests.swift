@@ -86,6 +86,37 @@ final class WorkoutLiveActivityExternalActionTests: XCTestCase {
     }
 
     @MainActor
+    func testCompleteCurrentSetFollowsSupersetDisplayOrder() throws {
+        let fixture = makeSupersetWorkoutFixture()
+        let checkpointStore = ActiveWorkoutCheckpointStore(baseDirectoryURL: try makeTemporaryDirectory())
+        let store = makeExternalActionStore(
+            exercises: fixture.exercises,
+            checkpointStore: checkpointStore
+        )
+        store.activeSession = fixture.session
+
+        let completedAt = Date(timeIntervalSince1970: 1_710_000_250)
+        let result = store.completeCurrentSet(
+            expectedSessionID: fixture.session.id,
+            expectedSetID: fixture.currentSetID,
+            completedAt: completedAt
+        )
+
+        XCTAssertEqual(
+            result,
+            .completed(
+                WorkoutCurrentSetCompletionOutcome(
+                    sessionID: fixture.session.id,
+                    setID: fixture.currentSetID,
+                    completedAt: completedAt
+                )
+            )
+        )
+        XCTAssertEqual(store.activeSession?.exercises[1].sets[0].completedAt, completedAt)
+        XCTAssertNil(store.activeSession?.exercises[0].sets[1].completedAt)
+    }
+
+    @MainActor
     func testProcessingExternalCommandUpdatesCheckpointAndSyncsLiveActivity() async throws {
         let tempDirectory = try makeTemporaryDirectory()
         let checkpointStore = ActiveWorkoutCheckpointStore(baseDirectoryURL: tempDirectory)
@@ -224,6 +255,83 @@ private func makeWorkoutFixture() -> (
             ]
         ),
         firstSetID: firstSetID
+    )
+}
+
+private func makeSupersetWorkoutFixture() -> (
+    exercises: [Exercise],
+    session: WorkoutSession,
+    currentSetID: UUID
+) {
+    let bench = Exercise(
+        id: UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-000000000421")!,
+        name: "Bench Press",
+        categoryID: SeedData.chestCategoryID,
+        equipment: "Barbell",
+        notes: ""
+    )
+    let fly = Exercise(
+        id: UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-000000000422")!,
+        name: "Cable Fly",
+        categoryID: SeedData.chestCategoryID,
+        equipment: "Cable",
+        notes: ""
+    )
+    let currentSetID = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-000000000423")!
+    let groupID = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-000000000424")!
+
+    return (
+        exercises: [bench, fly],
+        session: WorkoutSession(
+            id: UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-000000000425")!,
+            workoutTemplateID: UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-000000000426")!,
+            title: "Chest Superset",
+            startedAt: Date(timeIntervalSince1970: 1_710_000_000),
+            endedAt: nil,
+            exercises: [
+                WorkoutExerciseLog(
+                    templateExerciseID: UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-000000000427")!,
+                    exerciseID: bench.id,
+                    groupKind: .superset,
+                    groupID: groupID,
+                    sets: [
+                        WorkoutSetLog(
+                            id: UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-000000000428")!,
+                            reps: 8,
+                            weight: 80,
+                            completedAt: Date(timeIntervalSince1970: 1_710_000_050)
+                        ),
+                        WorkoutSetLog(
+                            id: UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-000000000429")!,
+                            reps: 8,
+                            weight: 80,
+                            completedAt: nil
+                        )
+                    ]
+                ),
+                WorkoutExerciseLog(
+                    templateExerciseID: UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-000000000430")!,
+                    exerciseID: fly.id,
+                    groupKind: .superset,
+                    groupID: groupID,
+                    sets: [
+                        WorkoutSetLog(
+                            id: currentSetID,
+                            reps: 12,
+                            weight: 20,
+                            completedAt: nil
+                        ),
+                        WorkoutSetLog(
+                            id: UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-000000000431")!,
+                            reps: 12,
+                            weight: 20,
+                            completedAt: nil
+                        )
+                    ]
+                )
+            ]
+        ),
+        currentSetID: currentSetID
     )
 }
 

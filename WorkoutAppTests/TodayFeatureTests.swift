@@ -324,6 +324,41 @@ final class TodayFeatureTests: XCTestCase {
         }
     }
 
+    func testTodayCoachInsightsResolverExtractsStructuredSummaryAndKeepsWeeklySanitization() {
+        let insights = CoachProfileInsights(
+            summary: """
+            {
+              "headline": "Обзор",
+              "summary": "Сейчас получается примерно 0.5 тренировки в неделю, поэтому сначала верни стабильный ритм."
+            }
+            """,
+            keyObservations: [],
+            topConstraints: [],
+            recommendations: ["Держите одну следующую тренировку строго по плану."],
+            confidenceNotes: []
+        )
+
+        let state = TodayCoachInsightsResolver.resolve(
+            insights: insights,
+            origin: .freshModel,
+            isLoading: false,
+            canUseRemoteCoach: true,
+            lastErrorDescription: nil,
+            languageCode: "ru",
+            workoutsThisWeek: 2,
+            weeklyTarget: 3
+        )
+
+        switch state {
+        case let .ready(content):
+            XCTAssertEqual(content.summary, "На этой неделе выполнено 2 из 3 тренировок.")
+            XCTAssertEqual(content.items.count, 1)
+            XCTAssertEqual(content.items[0].message, "Держите одну следующую тренировку строго по плану.")
+        default:
+            XCTFail("Expected ready insights state")
+        }
+    }
+
     func testTodayCoachInsightsResolverReturnsLoadingWithoutInsights() {
         let state = TodayCoachInsightsResolver.resolve(
             insights: nil,

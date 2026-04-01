@@ -1951,8 +1951,44 @@ final class AppStore {
     }
 
     private func firstIncompleteSetReference(in session: WorkoutSession) -> ActiveWorkoutSetReference? {
+        var processedSupersetGroupIDs = Set<UUID>()
+
         for exerciseIndex in session.exercises.indices {
             let exercise = session.exercises[exerciseIndex]
+            if exercise.groupKind == .superset,
+               let groupID = exercise.groupID {
+                guard processedSupersetGroupIDs.insert(groupID).inserted else {
+                    continue
+                }
+
+                let groupedExercises = session.exercises.enumerated().compactMap { groupedExerciseIndex, groupedExercise in
+                    guard groupedExercise.groupKind == .superset,
+                          groupedExercise.groupID == groupID else {
+                        return nil
+                    }
+
+                    return (exerciseIndex: groupedExerciseIndex, exercise: groupedExercise)
+                }
+                let maximumRoundCount = groupedExercises.map { $0.exercise.sets.count }.max() ?? 0
+
+                for setIndex in 0..<maximumRoundCount {
+                    for groupedExercise in groupedExercises {
+                        guard groupedExercise.exercise.sets.indices.contains(setIndex),
+                              groupedExercise.exercise.sets[setIndex].completedAt == nil else {
+                            continue
+                        }
+
+                        return ActiveWorkoutSetReference(
+                            exerciseIndex: groupedExercise.exerciseIndex,
+                            setIndex: setIndex,
+                            setID: groupedExercise.exercise.sets[setIndex].id
+                        )
+                    }
+                }
+
+                continue
+            }
+
             if let setIndex = exercise.sets.firstIndex(where: { $0.completedAt == nil }) {
                 return ActiveWorkoutSetReference(
                     exerciseIndex: exerciseIndex,
