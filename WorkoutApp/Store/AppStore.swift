@@ -1961,7 +1961,8 @@ final class AppStore {
                     continue
                 }
 
-                let groupedExercises = session.exercises.enumerated().compactMap { groupedExerciseIndex, groupedExercise in
+                let groupedExercises: [(exerciseIndex: Int, exercise: WorkoutExerciseLog)] = session.exercises.enumerated().compactMap { entry in
+                    let (groupedExerciseIndex, groupedExercise) = entry
                     guard groupedExercise.groupKind == .superset,
                           groupedExercise.groupID == groupID else {
                         return nil
