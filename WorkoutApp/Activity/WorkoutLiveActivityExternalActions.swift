@@ -97,7 +97,7 @@ final class WorkoutLiveActivityCommandObserver {
         CFNotificationCenterRemoveObserver(
             CFNotificationCenterGetDarwinNotifyCenter(),
             observerPointer,
-            WorkoutLiveActivityCommandSignal.notificationName as CFString,
+            WorkoutLiveActivityCommandSignal.cfNotificationName,
             nil
         )
         workoutExternalActionLogger.log(
