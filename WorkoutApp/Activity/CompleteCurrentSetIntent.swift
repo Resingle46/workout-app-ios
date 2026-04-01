@@ -1,5 +1,11 @@
 import AppIntents
 import Foundation
+import OSLog
+
+private let completeCurrentSetIntentLogger = Logger(
+    subsystem: Bundle.main.bundleIdentifier ?? "WorkoutApp",
+    category: "live_activity_intent"
+)
 
 struct CompleteCurrentSetIntent: LiveActivityIntent {
     static let title: LocalizedStringResource = "Complete current set"
@@ -22,6 +28,9 @@ struct CompleteCurrentSetIntent: LiveActivityIntent {
     func perform() async throws -> some IntentResult {
         guard let sessionUUID = UUID(uuidString: sessionID),
               let currentSetUUID = UUID(uuidString: currentSetID) else {
+            completeCurrentSetIntentLogger.error(
+                "intent_invalid_payload sessionID=\(sessionID, privacy: .public) currentSetID=\(currentSetID, privacy: .public)"
+            )
             return .result()
         }
 
@@ -30,18 +39,16 @@ struct CompleteCurrentSetIntent: LiveActivityIntent {
             sessionID: sessionUUID,
             currentSetID: currentSetUUID
         )
-        let commandStore = WorkoutExternalCommandStore()
-        _ = try commandStore.enqueue(command)
 
-        #if APP_EXTENSION
-        if let runtimeProcessor = await MainActor.run(
-            body: { WorkoutLiveActivityCommandRuntime.shared.processPendingCommands }
-        ) {
-            await runtimeProcessor()
+        do {
+            let commandStore = try WorkoutExternalCommandStore.shared()
+            _ = try commandStore.enqueue(command)
+            WorkoutLiveActivityCommandSignal.postCommandAvailableNotification()
+        } catch {
+            completeCurrentSetIntentLogger.error(
+                "intent_enqueue_failed sessionID=\(sessionUUID.uuidString, privacy: .public) setID=\(currentSetUUID.uuidString, privacy: .public) error=\(String(describing: error), privacy: .public)"
+            )
         }
-        #else
-        await WorkoutLiveActivityIntentAppExecutor.shared.processPendingCommands()
-        #endif
 
         return .result()
     }

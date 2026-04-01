@@ -1,33 +1,119 @@
+import CoreFoundation
 import Foundation
+import OSLog
+
+private let workoutExternalActionLogger = Logger(
+    subsystem: Bundle.main.bundleIdentifier ?? "WorkoutApp",
+    category: "live_activity_external_action"
+)
+
+enum WorkoutLiveActivitySharedContainerError: Error, Equatable, LocalizedError {
+    case missingAppGroupContainer(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .missingAppGroupContainer(let identifier):
+            return "Missing app group container: \(identifier)"
+        }
+    }
+}
 
 enum WorkoutLiveActivitySharedContainer {
     static let appGroupIdentifier = "group.io.resingle.workoutapp"
 
-    static func makeBaseDirectoryURL(
-        baseDirectoryURL: URL?,
-        fileManager: FileManager = .default
-    ) -> URL {
-        if let baseDirectoryURL {
-            return baseDirectoryURL
+    static func sharedBaseDirectoryURL(
+        containerURLProvider: () -> URL? = {
+            FileManager.default.containerURL(
+                forSecurityApplicationGroupIdentifier: WorkoutLiveActivitySharedContainer.appGroupIdentifier
+            )
+        }
+    ) throws -> URL {
+        guard let containerURL = containerURLProvider() else {
+            workoutExternalActionLogger.error(
+                "shared_container_missing appGroup=\(appGroupIdentifier, privacy: .public)"
+            )
+            throw WorkoutLiveActivitySharedContainerError.missingAppGroupContainer(
+                appGroupIdentifier
+            )
         }
 
-        if let containerURL = fileManager.containerURL(
-            forSecurityApplicationGroupIdentifier: appGroupIdentifier
-        ) {
-            return containerURL
-                .appendingPathComponent("Library", isDirectory: true)
-                .appendingPathComponent("Application Support", isDirectory: true)
-                .appendingPathComponent("WorkoutLiveActivity", isDirectory: true)
-        }
-
-        let applicationSupportURL = fileManager.urls(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask
-        ).first ?? URL(fileURLWithPath: NSTemporaryDirectory())
-        let appDirectoryName = Bundle.main.bundleIdentifier ?? "WorkoutApp"
-        return applicationSupportURL
-            .appendingPathComponent(appDirectoryName, isDirectory: true)
+        return containerURL
+            .appendingPathComponent("Library", isDirectory: true)
+            .appendingPathComponent("Application Support", isDirectory: true)
             .appendingPathComponent("WorkoutLiveActivity", isDirectory: true)
+    }
+}
+
+enum WorkoutLiveActivityCommandSignal {
+    static let notificationName = "io.resingle.workoutapp.live-activity.command-available"
+
+    static var cfNotificationName: CFNotificationName {
+        CFNotificationName(notificationName as CFString)
+    }
+
+    static func postCommandAvailableNotification() {
+        workoutExternalActionLogger.log(
+            "command_signal_posted name=\(notificationName, privacy: .public)"
+        )
+        CFNotificationCenterPostNotification(
+            CFNotificationCenterGetDarwinNotifyCenter(),
+            cfNotificationName,
+            nil,
+            nil,
+            true
+        )
+    }
+}
+
+final class WorkoutLiveActivityCommandObserver {
+    private let handler: @MainActor () async -> Void
+    private let observerPointer: UnsafeMutableRawPointer
+
+    init(handler: @escaping @MainActor () async -> Void) {
+        self.handler = handler
+        self.observerPointer = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
+
+        CFNotificationCenterAddObserver(
+            CFNotificationCenterGetDarwinNotifyCenter(),
+            observerPointer,
+            { _, observer, name, _, _ in
+                guard let observer else { return }
+                let instance = Unmanaged<WorkoutLiveActivityCommandObserver>
+                    .fromOpaque(observer)
+                    .takeUnretainedValue()
+                instance.handleNotification(name)
+            },
+            WorkoutLiveActivityCommandSignal.cfNotificationName,
+            nil,
+            .deliverImmediately
+        )
+
+        workoutExternalActionLogger.log(
+            "command_observer_registered name=\(WorkoutLiveActivityCommandSignal.notificationName, privacy: .public)"
+        )
+    }
+
+    deinit {
+        CFNotificationCenterRemoveObserver(
+            CFNotificationCenterGetDarwinNotifyCenter(),
+            observerPointer,
+            WorkoutLiveActivityCommandSignal.cfNotificationName,
+            nil
+        )
+        workoutExternalActionLogger.log(
+            "command_observer_removed name=\(WorkoutLiveActivityCommandSignal.notificationName, privacy: .public)"
+        )
+    }
+
+    private func handleNotification(_ name: CFNotificationName?) {
+        let notificationName = name.map { $0.rawValue as String }
+            ?? WorkoutLiveActivityCommandSignal.notificationName
+        workoutExternalActionLogger.log(
+            "command_signal_received name=\(notificationName, privacy: .public)"
+        )
+        Task { @MainActor in
+            await handler()
+        }
     }
 }
 
@@ -66,10 +152,25 @@ struct WorkoutExternalCommand: Codable, Equatable, Sendable {
 struct WorkoutExternalCommandStore: Sendable {
     let directoryURL: URL
 
-    init(baseDirectoryURL: URL? = nil) {
-        self.directoryURL = WorkoutLiveActivitySharedContainer.makeBaseDirectoryURL(
-            baseDirectoryURL: baseDirectoryURL
-        ).appendingPathComponent("external-commands", isDirectory: true)
+    init(baseDirectoryURL: URL) {
+        self.directoryURL = baseDirectoryURL.appendingPathComponent(
+            "external-commands",
+            isDirectory: true
+        )
+    }
+
+    static func shared(
+        containerURLProvider: () -> URL? = {
+            FileManager.default.containerURL(
+                forSecurityApplicationGroupIdentifier: WorkoutLiveActivitySharedContainer.appGroupIdentifier
+            )
+        }
+    ) throws -> WorkoutExternalCommandStore {
+        WorkoutExternalCommandStore(
+            baseDirectoryURL: try WorkoutLiveActivitySharedContainer.sharedBaseDirectoryURL(
+                containerURLProvider: containerURLProvider
+            )
+        )
     }
 
     @discardableResult
@@ -86,8 +187,14 @@ struct WorkoutExternalCommandStore: Sendable {
         do {
             try data.write(to: fileURL, options: [.atomic, .withoutOverwriting])
             try excludeFromBackup(fileURL)
+            workoutExternalActionLogger.log(
+                "command_enqueued kind=\(command.kind.rawValue, privacy: .public) sessionID=\(command.sessionID.uuidString, privacy: .public) setID=\(command.currentSetID.uuidString, privacy: .public)"
+            )
             return true
         } catch CocoaError.fileWriteFileExists {
+            workoutExternalActionLogger.log(
+                "command_enqueue_duplicate kind=\(command.kind.rawValue, privacy: .public) sessionID=\(command.sessionID.uuidString, privacy: .public) setID=\(command.currentSetID.uuidString, privacy: .public)"
+            )
             return false
         }
     }
@@ -104,19 +211,39 @@ struct WorkoutExternalCommandStore: Sendable {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
 
-        return try fileURLs
+        let commands = try fileURLs
             .filter { $0.pathExtension == "json" }
-            .map { url in
-                let data = try Data(contentsOf: url)
-                return try decoder.decode(WorkoutExternalCommand.self, from: data)
+            .compactMap { url in
+                do {
+                    let data = try Data(contentsOf: url)
+                    let command = try decoder.decode(WorkoutExternalCommand.self, from: data)
+                    guard command.schemaVersion == WorkoutExternalCommand.currentSchemaVersion else {
+                        workoutExternalActionLogger.warning(
+                            "command_load_ignored_schema_mismatch file=\(url.lastPathComponent, privacy: .public) schemaVersion=\(command.schemaVersion, privacy: .public)"
+                        )
+                        try? FileManager.default.removeItem(at: url)
+                        return nil
+                    }
+                    return command
+                } catch {
+                    workoutExternalActionLogger.error(
+                        "command_load_failed file=\(url.lastPathComponent, privacy: .public) error=\(String(describing: error), privacy: .public)"
+                    )
+                    try? FileManager.default.removeItem(at: url)
+                    return nil
+                }
             }
-            .filter { $0.schemaVersion == WorkoutExternalCommand.currentSchemaVersion }
             .sorted {
                 if $0.createdAt == $1.createdAt {
                     return $0.fileName < $1.fileName
                 }
                 return $0.createdAt < $1.createdAt
             }
+
+        workoutExternalActionLogger.log(
+            "command_load_succeeded count=\(commands.count, privacy: .public)"
+        )
+        return commands
     }
 
     func acknowledge(_ command: WorkoutExternalCommand) throws {
@@ -126,6 +253,9 @@ struct WorkoutExternalCommandStore: Sendable {
         }
 
         try FileManager.default.removeItem(at: fileURL)
+        workoutExternalActionLogger.log(
+            "command_acknowledged kind=\(command.kind.rawValue, privacy: .public) sessionID=\(command.sessionID.uuidString, privacy: .public) setID=\(command.currentSetID.uuidString, privacy: .public)"
+        )
     }
 
     func clear() throws {
@@ -140,6 +270,7 @@ struct WorkoutExternalCommandStore: Sendable {
         for fileURL in fileURLs where fileURL.pathExtension == "json" {
             try FileManager.default.removeItem(at: fileURL)
         }
+        workoutExternalActionLogger.log("command_store_cleared")
     }
 
     private func fileURL(for command: WorkoutExternalCommand) -> URL {
@@ -162,13 +293,4 @@ struct WorkoutExternalCommandStore: Sendable {
         var mutableURL = url
         try mutableURL.setResourceValues(resourceValues)
     }
-}
-
-@MainActor
-final class WorkoutLiveActivityCommandRuntime {
-    static let shared = WorkoutLiveActivityCommandRuntime()
-
-    var processPendingCommands: (@MainActor () async -> Void)?
-
-    private init() {}
 }

@@ -3,6 +3,17 @@ import XCTest
 @testable import WorkoutApp
 
 final class WorkoutLiveActivityExternalActionTests: XCTestCase {
+    func testSharedCommandStoreRequiresAppGroupContainer() {
+        XCTAssertThrowsError(
+            try WorkoutExternalCommandStore.shared(containerURLProvider: { nil })
+        ) { error in
+            XCTAssertEqual(
+                error as? WorkoutLiveActivitySharedContainerError,
+                .missingAppGroupContainer("group.io.resingle.workoutapp")
+            )
+        }
+    }
+
     func testCommandStoreDeduplicatesSameSetCommand() throws {
         let tempDirectory = try makeTemporaryDirectory()
         let commandStore = WorkoutExternalCommandStore(baseDirectoryURL: tempDirectory)

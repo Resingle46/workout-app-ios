@@ -12,6 +12,7 @@ struct WorkoutAppApp: App {
     @State private var activeWorkoutDraftCoordinator = ActiveWorkoutDraftCoordinator()
     @State private var workoutLiveActivityManager: WorkoutLiveActivityManager
     @State private var workoutLiveActivityCommandProcessor: WorkoutLiveActivityCommandProcessor
+    @State private var workoutLiveActivityCommandObserver: WorkoutLiveActivityCommandObserver
 
     private let debugRecorder: DebugEventRecorder
 
@@ -38,6 +39,15 @@ struct WorkoutAppApp: App {
 
         let store = AppStore(debugRecorder: debugRecorder)
         _store = State(initialValue: store)
+        let workoutLiveActivityCommandObserver = WorkoutLiveActivityCommandObserver {
+            _ = await workoutLiveActivityCommandProcessor.processPendingCommands(
+                using: store,
+                liveActivitySynchronizer: workoutLiveActivityManager
+            )
+        }
+        _workoutLiveActivityCommandObserver = State(
+            initialValue: workoutLiveActivityCommandObserver
+        )
 
         let configurationStore = CoachRuntimeConfigurationStore(bundle: .main)
         let configuration = configurationStore.runtimeConfiguration
@@ -120,18 +130,7 @@ struct WorkoutAppApp: App {
                 .preferredColorScheme(.dark)
                 .task {
                     await store.handleAppLaunch()
-                    await MainActor.run {
-                        WorkoutLiveActivityCommandRuntime.shared.processPendingCommands = {
-                            _ = await workoutLiveActivityCommandProcessor.processPendingCommands(
-                                using: store,
-                                liveActivitySynchronizer: workoutLiveActivityManager
-                            )
-                        }
-                    }
-                    await workoutLiveActivityCommandProcessor.processPendingCommands(
-                        using: store,
-                        liveActivitySynchronizer: workoutLiveActivityManager
-                    )
+                    await processPendingLiveActivityCommands()
                     await workoutLiveActivityManager.reconcile(activeSession: store.activeSession, using: store)
                     await cloudSyncStore.handleAppLaunch(using: store)
                     await workoutSummaryStore.resumePendingJobsIfNeeded()
@@ -139,6 +138,7 @@ struct WorkoutAppApp: App {
                     debugDiagnosticsController.refreshReport()
                 }
                 .task(id: store.activeSession) {
+                    await processPendingLiveActivityCommands()
                     await workoutLiveActivityManager.sync(activeSession: store.activeSession, using: store)
                     await MainActor.run {
                         debugDiagnosticsController.refreshReport()
@@ -154,10 +154,7 @@ struct WorkoutAppApp: App {
             Task {
                 switch newPhase {
                 case .active:
-                    await workoutLiveActivityCommandProcessor.processPendingCommands(
-                        using: store,
-                        liveActivitySynchronizer: workoutLiveActivityManager
-                    )
+                    await processPendingLiveActivityCommands()
                     await workoutLiveActivityManager.reconcile(activeSession: store.activeSession, using: store)
                     if store.selectedTab == .coach {
                         await coachStore.resumePendingChatJobIfNeeded(using: store)
@@ -167,12 +164,14 @@ struct WorkoutAppApp: App {
                     await MainActor.run {
                         activeWorkoutDraftCoordinator.flushAll()
                     }
+                    await processPendingLiveActivityCommands()
                     await store.handleSceneWillResignActive()
                     await workoutLiveActivityManager.sync(activeSession: store.activeSession, using: store)
                 case .background:
                     await MainActor.run {
                         activeWorkoutDraftCoordinator.flushAll()
                     }
+                    await processPendingLiveActivityCommands()
                     await store.handleSceneDidEnterBackground()
                     await workoutLiveActivityManager.sync(activeSession: store.activeSession, using: store)
                     await cloudSyncStore.handleSceneDidEnterBackground(using: store)
@@ -198,5 +197,13 @@ struct WorkoutAppApp: App {
         @unknown default:
             return "unknown"
         }
+    }
+
+    @MainActor
+    private func processPendingLiveActivityCommands() async {
+        _ = await workoutLiveActivityCommandProcessor.processPendingCommands(
+            using: store,
+            liveActivitySynchronizer: workoutLiveActivityManager
+        )
     }
 }

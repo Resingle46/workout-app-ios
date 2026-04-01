@@ -17,16 +17,15 @@ private enum WorkoutLiveActivityPalette {
 }
 
 private enum WorkoutLiveActivityMetrics {
-    static let outerSpacing: CGFloat = 7
-    static let panelSpacing: CGFloat = 7
+    static let outerSpacing: CGFloat = 12
+    static let panelSpacing: CGFloat = 11
     static let horizontalGap: CGFloat = 10
     static let actionSpacing: CGFloat = 9
     static let containerHorizontalPadding: CGFloat = 14
     static let containerVerticalPadding: CGFloat = 9
-    static let panelPadding: CGFloat = 10
+    static let panelPadding: CGFloat = 12
     static let cornerRadius: CGFloat = 14
-    static let statusColumnWidth: CGFloat = 72
-    static let dividerHeight: CGFloat = 32
+    static let innerPanelCornerRadius: CGFloat = 12
 }
 
 private enum WorkoutLiveActivityFormatting {
@@ -244,82 +243,176 @@ private struct WorkoutLiveActivityLockScreenView: View {
     let context: ActivityViewContext<WorkoutActivityAttributes>
 
     var body: some View {
+        contentPanel
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, WorkoutLiveActivityMetrics.containerHorizontalPadding)
+            .padding(.vertical, WorkoutLiveActivityMetrics.containerVerticalPadding)
+            .background(panelBackground)
+            .clipShape(panelShape)
+            .overlay(panelStroke)
+    }
+
+    private var contentPanel: some View {
         VStack(alignment: .leading, spacing: WorkoutLiveActivityMetrics.outerSpacing) {
-            headerRow
-
-            Text(context.state.currentExerciseName)
-                .font(.system(size: 20, weight: .semibold, design: .rounded))
-                .foregroundStyle(WorkoutLiveActivityPalette.primaryText)
-                .lineLimit(2)
-                .minimumScaleFactor(0.92)
-                .multilineTextAlignment(.leading)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
-
+            headerContent
+            exerciseTitle
             detailPanel
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, WorkoutLiveActivityMetrics.containerHorizontalPadding)
-        .padding(.vertical, WorkoutLiveActivityMetrics.containerVerticalPadding)
-    }
-
-    private var headerRow: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
-            Text(context.state.title)
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(WorkoutLiveActivityPalette.primaryText.opacity(0.92))
-                .lineLimit(1)
-                .truncationMode(.tail)
-
-            Spacer(minLength: 8)
-
-            Text(context.attributes.startedAt, style: .timer)
-                .font(.footnote.monospacedDigit())
-                .foregroundStyle(WorkoutLiveActivityPalette.secondaryText)
-        }
-    }
-
-    private var detailPanel: some View {
-        VStack(alignment: .leading, spacing: WorkoutLiveActivityMetrics.panelSpacing) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(WorkoutLiveActivityFormatting.currentSetLabel(for: context.state))
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(WorkoutLiveActivityPalette.secondaryText)
-                    .lineLimit(1)
-
-                Spacer(minLength: 8)
-
-                progressChip
-            }
-
-            if let lastCompletedSetAt = context.state.lastCompletedSetAt {
-                HStack(alignment: .center, spacing: WorkoutLiveActivityMetrics.horizontalGap) {
-                    setValueView
-
-                    Rectangle()
-                        .fill(WorkoutLiveActivityPalette.panelStroke)
-                        .frame(width: 1, height: WorkoutLiveActivityMetrics.dividerHeight)
-
-                    restStatusView(lastCompletedSetAt)
-                }
-            } else {
-                setValueView
-            }
 
             if let actionIntent = completionIntent {
                 liveActivityActionButton(intent: actionIntent)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(WorkoutLiveActivityMetrics.panelPadding)
-        .background(
-            RoundedRectangle(cornerRadius: WorkoutLiveActivityMetrics.cornerRadius, style: .continuous)
-                .fill(WorkoutLiveActivityPalette.panel)
+    }
+
+    private var panelBackground: some View {
+        panelShape.fill(WorkoutLiveActivityPalette.panel)
+    }
+
+    private var panelStroke: some View {
+        panelShape.stroke(WorkoutLiveActivityPalette.panelStroke, lineWidth: 1)
+    }
+
+    private var panelShape: RoundedRectangle {
+        RoundedRectangle(
+            cornerRadius: WorkoutLiveActivityMetrics.cornerRadius,
+            style: .continuous
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: WorkoutLiveActivityMetrics.cornerRadius, style: .continuous)
-                .stroke(WorkoutLiveActivityPalette.panelStroke, lineWidth: 1)
+    }
+
+    private var exerciseTitle: some View {
+        Text(context.state.currentExerciseName)
+            .font(.system(size: 19, weight: .semibold, design: .rounded))
+            .foregroundStyle(WorkoutLiveActivityPalette.primaryText)
+            .lineLimit(2)
+            .minimumScaleFactor(0.82)
+            .multilineTextAlignment(.leading)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var headerContent: some View {
+        ViewThatFits(in: .horizontal) {
+            compactHeaderRow
+            stackedHeaderRow
+        }
+    }
+
+    private var compactHeaderRow: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Text(context.state.title)
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(WorkoutLiveActivityPalette.primaryText.opacity(0.92))
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .minimumScaleFactor(0.88)
+                .layoutPriority(1)
+
+            Spacer(minLength: 8)
+
+            timerText
+        }
+    }
+
+    private var stackedHeaderRow: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(context.state.title)
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(WorkoutLiveActivityPalette.primaryText.opacity(0.92))
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+
+            timerText
+                .frame(maxWidth: .infinity, alignment: .trailing)
+        }
+    }
+
+    private var timerText: some View {
+        Text(context.attributes.startedAt, style: .timer)
+            .font(.footnote.monospacedDigit())
+            .foregroundStyle(WorkoutLiveActivityPalette.secondaryText)
+            .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private var detailPanel: some View {
+        detailContent
+            .padding(WorkoutLiveActivityMetrics.panelPadding)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(detailPanelBackground)
+            .clipShape(detailPanelShape)
+            .overlay(detailPanelStroke)
+    }
+
+    private var detailPanelBackground: some View {
+        detailPanelShape.fill(Color.white.opacity(0.035))
+    }
+
+    private var detailPanelStroke: some View {
+        detailPanelShape.stroke(Color.white.opacity(0.05), lineWidth: 1)
+    }
+
+    private var detailPanelShape: RoundedRectangle {
+        RoundedRectangle(
+            cornerRadius: WorkoutLiveActivityMetrics.innerPanelCornerRadius,
+            style: .continuous
         )
+    }
+
+    private var detailContent: some View {
+        ViewThatFits(in: .horizontal) {
+            detailColumns
+            detailStack
+        }
+    }
+
+    private var detailColumns: some View {
+        HStack(alignment: .center, spacing: WorkoutLiveActivityMetrics.horizontalGap) {
+            currentSetBlock
+            Spacer(minLength: 12)
+            statusColumn
+        }
+    }
+
+    private var detailStack: some View {
+        VStack(alignment: .leading, spacing: WorkoutLiveActivityMetrics.panelSpacing) {
+            currentSetBlock
+            statusRow
+        }
+    }
+
+    private var currentSetBlock: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(WorkoutLiveActivityFormatting.currentSetLabel(for: context.state))
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(WorkoutLiveActivityPalette.secondaryText)
+                .lineLimit(1)
+                .minimumScaleFactor(0.9)
+
+            setValueView
+        }
+    }
+
+    private var statusColumn: some View {
+        VStack(alignment: .trailing, spacing: 8) {
+            progressChip
+
+            if let lastCompletedSetAt = context.state.lastCompletedSetAt {
+                restStatusView(lastCompletedSetAt)
+            }
+        }
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private var statusRow: some View {
+        HStack(alignment: .center, spacing: 8) {
+            progressChip
+
+            if let lastCompletedSetAt = context.state.lastCompletedSetAt {
+                restStatusView(lastCompletedSetAt)
+            }
+
+            Spacer(minLength: 0)
+        }
     }
 
     private var progressChip: some View {
@@ -362,7 +455,12 @@ private struct WorkoutLiveActivityLockScreenView: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
         }
-        .frame(width: WorkoutLiveActivityMetrics.statusColumnWidth, alignment: .trailing)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(
+            Capsule(style: .continuous)
+                .fill(Color.white.opacity(0.08))
+        )
     }
 
     private var completionIntent: CompleteCurrentSetIntent? {
@@ -384,6 +482,7 @@ private struct WorkoutLiveActivityLockScreenView: View {
                 Text("action.complete_current_set_live")
                     .font(.caption.weight(.semibold))
                     .lineLimit(1)
+                    .minimumScaleFactor(0.9)
                 Spacer(minLength: 0)
             }
             .foregroundStyle(WorkoutLiveActivityPalette.background)
