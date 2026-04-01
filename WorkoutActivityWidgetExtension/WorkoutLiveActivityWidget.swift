@@ -11,6 +11,7 @@ private enum WorkoutLiveActivityPalette {
     static let primaryText = Color.white.opacity(0.96)
     static let secondaryText = Color.white.opacity(0.62)
     static let accent = Color.white.opacity(0.90)
+    static let actionTint = Color.orange
     static let progressFill = Color.white.opacity(0.07)
     static let progressTint = Color(red: 0.47, green: 0.93, blue: 0.60)
     static let restTint = Color(red: 1.0, green: 0.72, blue: 0.38)
@@ -22,11 +23,13 @@ private enum WorkoutLiveActivityMetrics {
     static let horizontalGap: CGFloat = 10
     static let actionSpacing: CGFloat = 9
     static let containerHorizontalPadding: CGFloat = 14
-    static let containerVerticalPadding: CGFloat = 9
+    static let containerTopPadding: CGFloat = 12
+    static let containerBottomPadding: CGFloat = 10
     static let panelPadding: CGFloat = 10
     static let cornerRadius: CGFloat = 14
     static let statusColumnWidth: CGFloat = 72
     static let dividerHeight: CGFloat = 32
+    static let minimumLockScreenHeight: CGFloat = 144
 }
 
 private enum WorkoutLiveActivityFormatting {
@@ -249,13 +252,19 @@ private struct WorkoutLiveActivityLockScreenView: View {
             exerciseTitle
             detailPanel
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(
+            maxWidth: .infinity,
+            minHeight: WorkoutLiveActivityMetrics.minimumLockScreenHeight,
+            maxHeight: .infinity,
+            alignment: .topLeading
+        )
         .padding(.horizontal, WorkoutLiveActivityMetrics.containerHorizontalPadding)
-        .padding(.vertical, WorkoutLiveActivityMetrics.containerVerticalPadding)
+        .padding(.top, WorkoutLiveActivityMetrics.containerTopPadding)
+        .padding(.bottom, WorkoutLiveActivityMetrics.containerBottomPadding)
     }
 
     private var headerRow: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
+        HStack(alignment: .top, spacing: 10) {
             Text(context.state.title)
                 .font(.footnote.weight(.semibold))
                 .foregroundStyle(WorkoutLiveActivityPalette.primaryText.opacity(0.92))
@@ -395,7 +404,7 @@ private struct WorkoutLiveActivityLockScreenView: View {
             .padding(.vertical, 10)
             .background(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(WorkoutLiveActivityPalette.progressTint)
+                    .fill(WorkoutLiveActivityPalette.actionTint)
             )
         }
         .buttonStyle(.plain)
