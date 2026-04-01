@@ -126,7 +126,6 @@
 "stats.set_value" = "%.1f kg x %d";
 "stats.empty" = "No completed sessions for this exercise yet.";
 "stats.history" = "Workout history";
-"stats.history_delete_hint" = "Open a workout or swipe left on it to delete it from history.";
 "stats.history_delete_confirm_title" = "Delete workout from history?";
 "stats.history_delete_confirm_message" = "This fully deletes the workout from history. It disappears from the list immediately, and the app will try to update the cloud backup snapshot so it is removed remotely too.";
 "stats.history_delete_remote_notice" = "The workout was deleted locally, but the cloud backup has not updated yet. You can retry sync later without restoring the workout locally.";

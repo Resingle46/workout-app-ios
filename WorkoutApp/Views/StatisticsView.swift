@@ -9,6 +9,7 @@ struct StatisticsView: View {
     @Environment(\.appBottomRailInset) private var bottomRailInset
     @State private var selectedExerciseID: UUID?
     @State private var pendingDeleteSession: WorkoutSession?
+    @State private var revealedHistoryDeleteSessionID: UUID?
     @State private var historySyncNotice: StatisticsHistorySyncNotice?
     @State private var isRetryingHistorySync = false
 
@@ -46,10 +47,6 @@ struct StatisticsView: View {
                     LazyVStack(alignment: .leading, spacing: 14) {
                         AppSectionTitle(titleKey: "stats.history")
 
-                        if !store.history.isEmpty {
-                            historyDeleteHintView
-                        }
-
                         if let historySyncNotice {
                             historySyncNoticeView(historySyncNotice)
                         }
@@ -59,41 +56,29 @@ struct StatisticsView: View {
                                 .foregroundStyle(AppTheme.secondaryText)
                         } else {
                             ForEach(store.history) { session in
-                                NavigationLink(
+                                StatisticsHistoryRow(
+                                    session: session,
+                                    isDeleteRevealed: revealedHistoryDeleteSessionID == session.id,
+                                    onRevealDelete: {
+                                        revealedHistoryDeleteSessionID = session.id
+                                    },
+                                    onHideDelete: {
+                                        guard revealedHistoryDeleteSessionID == session.id else {
+                                            return
+                                        }
+                                        revealedHistoryDeleteSessionID = nil
+                                    },
+                                    onDelete: {
+                                        revealedHistoryDeleteSessionID = nil
+                                        pendingDeleteSession = session
+                                    },
                                     destination: WorkoutSummaryView(
                                         session: session,
                                         onDeleteFromHistory: {
                                             confirmDelete(for: session)
                                         }
                                     )
-                                ) {
-                                    VStack(alignment: .leading, spacing: 8) {
-                                        HStack {
-                                            Text(session.title)
-                                                .font(AppTypography.heading(size: 18))
-                                                .foregroundStyle(AppTheme.primaryText)
-                                            Spacer()
-                                            Text(session.startedAt, format: .dateTime.day().month().year())
-                                                .font(AppTypography.caption())
-                                                .foregroundStyle(AppTheme.secondaryText)
-                                        }
-
-                                        Text(sessionSubtitle(for: session))
-                                            .font(AppTypography.body(size: 16, relativeTo: .subheadline))
-                                            .foregroundStyle(AppTheme.secondaryText)
-                                    }
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .padding(.vertical, 4)
-                                    .contentShape(Rectangle())
-                                }
-                                .buttonStyle(.plain)
-                                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                    Button(role: .destructive) {
-                                        pendingDeleteSession = session
-                                    } label: {
-                                        Label("common.delete", systemImage: "trash")
-                                    }
-                                }
+                                )
 
                                 if session.id != (store.history.last?.id ?? session.id) {
                                     Divider()
@@ -355,30 +340,6 @@ struct StatisticsView: View {
         selectedExerciseID = defaultExerciseID
     }
 
-    private var historyDeleteHintView: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "trash")
-                .font(AppTypography.icon(size: 13, weight: .semibold))
-                .foregroundStyle(AppTheme.secondaryText)
-                .padding(.top, 1)
-
-            Text("stats.history_delete_hint")
-                .font(AppTypography.caption(size: 13, weight: .medium))
-                .foregroundStyle(AppTheme.secondaryText)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(AppTheme.surfaceElevated.opacity(0.72))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(AppTheme.border, lineWidth: 1)
-        )
-    }
-
     @ViewBuilder
     private func historySyncNoticeView(_ notice: StatisticsHistorySyncNotice) -> some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -449,6 +410,7 @@ struct StatisticsView: View {
 
     @MainActor
     private func confirmDelete(for session: WorkoutSession) {
+        revealedHistoryDeleteSessionID = nil
         pendingDeleteSession = nil
 
         guard store.deleteHistorySession(id: session.id) else {
@@ -494,6 +456,128 @@ struct StatisticsView: View {
 
 private struct StatisticsHistorySyncNotice: Equatable {
     var detail: String?
+}
+
+private struct StatisticsHistoryRow<Destination: View>: View {
+    private static let deleteRevealWidth: CGFloat = 88
+
+    let session: WorkoutSession
+    let isDeleteRevealed: Bool
+    let onRevealDelete: () -> Void
+    let onHideDelete: () -> Void
+    let onDelete: () -> Void
+    let destination: Destination
+
+    @GestureState private var dragTranslationX: CGFloat = 0
+
+    private var contentOffset: CGFloat {
+        let baseOffset = isDeleteRevealed ? -Self.deleteRevealWidth : 0
+        return max(-Self.deleteRevealWidth, min(0, baseOffset + dragTranslationX))
+    }
+
+    var body: some View {
+        ZStack(alignment: .trailing) {
+            deleteButton
+
+            NavigationLink(destination: destination) {
+                rowContent
+            }
+            .buttonStyle(.plain)
+            .disabled(isDeleteRevealed)
+            .offset(x: contentOffset)
+        }
+        .contentShape(Rectangle())
+        .clipped()
+        .animation(.easeOut(duration: 0.18), value: isDeleteRevealed)
+        .simultaneousGesture(historySwipeGesture)
+    }
+
+    private var rowContent: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(session.title)
+                    .font(AppTypography.heading(size: 18))
+                    .foregroundStyle(AppTheme.primaryText)
+                Spacer()
+                Text(session.startedAt, format: .dateTime.day().month().year())
+                    .font(AppTypography.caption())
+                    .foregroundStyle(AppTheme.secondaryText)
+            }
+
+            Text(sessionSubtitle)
+                .font(AppTypography.body(size: 16, relativeTo: .subheadline))
+                .foregroundStyle(AppTheme.secondaryText)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 4)
+        .contentShape(Rectangle())
+    }
+
+    private var deleteButton: some View {
+        HStack(spacing: 0) {
+            Spacer(minLength: 0)
+
+            Button(role: .destructive, action: onDelete) {
+                VStack(spacing: 6) {
+                    Image(systemName: "trash")
+                        .font(AppTypography.icon(size: 16, weight: .semibold))
+
+                    Text("common.delete")
+                        .font(AppTypography.caption(size: 11, weight: .semibold))
+                }
+                .foregroundStyle(Color.white)
+                .frame(width: Self.deleteRevealWidth)
+                .frame(maxHeight: .infinity)
+                .padding(.vertical, 10)
+                .background(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(AppTheme.destructive)
+                )
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private var historySwipeGesture: some Gesture {
+        DragGesture(minimumDistance: 12, coordinateSpace: .local)
+            .updating($dragTranslationX) { value, state, _ in
+                guard abs(value.translation.width) > abs(value.translation.height) else {
+                    return
+                }
+
+                let translation = value.translation.width
+                if isDeleteRevealed {
+                    state = max(-Self.deleteRevealWidth, min(0, translation))
+                } else {
+                    state = min(0, max(-Self.deleteRevealWidth, translation))
+                }
+            }
+            .onEnded { value in
+                guard abs(value.translation.width) > abs(value.translation.height) else {
+                    return
+                }
+
+                let shouldRevealDelete: Bool
+                if isDeleteRevealed {
+                    shouldRevealDelete = (-Self.deleteRevealWidth + value.translation.width) < (-Self.deleteRevealWidth * 0.45)
+                } else {
+                    shouldRevealDelete = value.translation.width < (-Self.deleteRevealWidth * 0.35)
+                }
+
+                if shouldRevealDelete {
+                    onRevealDelete()
+                } else {
+                    onHideDelete()
+                }
+            }
+    }
+
+    private var sessionSubtitle: String {
+        let exerciseCount = session.exercises.count
+        let duration = session.endedAt.map { formattedDuration(startedAt: session.startedAt, endedAt: $0) }
+            ?? NSLocalizedString("common.no_data", comment: "")
+        return String(format: NSLocalizedString("stats.history_meta", comment: ""), exerciseCount, duration)
+    }
 }
 
 enum WorkoutSummaryMode {
