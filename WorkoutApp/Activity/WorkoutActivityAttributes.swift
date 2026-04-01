@@ -7,6 +7,7 @@ struct WorkoutActivityAttributes: ActivityAttributes {
     struct ContentState: Codable, Hashable {
         var title: String
         var currentExerciseName: String
+        var currentSetID: UUID?
         var currentSetNumber: Int?
         var currentSetLabel: String?
         var currentSetReps: Int?

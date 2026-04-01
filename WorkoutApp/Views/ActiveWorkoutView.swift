@@ -615,11 +615,18 @@ private struct WorkoutSetRow: View {
                 Button {
                     flushDraftCommit()
                     let shouldMarkDone = !isCompleted
-                    updateSet { current in
-                        current.completedAt = current.completedAt == nil ? .now : nil
-                    }
-                    if shouldMarkDone {
-                        onMarkedDone()
+                    if shouldMarkDone && isCurrent {
+                        let result = store.completeCurrentSet(expectedSetID: set.id)
+                        if case .completed = result {
+                            onMarkedDone()
+                        }
+                    } else {
+                        updateSet { current in
+                            current.completedAt = current.completedAt == nil ? .now : nil
+                        }
+                        if shouldMarkDone {
+                            onMarkedDone()
+                        }
                     }
                 } label: {
                     WorkoutSetPrimaryActionLabel(

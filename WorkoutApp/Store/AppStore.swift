@@ -72,6 +72,12 @@ private enum ProgressionInputBuilder {
 private let activeWorkoutCheckpointFreshnessInterval: TimeInterval = 24 * 60 * 60
 private let activeWorkoutCheckpointWriteDebounceDuration: Duration = .milliseconds(350)
 
+private struct ActiveWorkoutSetReference: Equatable {
+    let exerciseIndex: Int
+    let setIndex: Int
+    let setID: UUID
+}
+
 struct ActiveWorkoutRestoreBanner: Equatable, Identifiable, Sendable {
     let id = UUID()
     let sessionID: UUID
@@ -453,6 +459,43 @@ final class AppStore {
         updater(&session)
         activeSession = session
         scheduleActiveWorkoutCheckpointWrite()
+    }
+
+    @discardableResult
+    func completeCurrentSet(
+        expectedSessionID: UUID? = nil,
+        expectedSetID: UUID? = nil,
+        completedAt: Date = .now
+    ) -> WorkoutCurrentSetCompletionResult {
+        guard var session = activeSession else {
+            return .ignored(.noActiveSession)
+        }
+
+        if let expectedSessionID, session.id != expectedSessionID {
+            return .ignored(.sessionMismatch)
+        }
+
+        guard let currentSetReference = firstIncompleteSetReference(in: session) else {
+            return .ignored(.noIncompleteSet)
+        }
+
+        if let expectedSetID, currentSetReference.setID != expectedSetID {
+            return .ignored(.setMismatch)
+        }
+
+        session.exercises[currentSetReference.exerciseIndex]
+            .sets[currentSetReference.setIndex]
+            .completedAt = completedAt
+        activeSession = session
+        scheduleActiveWorkoutCheckpointWrite()
+
+        return .completed(
+            WorkoutCurrentSetCompletionOutcome(
+                sessionID: session.id,
+                setID: currentSetReference.setID,
+                completedAt: completedAt
+            )
+        )
     }
 
     func cancelActiveWorkout() {
@@ -1905,6 +1948,21 @@ final class AppStore {
         }
 
         return true
+    }
+
+    private func firstIncompleteSetReference(in session: WorkoutSession) -> ActiveWorkoutSetReference? {
+        for exerciseIndex in session.exercises.indices {
+            let exercise = session.exercises[exerciseIndex]
+            if let setIndex = exercise.sets.firstIndex(where: { $0.completedAt == nil }) {
+                return ActiveWorkoutSetReference(
+                    exerciseIndex: exerciseIndex,
+                    setIndex: setIndex,
+                    setID: exercise.sets[setIndex].id
+                )
+            }
+        }
+
+        return nil
     }
 
     func adoptRemoteBackupHash(_ backupHash: String) {

@@ -29,6 +29,7 @@ struct WorkoutLiveActivitySnapshot: Equatable, Sendable {
     var startedAt: Date
     var title: String
     var currentExerciseName: String
+    var currentSetID: UUID?
     var currentSetNumber: Int?
     var currentSetLabel: String?
     var currentSetReps: Int?
@@ -42,6 +43,7 @@ struct WorkoutLiveActivitySnapshot: Equatable, Sendable {
 
 private struct WorkoutLiveActivityExerciseContext: Equatable, Sendable {
     var exerciseName: String
+    var currentSetID: UUID?
     var currentSetNumber: Int?
     var currentSetLabel: String?
     var currentSetReps: Int?
@@ -334,6 +336,7 @@ final class WorkoutLiveActivityManager {
             title: session.title,
             currentExerciseName: currentExerciseContext?.exerciseName
                 ?? NSLocalizedString("header.workout.subtitle", comment: ""),
+            currentSetID: firstIncompleteSetID(in: session),
             currentSetNumber: currentExerciseContext?.currentSetNumber,
             currentSetLabel: currentExerciseContext?.currentSetLabel,
             currentSetReps: currentExerciseContext?.currentSetReps,
@@ -344,6 +347,16 @@ final class WorkoutLiveActivityManager {
             lastCompletedSetAt: lastCompletedSetAt,
             updatedAt: updatedAt
         )
+    }
+
+    private static func firstIncompleteSetID(in session: WorkoutSession) -> UUID? {
+        for exerciseLog in session.exercises {
+            if let setID = exerciseLog.sets.first(where: { $0.completedAt == nil })?.id {
+                return setID
+            }
+        }
+
+        return nil
     }
 
     private static func firstIncompleteExerciseContext(
@@ -359,7 +372,8 @@ final class WorkoutLiveActivityManager {
                 return exerciseContext(
                     exerciseName: exercise.localizedName,
                     set: exerciseLog.sets[setIndex],
-                    setNumber: setIndex + 1
+                    setNumber: setIndex + 1,
+                    currentSetID: exerciseLog.sets[setIndex].id
                 )
             }
         }
@@ -379,6 +393,7 @@ final class WorkoutLiveActivityManager {
         guard let set = exerciseLog.sets.last else {
             return WorkoutLiveActivityExerciseContext(
                 exerciseName: exercise.localizedName,
+                currentSetID: nil,
                 currentSetNumber: nil,
                 currentSetLabel: nil,
                 currentSetReps: nil,
@@ -390,17 +405,20 @@ final class WorkoutLiveActivityManager {
         return exerciseContext(
             exerciseName: exercise.localizedName,
             set: set,
-            setNumber: exerciseLog.sets.count
+            setNumber: exerciseLog.sets.count,
+            currentSetID: nil
         )
     }
 
     private static func exerciseContext(
         exerciseName: String,
         set: WorkoutSetLog,
-        setNumber: Int
+        setNumber: Int,
+        currentSetID: UUID?
     ) -> WorkoutLiveActivityExerciseContext {
         WorkoutLiveActivityExerciseContext(
             exerciseName: exerciseName,
+            currentSetID: currentSetID,
             currentSetNumber: setNumber,
             currentSetLabel: String(
                 format: NSLocalizedString("workout.set_number", comment: ""),
@@ -557,6 +575,7 @@ private extension WorkoutLiveActivityManager {
             state: WorkoutActivityAttributes.ContentState(
                 title: snapshot.title,
                 currentExerciseName: snapshot.currentExerciseName,
+                currentSetID: snapshot.currentSetID,
                 currentSetNumber: snapshot.currentSetNumber,
                 currentSetLabel: snapshot.currentSetLabel,
                 currentSetReps: snapshot.currentSetReps,

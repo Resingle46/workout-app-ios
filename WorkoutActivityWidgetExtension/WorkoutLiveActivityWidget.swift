@@ -1,4 +1,5 @@
 import ActivityKit
+import AppIntents
 import Foundation
 import SwiftUI
 import WidgetKit
@@ -19,6 +20,7 @@ private enum WorkoutLiveActivityMetrics {
     static let outerSpacing: CGFloat = 7
     static let panelSpacing: CGFloat = 7
     static let horizontalGap: CGFloat = 10
+    static let actionSpacing: CGFloat = 9
     static let containerHorizontalPadding: CGFloat = 14
     static let containerVerticalPadding: CGFloat = 9
     static let panelPadding: CGFloat = 10
@@ -129,17 +131,26 @@ struct WorkoutLiveActivityWidget: Widget {
                 }
 
                 DynamicIslandExpandedRegion(.bottom) {
-                    HStack(alignment: .center, spacing: 8) {
-                        Text(WorkoutLiveActivityFormatting.compactSummaryText(for: context.state))
-                            .font(.caption.weight(.semibold))
-                            .lineLimit(1)
+                    VStack(alignment: .leading, spacing: WorkoutLiveActivityMetrics.actionSpacing) {
+                        HStack(alignment: .center, spacing: 8) {
+                            Text(WorkoutLiveActivityFormatting.compactSummaryText(for: context.state))
+                                .font(.caption.weight(.semibold))
+                                .lineLimit(1)
 
-                        Spacer(minLength: 0)
+                            Spacer(minLength: 0)
 
-                        progressChip(for: context.state)
+                            progressChip(for: context.state)
 
-                        if let lastCompletedSetAt = context.state.lastCompletedSetAt {
-                            restTimerChip(lastCompletedSetAt)
+                            if let lastCompletedSetAt = context.state.lastCompletedSetAt {
+                                restTimerChip(lastCompletedSetAt)
+                            }
+                        }
+
+                        if let actionIntent = completionIntent(
+                            sessionID: context.attributes.sessionID,
+                            currentSetID: context.state.currentSetID
+                        ) {
+                            liveActivityActionButton(intent: actionIntent, fullWidth: true)
                         }
                     }
                 }
@@ -188,6 +199,44 @@ struct WorkoutLiveActivityWidget: Widget {
             Capsule(style: .continuous)
                 .fill(Color.white.opacity(0.08))
         )
+    }
+
+    private func completionIntent(
+        sessionID: String,
+        currentSetID: UUID?
+    ) -> CompleteCurrentSetIntent? {
+        guard let currentSetID else {
+            return nil
+        }
+
+        return CompleteCurrentSetIntent(
+            sessionID: sessionID,
+            currentSetID: currentSetID
+        )
+    }
+
+    private func liveActivityActionButton(
+        intent: CompleteCurrentSetIntent,
+        fullWidth: Bool
+    ) -> some View {
+        Button(intent: intent) {
+            HStack(spacing: 6) {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.caption.weight(.semibold))
+                Text("action.complete_current_set_live")
+                    .font(.caption.weight(.semibold))
+                    .lineLimit(1)
+            }
+            .foregroundStyle(WorkoutLiveActivityPalette.background)
+            .frame(maxWidth: fullWidth ? .infinity : nil)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(WorkoutLiveActivityPalette.progressTint)
+            )
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -256,6 +305,10 @@ private struct WorkoutLiveActivityLockScreenView: View {
             } else {
                 setValueView
             }
+
+            if let actionIntent = completionIntent {
+                liveActivityActionButton(intent: actionIntent)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(WorkoutLiveActivityMetrics.panelPadding)
@@ -310,5 +363,38 @@ private struct WorkoutLiveActivityLockScreenView: View {
                 .minimumScaleFactor(0.8)
         }
         .frame(width: WorkoutLiveActivityMetrics.statusColumnWidth, alignment: .trailing)
+    }
+
+    private var completionIntent: CompleteCurrentSetIntent? {
+        guard let currentSetID = context.state.currentSetID else {
+            return nil
+        }
+
+        return CompleteCurrentSetIntent(
+            sessionID: context.attributes.sessionID,
+            currentSetID: currentSetID
+        )
+    }
+
+    private func liveActivityActionButton(intent: CompleteCurrentSetIntent) -> some View {
+        Button(intent: intent) {
+            HStack(spacing: 8) {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.caption.weight(.semibold))
+                Text("action.complete_current_set_live")
+                    .font(.caption.weight(.semibold))
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(WorkoutLiveActivityPalette.background)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(WorkoutLiveActivityPalette.progressTint)
+            )
+        }
+        .buttonStyle(.plain)
     }
 }

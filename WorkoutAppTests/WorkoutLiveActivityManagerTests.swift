@@ -65,6 +65,10 @@ final class WorkoutLiveActivityManagerTests: XCTestCase {
         )
 
         XCTAssertEqual(snapshot?.currentExerciseName, squat.name)
+        XCTAssertEqual(
+            snapshot?.currentSetID,
+            UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-000000000308")!
+        )
         XCTAssertEqual(snapshot?.currentSetLabel, "Set 1")
         XCTAssertEqual(snapshot?.completedSetCount, 1)
         XCTAssertEqual(snapshot?.totalSetCount, 3)
@@ -105,6 +109,7 @@ final class WorkoutLiveActivityManagerTests: XCTestCase {
         let snapshot = WorkoutLiveActivityManager.makeSnapshot(session: session, using: store)
 
         XCTAssertEqual(snapshot?.currentExerciseName, bench.name)
+        XCTAssertNil(snapshot?.currentSetID)
         XCTAssertEqual(snapshot?.currentSetLabel, "Set 1")
         XCTAssertEqual(snapshot?.completedSetCount, 1)
         XCTAssertEqual(snapshot?.totalSetCount, 1)
